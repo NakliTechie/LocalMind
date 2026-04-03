@@ -664,7 +664,7 @@
         <button class="btn-icon" id="settingsBtn" title="System prompt settings">Settings</button>
         <span style="flex:1"></span>
         <select class="model-select" id="modelSelect" title="Choose model">
-          <option value="gemma3-1b" selected>Gemma 3 1B &middot; Fast (~860 MB)</option>
+          <option value="gemma3-1b" selected>Gemma 3 1B &middot; Fast (~760 MB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Smart (~4.9 GB)</option>
         </select>
       </div>
@@ -703,11 +703,11 @@
     // ── Model registry ──────────────────────────────────────────
     const MODELS = {
       'gemma3-1b': {
-        id: 'onnx-community/gemma-3-1b-it-ONNX',
+        id: 'onnx-community/gemma-3-1b-it-ONNX-GQA',
         label: 'Gemma 3 1B',
-        dtype: 'q4',
-        size: '~860 MB',
-        type: 'causal',       // uses pipeline("text-generation")
+        dtype: 'q4f16',
+        size: '~760 MB',
+        type: 'causal',       // uses AutoModelForCausalLM
       },
       'gemma4-e4b': {
         id: 'onnx-community/gemma-4-E4B-it-ONNX',
@@ -883,53 +883,61 @@
     }
 
     // ── Worker factory ──────────────────────────────────────────
-    // The worker handles both model types: "causal" (Gemma 3 via pipeline)
-    // and "multimodal" (Gemma 4 via Gemma3nForConditionalGeneration).
+    // Pattern from huggingface/transformers.js-examples (Llama 3.2 WebGPU).
+    // Uses AutoModelForCausalLM + AutoTokenizer (not pipeline) for causal models.
+    // Uses Gemma3nForConditionalGeneration for Gemma 4 E4B (multimodal).
+    // GQA variant required for Gemma 3 1B (issue #1469: regular variant crashes).
     function createWorker() {
       const code = `
 import {
-  pipeline,
   env,
-  AutoProcessor,
   AutoTokenizer,
+  AutoModelForCausalLM,
+  AutoProcessor,
   Gemma3nForConditionalGeneration,
   TextStreamer,
+  InterruptableStoppingCriteria,
 } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/+esm';
 
-// Match BabelLocal cache config — try local first, fall back to remote
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
 env.allowRemoteModels = true;
 
-let generator = null;   // pipeline instance (causal models)
-let model = null;        // direct model instance (multimodal)
-let processor = null;
 let tokenizer = null;
-let stopping = false;
-let loadedType = null;   // 'causal' or 'multimodal'
+let model = null;
+let stopping_criteria = new InterruptableStoppingCriteria();
+let loadedType = null;
 
 function progressCallback(p) {
   self.postMessage({ type: 'progress', data: p });
 }
 
 async function loadCausal(modelId, dtype) {
-  generator = null; model = null; processor = null; tokenizer = null;
+  tokenizer = null; model = null;
 
-  generator = await pipeline('text-generation', modelId, {
+  tokenizer = await AutoTokenizer.from_pretrained(modelId, {
+    progress_callback: progressCallback,
+  });
+
+  model = await AutoModelForCausalLM.from_pretrained(modelId, {
     dtype: dtype,
     device: 'webgpu',
     progress_callback: progressCallback,
   });
 
-  tokenizer = generator.tokenizer;
+  // Warmup: compile WebGPU shaders with a single token
+  self.postMessage({ type: 'warmup' });
+  const warmupInputs = tokenizer('a');
+  await model.generate({ ...warmupInputs, max_new_tokens: 1 });
+
   loadedType = 'causal';
   self.postMessage({ type: 'ready' });
 }
 
 async function loadMultimodal(modelId, dtype) {
-  generator = null; model = null; processor = null; tokenizer = null;
+  tokenizer = null; model = null;
 
-  processor = await AutoProcessor.from_pretrained(modelId, {
+  const processor = await AutoProcessor.from_pretrained(modelId, {
     progress_callback: progressCallback,
   });
   tokenizer = processor.tokenizer;
@@ -940,68 +948,46 @@ async function loadMultimodal(modelId, dtype) {
     progress_callback: progressCallback,
   });
 
+  // Warmup
+  self.postMessage({ type: 'warmup' });
+  const warmupInputs = tokenizer('a');
+  await model.generate({ ...warmupInputs, max_new_tokens: 1 });
+
   loadedType = 'multimodal';
   self.postMessage({ type: 'ready' });
 }
 
 async function generate(chatMessages, id) {
-  stopping = false;
+  stopping_criteria.reset();
 
   try {
-    if (loadedType === 'causal') {
-      // Pipeline-based generation with streaming
-      const streamer = new TextStreamer(tokenizer, {
-        skip_prompt: true,
-        skip_special_tokens: true,
-        callback_function: (text) => {
-          if (stopping) return;
-          self.postMessage({ type: 'token', token: text, id });
-        },
-      });
+    const inputs = tokenizer.apply_chat_template(chatMessages, {
+      add_generation_prompt: true,
+      return_dict: true,
+    });
 
-      await generator(chatMessages, {
-        max_new_tokens: 2048,
-        do_sample: true,
-        temperature: 0.7,
-        top_k: 50,
-        top_p: 0.95,
-        streamer,
-      });
+    const streamer = new TextStreamer(tokenizer, {
+      skip_prompt: true,
+      skip_special_tokens: true,
+      callback_function: (text) => {
+        self.postMessage({ type: 'token', token: text, id });
+      },
+    });
 
-    } else {
-      // Direct model generation (Gemma 4)
-      const inputs = await tokenizer.apply_chat_template(chatMessages, {
-        tokenize: true,
-        return_dict: true,
-        add_generation_prompt: true,
-        enable_thinking: false,
-      });
-
-      const streamer = new TextStreamer(tokenizer, {
-        skip_prompt: true,
-        skip_special_tokens: true,
-        callback_function: (text) => {
-          if (stopping) return;
-          self.postMessage({ type: 'token', token: text, id });
-        },
-      });
-
-      await model.generate({
-        ...inputs,
-        max_new_tokens: 2048,
-        do_sample: true,
-        temperature: 0.7,
-        top_k: 50,
-        top_p: 0.95,
-        streamer,
-      });
-    }
+    await model.generate({
+      ...inputs,
+      max_new_tokens: 2048,
+      do_sample: true,
+      temperature: 0.7,
+      top_k: 50,
+      top_p: 0.95,
+      streamer,
+      stopping_criteria,
+    });
 
     self.postMessage({ type: 'complete', id });
   } catch (err) {
-    if (!stopping) {
-      self.postMessage({ type: 'error', message: err.message || String(err) });
-    }
+    self.postMessage({ type: 'error', message: err.message || String(err) });
     self.postMessage({ type: 'complete', id });
   }
 }
@@ -1022,7 +1008,7 @@ self.addEventListener('message', async (e) => {
   } else if (type === 'generate') {
     await generate(messages, id);
   } else if (type === 'stop') {
-    stopping = true;
+    stopping_criteria.interrupt();
   }
 });
 `;
@@ -1067,6 +1053,11 @@ self.addEventListener('message', async (e) => {
             const fileName = p.file ? p.file.split('/').pop() : '';
             progressText.textContent = `Fetching ${fileName}...`;
           }
+        }
+
+        else if (data.type === 'warmup') {
+          progressText.textContent = 'Compiling shaders and warming up...';
+          statusText.textContent = 'Warming up...';
         }
 
         else if (data.type === 'ready') {
