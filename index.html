@@ -915,19 +915,23 @@
           <button class="help-btn" id="helpBtn" aria-label="Help">?</button>
           <div class="help-popover" id="helpPopover">
             <h3>About LocalMind</h3>
-            <p>A private AI chatbot running <strong>Gemma</strong> entirely in your browser via WebGPU.</p>
-            <ul>
-              <li>No server &mdash; all inference runs locally</li>
-              <li>No API keys &mdash; the model runs in your tab</li>
-              <li>No data leaves your device &mdash; ever</li>
-            </ul>
+            <p>A private AI chatbot running <strong>Gemma</strong> entirely in your browser via WebGPU. No server, no API keys, no data leaves your device.</p>
             <p><strong>Models:</strong></p>
             <ul>
-              <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; fast, text-only</li>
-              <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio)</li>
-              <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal, best quality</li>
+              <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; fast, text-only chat</li>
+              <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; text + image + audio</li>
+              <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; text + image + audio, best quality</li>
             </ul>
-            <p><strong>Multimodal:</strong> With Gemma 4 models, attach images (upload, paste, camera) or audio (mic, file). MP4 video is experimental &mdash; frames and audio are extracted separately.</p>
+            <p><strong>Multimodal (Gemma 4 models):</strong></p>
+            <ul>
+              <li><strong>&#128206; Attach</strong> &mdash; upload images, audio files, or MP4 video</li>
+              <li><strong>&#128247; Camera</strong> &mdash; snap a photo with your webcam</li>
+              <li><strong>&#127908; Mic</strong> &mdash; record a voice clip to send</li>
+              <li><strong>Paste</strong> &mdash; Ctrl/Cmd+V an image from clipboard</li>
+              <li><strong>Drag &amp; drop</strong> &mdash; drop files onto the chat</li>
+            </ul>
+            <p>Video uploads are experimental &mdash; keyframes and audio are extracted and sent separately to the model.</p>
+            <p><strong>Thinking mode:</strong> Open Settings and check &ldquo;Show reasoning&rdquo; to see the model&rsquo;s chain-of-thought before its answer.</p>
             <p>Models are cached after first download &mdash; future visits load instantly.</p>
             <p><strong>Requirements:</strong> Chrome 113+, Edge 113+, or Firefox 130+ with WebGPU.</p>
             <div class="help-note">Powered by Transformers.js + Google Gemma (Apache 2.0).</div>
