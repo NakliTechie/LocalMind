@@ -1684,29 +1684,11 @@ async function generateMultimodal(chatMessages, id, attachmentData, enableThinki
     if (attachmentData) {
       for (const att of attachmentData) {
         if (att.type === 'image') {
-          // Create RawImage from the transferred ImageBitmap data
           const img = await RawImage.fromBlob(new Blob([att.data], { type: att.mimeType || 'image/jpeg' }));
           images.push(img);
         } else if (att.type === 'audio') {
-          if (att.pcmData) {
-            // Already decoded PCM Float32Array (from video decomposition)
-            audios.push(att.pcmData);
-          } else {
-            // Raw audio blob — decode to 16kHz mono Float32Array
-            const audioData = att.data;
-            const audioBlob = new Blob([audioData], { type: att.mimeType || 'audio/webm' });
-            const arrayBuffer = await audioBlob.arrayBuffer();
-            const audioCtx = new OfflineAudioContext(1, 1, 16000);
-            const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-            // Resample to 16kHz mono
-            const offlineCtx = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
-            const source = offlineCtx.createBufferSource();
-            source.buffer = decoded;
-            source.connect(offlineCtx.destination);
-            source.start(0);
-            const rendered = await offlineCtx.startRendering();
-            audios.push(rendered.getChannelData(0));
-          }
+          // pcmData is always a pre-decoded Float32Array (decoded on main thread)
+          audios.push(att.pcmData);
         }
       }
     }
@@ -1919,15 +1901,31 @@ self.addEventListener('message', async (e) => {
     });
 
     // ── Prepare attachment data for worker transfer ─────────────
+    async function decodeAudioTo16kMono(blob) {
+      const arrayBuffer = await blob.arrayBuffer();
+      const audioCtx = new AudioContext({ sampleRate: 16000 });
+      const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+      const mono = decoded.getChannelData(0);
+      const pcm = new Float32Array(mono);
+      audioCtx.close();
+      return pcm;
+    }
+
     async function prepareAttachmentsForWorker() {
       const attData = [];
       for (const att of attachments) {
-        if (att.pcmData) {
-          // Already-decoded PCM from video decomposition
+        if (att.type === 'audio') {
+          // Decode all audio to 16kHz mono Float32Array on main thread
+          // (OfflineAudioContext is not available in workers)
+          let pcm;
+          if (att.pcmData) {
+            pcm = att.pcmData;
+          } else {
+            pcm = await decodeAudioTo16kMono(att.blob);
+          }
           attData.push({
             type: 'audio',
-            pcmData: att.pcmData,
-            mimeType: 'audio/pcm',
+            pcmData: pcm,
           });
         } else {
           const buffer = await att.blob.arrayBuffer();
