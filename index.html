@@ -271,6 +271,33 @@
       border-bottom-left-radius: 4px;
     }
 
+    /* User message attachment thumbnails */
+    .msg-attachments {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+
+    .msg-attachments img {
+      width: 80px;
+      height: 80px;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 2px solid rgba(255,255,255,0.3);
+    }
+
+    .msg-attachments .audio-tag {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(255,255,255,0.15);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.75rem;
+      color: rgba(255,255,255,0.9);
+    }
+
     /* Markdown in assistant messages */
     .msg.assistant .msg-bubble code {
       background: rgba(0,0,0,0.06);
@@ -360,6 +387,100 @@
       30% { opacity: 1; }
     }
 
+    /* Attachment bar */
+    .attachment-bar {
+      display: none;
+      padding: 8px 16px 4px;
+      border-top: 1px solid var(--gray-200);
+      background: var(--gray-50);
+      flex-shrink: 0;
+      overflow-x: auto;
+      gap: 8px;
+    }
+
+    .attachment-bar.visible {
+      display: flex;
+    }
+
+    .attachment-bar::-webkit-scrollbar { height: 4px; }
+    .attachment-bar::-webkit-scrollbar-thumb { background: var(--gray-200); border-radius: 2px; }
+
+    .attachment-chip {
+      position: relative;
+      flex-shrink: 0;
+      width: 56px;
+      height: 56px;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1.5px solid var(--gray-200);
+      background: var(--gray-100);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .attachment-chip img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .attachment-chip .audio-icon {
+      font-size: 1.2rem;
+      color: var(--gray-600);
+    }
+
+    .attachment-chip .audio-name {
+      position: absolute;
+      bottom: 2px;
+      left: 2px;
+      right: 2px;
+      font-size: 0.55rem;
+      color: var(--gray-600);
+      text-align: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      background: rgba(255,255,255,0.85);
+      border-radius: 3px;
+      padding: 0 2px;
+    }
+
+    .attachment-chip .remove-btn {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      border: none;
+      font-size: 0.65rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+
+    .attachment-chip:hover .remove-btn { opacity: 1; }
+
+    .attachment-chip .experimental-badge {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      background: #f6ad55;
+      color: #fff;
+      font-size: 0.5rem;
+      font-weight: 600;
+      padding: 0 3px;
+      border-radius: 3px;
+      line-height: 1.4;
+    }
+
     /* Input bar */
     .input-bar {
       display: flex;
@@ -399,6 +520,51 @@
     }
 
     .input-bar textarea::placeholder { color: var(--gray-400); }
+
+    /* Input affordance buttons */
+    .input-affordances {
+      display: none;
+      align-items: flex-end;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .input-affordances.visible { display: flex; }
+
+    .afford-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      border: 1.5px solid var(--gray-200);
+      background: var(--white);
+      color: var(--gray-600);
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+      flex-shrink: 0;
+    }
+
+    .afford-btn:hover:not(:disabled) {
+      border-color: var(--indigo-500);
+      color: var(--indigo-500);
+    }
+
+    .afford-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    .afford-btn.recording {
+      background: var(--error-bg);
+      border-color: var(--error-text);
+      color: var(--error-text);
+      animation: pulse-rec 1.2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-rec {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(229, 62, 62, 0.3); }
+      50% { box-shadow: 0 0 0 6px rgba(229, 62, 62, 0); }
+    }
 
     .send-btn {
       width: 42px;
@@ -546,6 +712,93 @@
       box-shadow: 0 0 0 3px var(--indigo-focus-ring);
     }
 
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      font-size: 0.8rem;
+      color: var(--gray-700);
+      cursor: pointer;
+    }
+
+    .toggle-row input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--indigo-500);
+      cursor: pointer;
+    }
+
+    .toggle-row.hidden { display: none; }
+
+    /* Camera overlay */
+    .camera-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: rgba(0,0,0,0.85);
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+    }
+
+    .camera-overlay.open { display: flex; }
+
+    .camera-overlay video {
+      max-width: 90vw;
+      max-height: 60vh;
+      border-radius: 12px;
+      background: #000;
+    }
+
+    .camera-overlay .cam-controls {
+      display: flex;
+      gap: 16px;
+    }
+
+    .camera-overlay button {
+      padding: 10px 24px;
+      border-radius: 24px;
+      border: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+
+    .camera-overlay button:hover { opacity: 0.85; }
+
+    .cam-capture-btn {
+      background: var(--indigo-500);
+      color: #fff;
+    }
+
+    .cam-cancel-btn {
+      background: var(--gray-200);
+      color: var(--gray-800);
+    }
+
+    /* Drag-drop overlay */
+    .drag-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      z-index: 50;
+      background: rgba(102, 126, 234, 0.08);
+      border: 2px dashed var(--indigo-500);
+      border-radius: 16px;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.9rem;
+      color: var(--indigo-500);
+      font-weight: 500;
+      pointer-events: none;
+    }
+
+    .drag-overlay.visible { display: flex; }
+
     /* WebGPU error */
     .webgpu-error {
       text-align: center;
@@ -597,6 +850,8 @@
       .msg { max-width: 92%; }
       .chat-area { padding: 14px 12px; }
       .help-popover { width: 280px; right: -8px; }
+      .afford-btn { width: 32px; height: 32px; font-size: 0.9rem; }
+      .attachment-chip { width: 48px; height: 48px; }
     }
   </style>
 </head>
@@ -618,9 +873,11 @@
             </ul>
             <p><strong>Models:</strong></p>
             <ul>
-              <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; fast to load, good for everyday chat</li>
-              <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; much smarter, best quality</li>
+              <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; fast, text-only</li>
+              <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio)</li>
+              <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal, best quality</li>
             </ul>
+            <p><strong>Multimodal:</strong> With Gemma 4 models, attach images (upload, paste, camera) or audio (mic, file). MP4 video is experimental &mdash; frames and audio are extracted separately.</p>
             <p>Models are cached after first download &mdash; future visits load instantly.</p>
             <p><strong>Requirements:</strong> Chrome 113+, Edge 113+, or Firefox 130+ with WebGPU.</p>
             <div class="help-note">Powered by Transformers.js + Google Gemma (Apache 2.0).</div>
@@ -634,7 +891,10 @@
     </div>
 
     <!-- Main card -->
-    <div class="card">
+    <div class="card" style="position:relative">
+      <!-- Drag-drop overlay -->
+      <div class="drag-overlay" id="dragOverlay">Drop image, audio, or video here</div>
+
       <!-- Chat messages -->
       <div class="chat-area" id="chatArea">
         <div class="welcome" id="welcomeMsg">
@@ -652,11 +912,18 @@
         <div class="progress-text" id="progressText">Preparing to download model...</div>
       </div>
 
-      <!-- Settings (system prompt) -->
+      <!-- Settings (system prompt + thinking toggle) -->
       <div class="settings-panel" id="settingsPanel">
         <label for="systemPrompt">System prompt (optional)</label>
         <textarea id="systemPrompt" placeholder="e.g. You are a helpful coding assistant."></textarea>
+        <label class="toggle-row hidden" id="thinkingRow">
+          <input type="checkbox" id="thinkingToggle">
+          Show reasoning (thinking mode)
+        </label>
       </div>
+
+      <!-- Attachment bar -->
+      <div class="attachment-bar" id="attachmentBar"></div>
 
       <!-- Actions bar -->
       <div class="actions-bar">
@@ -665,17 +932,35 @@
         <span style="flex:1"></span>
         <select class="model-select" id="modelSelect" title="Choose model">
           <option value="gemma3-1b" selected>Gemma 3 1B &middot; Fast (~760 MB)</option>
-          <option value="gemma4-e4b">Gemma 4 E4B &middot; Smart (~4.9 GB)</option>
+          <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
+          <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
         </select>
       </div>
 
       <!-- Input -->
       <div class="input-bar">
+        <div class="input-affordances" id="inputAffordances">
+          <button class="afford-btn" id="attachBtn" title="Attach file" aria-label="Attach file">&#128206;</button>
+          <button class="afford-btn" id="cameraBtn" title="Camera" aria-label="Take photo">&#128247;</button>
+          <button class="afford-btn" id="micBtn" title="Record audio" aria-label="Record audio">&#127908;</button>
+        </div>
         <textarea id="chatInput" rows="1" placeholder="Type a message..." disabled></textarea>
         <button class="send-btn" id="sendBtn" disabled aria-label="Send">&#9654;</button>
       </div>
     </div>
   </div>
+
+  <!-- Camera overlay -->
+  <div class="camera-overlay" id="cameraOverlay">
+    <video id="cameraPreview" autoplay playsinline></video>
+    <div class="cam-controls">
+      <button class="cam-capture-btn" id="camCaptureBtn">Capture</button>
+      <button class="cam-cancel-btn" id="camCancelBtn">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Hidden file input -->
+  <input type="file" id="fileInput" style="display:none" multiple accept="image/*,audio/*,video/mp4">
 
   <!-- Footer -->
   <div class="footer-nav">
@@ -708,6 +993,15 @@
         dtype: 'q4f16',
         size: '~760 MB',
         type: 'causal',       // uses AutoModelForCausalLM
+        multimodal: false,
+      },
+      'gemma4-e2b': {
+        id: 'onnx-community/gemma-4-E2B-it-ONNX',
+        label: 'Gemma 4 E2B',
+        dtype: 'q4f16',
+        size: '~1.5 GB',
+        type: 'multimodal',   // uses Gemma4ForConditionalGeneration
+        multimodal: true,
       },
       'gemma4-e4b': {
         id: 'onnx-community/gemma-4-E4B-it-ONNX',
@@ -715,6 +1009,7 @@
         dtype: 'q4f16',
         size: '~4.9 GB',
         type: 'multimodal',   // uses Gemma4ForConditionalGeneration
+        multimodal: true,
       },
     };
 
@@ -727,6 +1022,9 @@
     let activeModelKey = null;
     let worker = null;
     let modelReady = false;
+    let attachments = [];      // [{type:'image'|'audio', blob:Blob, thumb:string, name:string, experimental?:bool}]
+    let mediaRecorder = null;
+    let cameraStream = null;
 
     // Restore from sessionStorage
     try {
@@ -752,6 +1050,19 @@
     const helpBtn = document.getElementById('helpBtn');
     const helpPopover = document.getElementById('helpPopover');
     const modelSelect = document.getElementById('modelSelect');
+    const attachmentBar = document.getElementById('attachmentBar');
+    const inputAffordances = document.getElementById('inputAffordances');
+    const attachBtn = document.getElementById('attachBtn');
+    const cameraBtn = document.getElementById('cameraBtn');
+    const micBtn = document.getElementById('micBtn');
+    const fileInput = document.getElementById('fileInput');
+    const thinkingToggle = document.getElementById('thinkingToggle');
+    const thinkingRow = document.getElementById('thinkingRow');
+    const cameraOverlay = document.getElementById('cameraOverlay');
+    const cameraPreview = document.getElementById('cameraPreview');
+    const camCaptureBtn = document.getElementById('camCaptureBtn');
+    const camCancelBtn = document.getElementById('camCancelBtn');
+    const dragOverlay = document.getElementById('dragOverlay');
 
     // ── Help popover ────────────────────────────────────────────
     helpBtn.addEventListener('click', e => {
@@ -771,14 +1082,338 @@
       chatInput.style.height = Math.min(chatInput.scrollHeight, 140) + 'px';
     });
 
+    // ── Multimodal UI visibility ────────────────────────────────
+    function updateMultimodalUI() {
+      const m = MODELS[activeModelKey];
+      const isMultimodal = m && m.multimodal;
+      inputAffordances.classList.toggle('visible', isMultimodal && modelReady);
+      thinkingRow.classList.toggle('hidden', !isMultimodal);
+    }
+
+    // ── Attachment management ───────────────────────────────────
+    function addAttachment(att) {
+      attachments.push(att);
+      renderAttachmentBar();
+    }
+
+    function removeAttachment(index) {
+      const att = attachments[index];
+      if (att.thumb) URL.revokeObjectURL(att.thumb);
+      attachments.splice(index, 1);
+      renderAttachmentBar();
+    }
+
+    function clearAttachments() {
+      for (const att of attachments) {
+        if (att.thumb) URL.revokeObjectURL(att.thumb);
+      }
+      attachments = [];
+      renderAttachmentBar();
+    }
+
+    function renderAttachmentBar() {
+      attachmentBar.innerHTML = '';
+      if (attachments.length === 0) {
+        attachmentBar.classList.remove('visible');
+        return;
+      }
+      attachmentBar.classList.add('visible');
+
+      attachments.forEach((att, i) => {
+        const chip = document.createElement('div');
+        chip.className = 'attachment-chip';
+
+        if (att.type === 'image') {
+          const img = document.createElement('img');
+          img.src = att.thumb;
+          img.alt = att.name;
+          chip.appendChild(img);
+        } else {
+          const icon = document.createElement('span');
+          icon.className = 'audio-icon';
+          icon.textContent = '\u{1F3B5}';
+          chip.appendChild(icon);
+          const name = document.createElement('span');
+          name.className = 'audio-name';
+          name.textContent = att.name;
+          chip.appendChild(name);
+        }
+
+        if (att.experimental) {
+          const badge = document.createElement('span');
+          badge.className = 'experimental-badge';
+          badge.textContent = 'EXP';
+          chip.appendChild(badge);
+        }
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-btn';
+        removeBtn.textContent = '\u00D7';
+        removeBtn.addEventListener('click', () => removeAttachment(i));
+        chip.appendChild(removeBtn);
+
+        attachmentBar.appendChild(chip);
+      });
+    }
+
+    // ── File input handler ──────────────────────────────────────
+    attachBtn.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', () => {
+      handleFiles(fileInput.files);
+      fileInput.value = '';
+    });
+
+    function handleFiles(files) {
+      for (const file of files) {
+        if (file.type.startsWith('image/')) {
+          addAttachment({
+            type: 'image',
+            blob: file,
+            thumb: URL.createObjectURL(file),
+            name: file.name,
+          });
+        } else if (file.type.startsWith('audio/')) {
+          addAttachment({
+            type: 'audio',
+            blob: file,
+            thumb: null,
+            name: file.name,
+          });
+        } else if (file.type === 'video/mp4' || file.name.endsWith('.mp4')) {
+          decomposeVideo(file);
+        }
+      }
+    }
+
+    // ── Clipboard paste (images) ────────────────────────────────
+    chatInput.addEventListener('paste', (e) => {
+      const m = MODELS[activeModelKey];
+      if (!m || !m.multimodal) return;
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) {
+            addAttachment({
+              type: 'image',
+              blob: file,
+              thumb: URL.createObjectURL(file),
+              name: 'pasted-image.png',
+            });
+          }
+        }
+      }
+    });
+
+    // ── Drag and drop ───────────────────────────────────────────
+    let dragCounter = 0;
+    const card = document.querySelector('.card');
+
+    card.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      const m = MODELS[activeModelKey];
+      if (!m || !m.multimodal) return;
+      dragCounter++;
+      dragOverlay.classList.add('visible');
+    });
+
+    card.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragCounter--;
+      if (dragCounter <= 0) {
+        dragCounter = 0;
+        dragOverlay.classList.remove('visible');
+      }
+    });
+
+    card.addEventListener('dragover', (e) => e.preventDefault());
+
+    card.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dragCounter = 0;
+      dragOverlay.classList.remove('visible');
+      const m = MODELS[activeModelKey];
+      if (!m || !m.multimodal) return;
+      if (e.dataTransfer?.files?.length) {
+        handleFiles(e.dataTransfer.files);
+      }
+    });
+
+    // ── Camera capture ──────────────────────────────────────────
+    cameraBtn.addEventListener('click', async () => {
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        cameraPreview.srcObject = cameraStream;
+        cameraOverlay.classList.add('open');
+      } catch (err) {
+        console.error('Camera error:', err);
+        alert('Could not access camera: ' + err.message);
+      }
+    });
+
+    camCaptureBtn.addEventListener('click', () => {
+      const video = cameraPreview;
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      canvas.toBlob((blob) => {
+        if (blob) {
+          addAttachment({
+            type: 'image',
+            blob,
+            thumb: URL.createObjectURL(blob),
+            name: 'camera-photo.jpg',
+          });
+        }
+        closeCamera();
+      }, 'image/jpeg', 0.9);
+    });
+
+    camCancelBtn.addEventListener('click', closeCamera);
+
+    function closeCamera() {
+      cameraOverlay.classList.remove('open');
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(t => t.stop());
+        cameraStream = null;
+      }
+      cameraPreview.srcObject = null;
+    }
+
+    // ── Microphone recording ────────────────────────────────────
+    micBtn.addEventListener('click', () => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+        return;
+      }
+      startMicRecording();
+    });
+
+    async function startMicRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const chunks = [];
+        mediaRecorder = new MediaRecorder(stream);
+
+        mediaRecorder.addEventListener('dataavailable', (e) => {
+          if (e.data.size > 0) chunks.push(e.data);
+        });
+
+        mediaRecorder.addEventListener('stop', () => {
+          stream.getTracks().forEach(t => t.stop());
+          micBtn.classList.remove('recording');
+          micBtn.textContent = '\u{1F3A4}';
+
+          if (chunks.length > 0) {
+            const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+            addAttachment({
+              type: 'audio',
+              blob,
+              thumb: null,
+              name: 'recording.webm',
+            });
+          }
+          mediaRecorder = null;
+        });
+
+        mediaRecorder.start();
+        micBtn.classList.add('recording');
+        micBtn.textContent = '\u{23F9}';
+      } catch (err) {
+        console.error('Mic error:', err);
+        alert('Could not access microphone: ' + err.message);
+      }
+    }
+
+    // ── MP4 video decomposition (experimental) ──────────────────
+    async function decomposeVideo(file) {
+      const url = URL.createObjectURL(file);
+      const video = document.createElement('video');
+      video.muted = true;
+      video.preload = 'auto';
+      video.src = url;
+
+      await new Promise((resolve, reject) => {
+        video.addEventListener('loadedmetadata', resolve);
+        video.addEventListener('error', reject);
+      });
+
+      const duration = video.duration;
+      const numFrames = Math.min(4, Math.max(1, Math.floor(duration / 2)));
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      // Extract keyframes
+      for (let i = 0; i < numFrames; i++) {
+        const t = (duration / (numFrames + 1)) * (i + 1);
+        video.currentTime = t;
+        await new Promise(r => video.addEventListener('seeked', r, { once: true }));
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+
+        const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
+        if (blob) {
+          addAttachment({
+            type: 'image',
+            blob,
+            thumb: URL.createObjectURL(blob),
+            name: `frame-${i + 1}.jpg`,
+            experimental: true,
+          });
+        }
+      }
+
+      // Extract audio track
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const audioCtx = new AudioContext({ sampleRate: 16000 });
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        const mono = audioBuffer.getChannelData(0);
+        const audioBlob = new Blob([new Float32Array(mono).buffer], { type: 'audio/pcm' });
+
+        addAttachment({
+          type: 'audio',
+          blob: audioBlob,
+          thumb: null,
+          name: `${file.name}-audio.pcm`,
+          experimental: true,
+          pcmData: new Float32Array(mono),
+        });
+        audioCtx.close();
+      } catch (err) {
+        console.warn('Could not extract audio from video:', err);
+      }
+
+      URL.revokeObjectURL(url);
+    }
+
     // ── Markdown renderer (lightweight) ─────────────────────────
     function renderMarkdown(text) {
       let thinkContent = '';
       let mainContent = text;
+
+      // Handle <|think|>...<|/think|> format
       const thinkMatch = text.match(/<\|think\|>([\s\S]*?)(<\|\/think\|>|$)/);
       if (thinkMatch) {
         thinkContent = thinkMatch[1].trim();
         mainContent = text.replace(/<\|think\|>[\s\S]*?(<\|\/think\|>|$)/, '').trim();
+      }
+
+      // Also handle Gemma 4 <|channel>thought ... <channel|> format
+      if (!thinkContent) {
+        const channelMatch = text.match(/<\|channel>thought\n?([\s\S]*?)(<channel\|>|$)/);
+        if (channelMatch) {
+          thinkContent = channelMatch[1].trim();
+          mainContent = text.replace(/<\|channel>thought\n?[\s\S]*?(<channel\|>|$)/, '').trim();
+        }
       }
 
       let html = '';
@@ -837,7 +1472,10 @@
         const bubble = document.createElement('div');
         bubble.className = 'msg-bubble';
         if (role === 'user') {
-          bubble.textContent = msg.content;
+          // For restored messages, content is always text (blobs not persisted)
+          const textContent = typeof msg.content === 'string' ? msg.content :
+            msg.content.filter(c => c.type === 'text').map(c => c.text).join(' ');
+          bubble.textContent = textContent;
         } else {
           bubble.innerHTML = renderMarkdown(msg.content);
         }
@@ -847,13 +1485,36 @@
       chatArea.scrollTop = chatArea.scrollHeight;
     }
 
-    function addUserMessage(text) {
+    function addUserMessage(text, hasAttachments) {
       welcomeMsg.style.display = 'none';
       const el = document.createElement('div');
       el.className = 'msg user';
       const bubble = document.createElement('div');
       bubble.className = 'msg-bubble';
-      bubble.textContent = text;
+
+      // Show attachment thumbnails in the message
+      if (hasAttachments && attachments.length > 0) {
+        const attDiv = document.createElement('div');
+        attDiv.className = 'msg-attachments';
+        for (const att of attachments) {
+          if (att.type === 'image' && att.thumb) {
+            const img = document.createElement('img');
+            img.src = att.thumb;
+            img.alt = att.name;
+            attDiv.appendChild(img);
+          } else if (att.type === 'audio') {
+            const tag = document.createElement('span');
+            tag.className = 'audio-tag';
+            tag.textContent = '\u{1F3B5} ' + att.name;
+            attDiv.appendChild(tag);
+          }
+        }
+        bubble.appendChild(attDiv);
+      }
+
+      const textNode = document.createElement('span');
+      textNode.textContent = text;
+      bubble.appendChild(textNode);
       el.appendChild(bubble);
       chatArea.appendChild(el);
       chatArea.scrollTop = chatArea.scrollHeight;
@@ -878,14 +1539,23 @@
 
     function saveChat() {
       try {
-        sessionStorage.setItem('localmind_chat', JSON.stringify(messages));
+        // Strip blobs from messages for sessionStorage (only persist text)
+        const serializable = messages.map(m => {
+          if (m.role === 'assistant') return m;
+          if (typeof m.content === 'string') return m;
+          // Multimodal user message: extract text only
+          const textParts = m.content.filter(c => c.type === 'text');
+          const text = textParts.map(c => c.text).join(' ');
+          return { role: m.role, content: text };
+        });
+        sessionStorage.setItem('localmind_chat', JSON.stringify(serializable));
       } catch {}
     }
 
     // ── Worker factory ──────────────────────────────────────────
     // Pattern from huggingface/transformers.js-examples (Llama 3.2 WebGPU).
     // Uses AutoModelForCausalLM + AutoTokenizer (not pipeline) for causal models.
-    // Uses Gemma4ForConditionalGeneration for Gemma 4 E4B (multimodal).
+    // Uses Gemma4ForConditionalGeneration + AutoProcessor for multimodal models.
     // GQA variant required for Gemma 3 1B (issue #1469: regular variant crashes).
     function createWorker() {
       const code = `
@@ -895,6 +1565,7 @@ import {
   AutoModelForCausalLM,
   AutoProcessor,
   Gemma4ForConditionalGeneration,
+  RawImage,
   TextStreamer,
   InterruptableStoppingCriteria,
 } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
@@ -903,6 +1574,7 @@ env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
 env.allowRemoteModels = true;
 
+let processor = null;
 let tokenizer = null;
 let model = null;
 let stopping_criteria = new InterruptableStoppingCriteria();
@@ -913,7 +1585,7 @@ function progressCallback(p) {
 }
 
 async function loadCausal(modelId, dtype) {
-  tokenizer = null; model = null;
+  processor = null; tokenizer = null; model = null;
 
   tokenizer = await AutoTokenizer.from_pretrained(modelId, {
     progress_callback: progressCallback,
@@ -935,9 +1607,9 @@ async function loadCausal(modelId, dtype) {
 }
 
 async function loadMultimodal(modelId, dtype) {
-  tokenizer = null; model = null;
+  processor = null; tokenizer = null; model = null;
 
-  const processor = await AutoProcessor.from_pretrained(modelId, {
+  processor = await AutoProcessor.from_pretrained(modelId, {
     progress_callback: progressCallback,
   });
   tokenizer = processor.tokenizer;
@@ -957,7 +1629,7 @@ async function loadMultimodal(modelId, dtype) {
   self.postMessage({ type: 'ready' });
 }
 
-async function generate(chatMessages, id) {
+async function generateCausal(chatMessages, id) {
   stopping_criteria.reset();
 
   try {
@@ -992,8 +1664,85 @@ async function generate(chatMessages, id) {
   }
 }
 
+async function generateMultimodal(chatMessages, id, attachmentData, enableThinking) {
+  stopping_criteria.reset();
+
+  try {
+    // Build multimodal content blocks for the last user message
+    // chatMessages is already in the right format with content arrays
+
+    // Apply chat template via processor (returns a prompt string, not tokens)
+    const prompt = processor.apply_chat_template(chatMessages, {
+      add_generation_prompt: true,
+      enable_thinking: enableThinking || false,
+    });
+
+    // Reconstruct images and audio from transferred data
+    const images = [];
+    const audios = [];
+
+    if (attachmentData) {
+      for (const att of attachmentData) {
+        if (att.type === 'image') {
+          // Create RawImage from the transferred ImageBitmap data
+          const img = await RawImage.fromBlob(new Blob([att.data], { type: att.mimeType || 'image/jpeg' }));
+          images.push(img);
+        } else if (att.type === 'audio') {
+          if (att.pcmData) {
+            // Already decoded PCM Float32Array (from video decomposition)
+            audios.push(att.pcmData);
+          } else {
+            // Raw audio blob — decode to 16kHz mono Float32Array
+            const audioData = att.data;
+            const audioBlob = new Blob([audioData], { type: att.mimeType || 'audio/webm' });
+            const arrayBuffer = await audioBlob.arrayBuffer();
+            const audioCtx = new OfflineAudioContext(1, 1, 16000);
+            const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+            // Resample to 16kHz mono
+            const offlineCtx = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+            const source = offlineCtx.createBufferSource();
+            source.buffer = decoded;
+            source.connect(offlineCtx.destination);
+            source.start(0);
+            const rendered = await offlineCtx.startRendering();
+            audios.push(rendered.getChannelData(0));
+          }
+        }
+      }
+    }
+
+    // Process multimodal inputs: processor(prompt, ...images, ...audios, options)
+    const processorArgs = [prompt, ...images, ...audios, { add_special_tokens: false }];
+    const inputs = await processor(...processorArgs);
+
+    const streamer = new TextStreamer(processor.tokenizer, {
+      skip_prompt: true,
+      skip_special_tokens: true,
+      callback_function: (text) => {
+        self.postMessage({ type: 'token', token: text, id });
+      },
+    });
+
+    await model.generate({
+      ...inputs,
+      max_new_tokens: 2048,
+      do_sample: true,
+      temperature: 1.0,
+      top_k: 64,
+      top_p: 0.95,
+      streamer,
+      stopping_criteria,
+    });
+
+    self.postMessage({ type: 'complete', id });
+  } catch (err) {
+    self.postMessage({ type: 'error', message: err.message || String(err) });
+    self.postMessage({ type: 'complete', id });
+  }
+}
+
 self.addEventListener('message', async (e) => {
-  const { type, messages, id, modelId, dtype, modelType } = e.data;
+  const { type, messages, id, modelId, dtype, modelType, attachments: attData, enableThinking } = e.data;
 
   if (type === 'load') {
     try {
@@ -1006,7 +1755,11 @@ self.addEventListener('message', async (e) => {
       self.postMessage({ type: 'error', message: 'Failed to load model: ' + (err.message || String(err)) });
     }
   } else if (type === 'generate') {
-    await generate(messages, id);
+    if (loadedType === 'multimodal') {
+      await generateMultimodal(messages, id, attData, enableThinking);
+    } else {
+      await generateCausal(messages, id);
+    }
   } else if (type === 'stop') {
     stopping_criteria.interrupt();
   }
@@ -1068,10 +1821,11 @@ self.addEventListener('message', async (e) => {
           const m = MODELS[activeModelKey];
           statusText.textContent = m.label;
           chatInput.disabled = false;
-          chatInput.placeholder = 'Type a message...';
+          chatInput.placeholder = m.multimodal ? 'Type a message, or attach images/audio...' : 'Type a message...';
           sendBtn.disabled = false;
           clearBtn.disabled = false;
           modelSelect.disabled = false;
+          updateMultimodalUI();
           chatInput.focus();
         }
 
@@ -1129,6 +1883,9 @@ self.addEventListener('message', async (e) => {
       activeModelKey = key;
       modelReady = false;
 
+      // Clear attachments when switching away from multimodal
+      if (!m.multimodal) clearAttachments();
+
       // Reset UI
       statusBadge.className = 'status-badge loading';
       statusSpinner.style.display = '';
@@ -1140,6 +1897,7 @@ self.addEventListener('message', async (e) => {
       chatInput.placeholder = `Loading ${m.label}...`;
       sendBtn.disabled = true;
       modelSelect.disabled = true;
+      updateMultimodalUI();
 
       // Create fresh worker and load
       worker = createWorker();
@@ -1160,25 +1918,76 @@ self.addEventListener('message', async (e) => {
       loadModel(key);
     });
 
-    // ── Send message ────────────────────────────────────────────
-    function sendMessage() {
-      const text = chatInput.value.trim();
-      if (!text || !modelReady || generating) return;
+    // ── Prepare attachment data for worker transfer ─────────────
+    async function prepareAttachmentsForWorker() {
+      const attData = [];
+      for (const att of attachments) {
+        if (att.pcmData) {
+          // Already-decoded PCM from video decomposition
+          attData.push({
+            type: 'audio',
+            pcmData: att.pcmData,
+            mimeType: 'audio/pcm',
+          });
+        } else {
+          const buffer = await att.blob.arrayBuffer();
+          attData.push({
+            type: att.type,
+            data: buffer,
+            mimeType: att.blob.type,
+          });
+        }
+      }
+      return attData;
+    }
 
-      messages.push({ role: 'user', content: text });
-      addUserMessage(text);
+    // ── Send message ────────────────────────────────────────────
+    async function sendMessage() {
+      const text = chatInput.value.trim();
+      if ((!text && attachments.length === 0) || !modelReady || generating) return;
+
+      const m = MODELS[activeModelKey];
+      const isMultimodal = m && m.multimodal && attachments.length > 0;
+      const hasAttachments = attachments.length > 0;
+
+      // Build user message content
+      let userContent;
+      let chatMessages;
+
+      if (isMultimodal) {
+        // Multimodal content blocks
+        const contentBlocks = [];
+        for (const att of attachments) {
+          if (att.type === 'image') contentBlocks.push({ type: 'image' });
+          else if (att.type === 'audio') contentBlocks.push({ type: 'audio' });
+        }
+        if (text) contentBlocks.push({ type: 'text', text });
+        userContent = contentBlocks;
+      } else {
+        userContent = text || '(attachments only)';
+      }
+
+      messages.push({ role: 'user', content: userContent });
+      addUserMessage(text || '(attachments)', hasAttachments);
       saveChat();
 
       chatInput.value = '';
       chatInput.style.height = 'auto';
 
-      const chatMessages = [];
+      // Build chat history for worker
+      chatMessages = [];
       const sysPrompt = systemPrompt.value.trim();
       if (sysPrompt) {
         chatMessages.push({ role: 'system', content: sysPrompt });
       }
-      for (const m of messages) {
-        chatMessages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content });
+      for (const msg of messages) {
+        chatMessages.push({ role: msg.role === 'assistant' ? 'assistant' : 'user', content: msg.content });
+      }
+
+      // Prepare attachment data for worker (only for current message's attachments)
+      let attData = null;
+      if (isMultimodal) {
+        attData = await prepareAttachmentsForWorker();
       }
 
       currentAssistantEl = addAssistantPlaceholder();
@@ -1191,7 +2000,16 @@ self.addEventListener('message', async (e) => {
       modelSelect.disabled = true;
 
       const id = ++msgIdCounter;
-      worker.postMessage({ type: 'generate', messages: chatMessages, id });
+      worker.postMessage({
+        type: 'generate',
+        messages: chatMessages,
+        id,
+        attachments: attData,
+        enableThinking: thinkingToggle.checked,
+      });
+
+      // Clear attachments after sending
+      clearAttachments();
     }
 
     sendBtn.addEventListener('click', () => {
@@ -1226,6 +2044,7 @@ self.addEventListener('message', async (e) => {
       if (generating) return;
       messages = [];
       saveChat();
+      clearAttachments();
       chatArea.innerHTML = '';
       chatArea.appendChild(welcomeMsg);
       welcomeMsg.style.display = '';
