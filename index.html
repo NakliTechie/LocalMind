@@ -664,7 +664,7 @@
         <button class="btn-icon" id="settingsBtn" title="System prompt settings">Settings</button>
         <span style="flex:1"></span>
         <select class="model-select" id="modelSelect" title="Choose model">
-          <option value="gemma3-1b" selected>Gemma 3 1B &middot; Fast (~760 MB)</option>
+          <option value="gemma3-1b" selected>Gemma 3 1B &middot; Fast (~860 MB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Smart (~4.9 GB)</option>
         </select>
       </div>
@@ -705,8 +705,8 @@
       'gemma3-1b': {
         id: 'onnx-community/gemma-3-1b-it-ONNX',
         label: 'Gemma 3 1B',
-        dtype: 'q4f16',
-        size: '~760 MB',
+        dtype: 'q4',
+        size: '~860 MB',
         type: 'causal',       // uses pipeline("text-generation")
       },
       'gemma4-e4b': {
