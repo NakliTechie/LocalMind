@@ -1033,6 +1033,17 @@ self.addEventListener('message', async (e) => {
 
     // ── Worker message handling ─────────────────────────────────
     function attachWorkerHandlers(w) {
+      // Catch silent worker failures (e.g. bad import, missing export)
+      w.addEventListener('error', (e) => {
+        console.error('Worker error event:', e.message, e);
+        statusBadge.className = 'status-badge error';
+        statusSpinner.style.display = 'none';
+        statusText.textContent = 'Worker error';
+        progressSection.classList.remove('visible');
+        progressText.textContent = e.message || 'Worker failed to start';
+        modelSelect.disabled = false;
+      });
+
       w.addEventListener('message', (e) => {
         const data = e.data;
 
