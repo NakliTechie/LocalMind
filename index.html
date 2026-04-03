@@ -1702,9 +1702,12 @@ async function generateMultimodal(chatMessages, id, attachmentData, enableThinki
       }
     }
 
-    // Process multimodal inputs: processor(prompt, ...images, ...audios, options)
-    const processorArgs = [prompt, ...images, ...audios, { add_special_tokens: false }];
-    const inputs = await processor(...processorArgs);
+    // Process multimodal inputs: processor(prompt, image|null, audio|null, options)
+    // Must pass null for missing modalities — positional args, not named.
+    // The processor dispatches arg[1] to vision and arg[2] to audio extractor.
+    const imageArg = images.length > 0 ? (images.length === 1 ? images[0] : images) : null;
+    const audioArg = audios.length > 0 ? (audios.length === 1 ? audios[0] : audios) : null;
+    const inputs = await processor(prompt, imageArg, audioArg, { add_special_tokens: false });
 
     const streamer = new TextStreamer(processor.tokenizer, {
       skip_prompt: true,
