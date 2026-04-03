@@ -714,7 +714,7 @@
         label: 'Gemma 4 E4B',
         dtype: 'q4f16',
         size: '~4.9 GB',
-        type: 'multimodal',   // uses Gemma3nForConditionalGeneration
+        type: 'multimodal',   // uses Gemma4ForConditionalGeneration
       },
     };
 
@@ -885,7 +885,7 @@
     // ── Worker factory ──────────────────────────────────────────
     // Pattern from huggingface/transformers.js-examples (Llama 3.2 WebGPU).
     // Uses AutoModelForCausalLM + AutoTokenizer (not pipeline) for causal models.
-    // Uses Gemma3nForConditionalGeneration for Gemma 4 E4B (multimodal).
+    // Uses Gemma4ForConditionalGeneration for Gemma 4 E4B (multimodal).
     // GQA variant required for Gemma 3 1B (issue #1469: regular variant crashes).
     function createWorker() {
       const code = `
@@ -894,10 +894,10 @@ import {
   AutoTokenizer,
   AutoModelForCausalLM,
   AutoProcessor,
-  Gemma3nForConditionalGeneration,
+  Gemma4ForConditionalGeneration,
   TextStreamer,
   InterruptableStoppingCriteria,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
@@ -942,7 +942,7 @@ async function loadMultimodal(modelId, dtype) {
   });
   tokenizer = processor.tokenizer;
 
-  model = await Gemma3nForConditionalGeneration.from_pretrained(modelId, {
+  model = await Gemma4ForConditionalGeneration.from_pretrained(modelId, {
     dtype: dtype,
     device: 'webgpu',
     progress_callback: progressCallback,
