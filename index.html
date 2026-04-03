@@ -1565,7 +1565,7 @@ import {
   AutoModelForCausalLM,
   AutoProcessor,
   Gemma4ForConditionalGeneration,
-  RawImage,
+  load_image,
   TextStreamer,
   InterruptableStoppingCriteria,
 } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
@@ -1684,11 +1684,20 @@ async function generateMultimodal(chatMessages, id, attachmentData, enableThinki
     if (attachmentData) {
       for (const att of attachmentData) {
         if (att.type === 'image') {
-          const img = await RawImage.fromBlob(new Blob([att.data], { type: att.mimeType || 'image/jpeg' }));
+          // Create blob URL and use load_image() which properly constructs
+          // a RawImage with .rgb() and other methods the processor needs
+          const blob = new Blob([att.data], { type: att.mimeType || 'image/jpeg' });
+          const blobUrl = URL.createObjectURL(blob);
+          const img = await load_image(blobUrl);
+          URL.revokeObjectURL(blobUrl);
           images.push(img);
         } else if (att.type === 'audio') {
-          // pcmData is always a pre-decoded Float32Array (decoded on main thread)
-          audios.push(att.pcmData);
+          // Reconstruct Float32Array from transferred data
+          // (postMessage may transfer as ArrayBuffer, losing typed array identity)
+          const pcm = att.pcmData instanceof Float32Array
+            ? att.pcmData
+            : new Float32Array(att.pcmData);
+          audios.push(pcm);
         }
       }
     }
