@@ -1,0 +1,1236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="author" content="Chirag Patnaik">
+  <meta name="description" content="Private AI chatbot running Gemma entirely in your browser. No server, no API keys, no data leaves your device.">
+  <title>LocalMind — Private AI Chat in Your Browser</title>
+  <style>
+    :root {
+      --gray-900: #1a202c;
+      --gray-800: #2d3748;
+      --gray-700: #4a5568;
+      --gray-600: #718096;
+      --gray-400: #a0aec0;
+      --gray-200: #e2e8f0;
+      --gray-100: #f0f4f8;
+      --gray-50: #f8fafc;
+      --white: #ffffff;
+      --indigo-500: #667eea;
+      --indigo-600: #5a67d8;
+      --indigo-100: #ebf4ff;
+      --indigo-focus-ring: rgba(102, 126, 234, 0.15);
+      --success-bg: #e6fffa;
+      --success-border: #81e6d9;
+      --success-text: #234e52;
+      --loading-bg: #fffbeb;
+      --loading-border: #f6e05e;
+      --loading-text: #744210;
+      --error-bg: #fff5f5;
+      --error-border: #feb2b2;
+      --error-text: #e53e3e;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--gray-100);
+      color: var(--gray-800);
+      line-height: 1.6;
+      padding: 24px 16px 60px;
+    }
+
+    .app {
+      max-width: 780px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 108px);
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      flex-shrink: 0;
+    }
+
+    .header h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--gray-900);
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    /* Help button */
+    .help-wrap { position: relative; }
+
+    .help-btn {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: 1.5px solid var(--gray-400);
+      background: var(--white);
+      color: var(--gray-600);
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 0.15s, color 0.15s;
+    }
+
+    .help-btn:hover {
+      border-color: var(--indigo-500);
+      color: var(--indigo-500);
+    }
+
+    .help-popover {
+      display: none;
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 0;
+      width: 320px;
+      background: var(--white);
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+      padding: 16px;
+      font-size: 0.82rem;
+      color: var(--gray-700);
+      line-height: 1.55;
+      z-index: 100;
+    }
+
+    .help-popover::before {
+      content: '';
+      position: absolute;
+      top: -6px;
+      right: 10px;
+      width: 12px;
+      height: 12px;
+      background: var(--white);
+      transform: rotate(45deg);
+      box-shadow: -2px -2px 4px rgba(0,0,0,0.04);
+    }
+
+    .help-popover.open { display: block; }
+
+    .help-popover h3 {
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: var(--gray-900);
+      margin-bottom: 8px;
+    }
+
+    .help-popover p { margin-bottom: 8px; }
+
+    .help-popover ul {
+      padding-left: 18px;
+      margin-bottom: 8px;
+    }
+
+    .help-popover li { margin-bottom: 4px; }
+
+    .help-popover .help-note {
+      font-size: 0.75rem;
+      color: var(--gray-400);
+      border-top: 1px solid var(--gray-200);
+      padding-top: 8px;
+      margin-top: 8px;
+    }
+
+    /* Status badge */
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      transition: background 0.4s, border-color 0.4s, color 0.4s;
+    }
+
+    .status-badge.loading {
+      background: var(--loading-bg);
+      border: 1px solid var(--loading-border);
+      color: var(--loading-text);
+    }
+
+    .status-badge.ready {
+      background: var(--success-bg);
+      border: 1px solid var(--success-border);
+      color: var(--success-text);
+    }
+
+    .status-badge.error {
+      background: var(--error-bg);
+      border: 1px solid var(--error-border);
+      color: var(--error-text);
+    }
+
+    .spinner {
+      width: 10px;
+      height: 10px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Card */
+    .card {
+      background: var(--white);
+      border-radius: 16px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+
+    /* Chat area */
+    .chat-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-height: 0;
+    }
+
+    .chat-area::-webkit-scrollbar { width: 6px; }
+    .chat-area::-webkit-scrollbar-track { background: transparent; }
+    .chat-area::-webkit-scrollbar-thumb { background: var(--gray-200); border-radius: 3px; }
+
+    /* Welcome message */
+    .welcome {
+      text-align: center;
+      color: var(--gray-400);
+      font-size: 0.88rem;
+      margin: auto 0;
+      padding: 40px 20px;
+    }
+
+    .welcome-icon {
+      font-size: 2.5rem;
+      margin-bottom: 12px;
+    }
+
+    .welcome h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--gray-600);
+      margin-bottom: 6px;
+    }
+
+    /* Messages */
+    .msg {
+      display: flex;
+      flex-direction: column;
+      max-width: 85%;
+      animation: fadeIn 0.2s ease;
+    }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+    .msg.user { align-self: flex-end; }
+    .msg.assistant { align-self: flex-start; }
+
+    .msg-bubble {
+      padding: 10px 14px;
+      border-radius: 14px;
+      font-size: 0.9rem;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+
+    .msg.user .msg-bubble {
+      background: var(--indigo-500);
+      color: var(--white);
+      border-bottom-right-radius: 4px;
+    }
+
+    .msg.assistant .msg-bubble {
+      background: var(--gray-100);
+      color: var(--gray-800);
+      border-bottom-left-radius: 4px;
+    }
+
+    /* Markdown in assistant messages */
+    .msg.assistant .msg-bubble code {
+      background: rgba(0,0,0,0.06);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 0.82rem;
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+
+    .msg.assistant .msg-bubble pre {
+      background: var(--gray-900);
+      color: #e2e8f0;
+      padding: 12px 14px;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 8px 0;
+      font-size: 0.8rem;
+      line-height: 1.5;
+    }
+
+    .msg.assistant .msg-bubble pre code {
+      background: none;
+      padding: 0;
+      color: inherit;
+      font-size: inherit;
+    }
+
+    .msg.assistant .msg-bubble ol,
+    .msg.assistant .msg-bubble ul {
+      padding-left: 20px;
+      margin: 6px 0;
+    }
+
+    .msg.assistant .msg-bubble li { margin-bottom: 2px; }
+    .msg.assistant .msg-bubble strong { font-weight: 600; }
+    .msg.assistant .msg-bubble em { font-style: italic; }
+    .msg.assistant .msg-bubble p { margin-bottom: 8px; }
+    .msg.assistant .msg-bubble p:last-child { margin-bottom: 0; }
+
+    /* Thinking block */
+    .thinking-block {
+      background: rgba(102, 126, 234, 0.06);
+      border-left: 3px solid var(--indigo-500);
+      padding: 8px 12px;
+      border-radius: 0 8px 8px 0;
+      margin-bottom: 8px;
+      font-size: 0.82rem;
+      color: var(--gray-600);
+      font-style: italic;
+    }
+
+    .thinking-toggle {
+      cursor: pointer;
+      font-size: 0.75rem;
+      color: var(--indigo-500);
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-bottom: 4px;
+      font-style: normal;
+    }
+
+    .thinking-content {
+      display: none;
+      white-space: pre-wrap;
+    }
+
+    .thinking-content.open { display: block; }
+
+    /* Typing indicator */
+    .typing-dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--gray-400);
+      animation: blink 1.4s infinite;
+      margin-right: 3px;
+    }
+
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; margin-right: 0; }
+
+    @keyframes blink {
+      0%, 60%, 100% { opacity: 0.3; }
+      30% { opacity: 1; }
+    }
+
+    /* Input bar */
+    .input-bar {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      padding: 12px 16px;
+      border-top: 1px solid var(--gray-200);
+      background: var(--gray-50);
+      flex-shrink: 0;
+    }
+
+    .input-bar textarea {
+      flex: 1;
+      border: 1.5px solid var(--gray-200);
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 0.9rem;
+      font-family: inherit;
+      line-height: 1.4;
+      resize: none;
+      outline: none;
+      min-height: 42px;
+      max-height: 140px;
+      transition: border-color 0.15s;
+      background: var(--white);
+    }
+
+    .input-bar textarea:focus {
+      border-color: var(--indigo-500);
+      box-shadow: 0 0 0 3px var(--indigo-focus-ring);
+    }
+
+    .input-bar textarea:disabled {
+      background: var(--gray-100);
+      color: var(--gray-400);
+      cursor: not-allowed;
+    }
+
+    .input-bar textarea::placeholder { color: var(--gray-400); }
+
+    .send-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+      border: none;
+      background: var(--indigo-500);
+      color: var(--white);
+      font-size: 1.1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s, opacity 0.15s;
+      flex-shrink: 0;
+    }
+
+    .send-btn:hover:not(:disabled) { background: var(--indigo-600); }
+    .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .send-btn.stop { background: var(--error-text); }
+    .send-btn.stop:hover:not(:disabled) { background: #c53030; }
+
+    /* Action buttons bar */
+    .actions-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 16px;
+      border-top: 1px solid var(--gray-200);
+      background: var(--gray-50);
+      flex-shrink: 0;
+    }
+
+    .btn-icon {
+      background: none;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      color: var(--gray-600);
+      padding: 4px 8px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .btn-icon:hover:not(:disabled) {
+      background: var(--gray-200);
+      color: var(--gray-800);
+    }
+
+    .btn-icon:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Model selector */
+    .model-select {
+      appearance: none;
+      -webkit-appearance: none;
+      background: var(--white);
+      border: 1.5px solid var(--gray-200);
+      border-radius: 8px;
+      padding: 3px 24px 3px 8px;
+      font-size: 0.72rem;
+      font-family: inherit;
+      color: var(--gray-700);
+      cursor: pointer;
+      outline: none;
+      transition: border-color 0.15s;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23718096'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+    }
+
+    .model-select:hover { border-color: var(--gray-400); }
+    .model-select:focus { border-color: var(--indigo-500); box-shadow: 0 0 0 3px var(--indigo-focus-ring); }
+    .model-select:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Progress section */
+    .progress-section {
+      padding: 12px 16px;
+      border-top: 1px solid var(--gray-200);
+      background: var(--gray-50);
+      flex-shrink: 0;
+      display: none;
+    }
+
+    .progress-section.visible { display: block; }
+
+    .progress-bar {
+      height: 6px;
+      background: var(--gray-200);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--indigo-500), #764ba2);
+      border-radius: 8px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+
+    .progress-text {
+      font-size: 0.72rem;
+      color: var(--gray-600);
+      margin-top: 6px;
+      text-align: center;
+    }
+
+    /* Settings panel */
+    .settings-panel {
+      display: none;
+      padding: 12px 16px;
+      border-top: 1px solid var(--gray-200);
+      background: var(--gray-50);
+      flex-shrink: 0;
+    }
+
+    .settings-panel.open { display: block; }
+
+    .settings-panel label {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--gray-600);
+      margin-bottom: 4px;
+    }
+
+    .settings-panel textarea {
+      width: 100%;
+      border: 1.5px solid var(--gray-200);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.8rem;
+      font-family: inherit;
+      line-height: 1.4;
+      resize: vertical;
+      outline: none;
+      min-height: 60px;
+      max-height: 120px;
+      background: var(--white);
+    }
+
+    .settings-panel textarea:focus {
+      border-color: var(--indigo-500);
+      box-shadow: 0 0 0 3px var(--indigo-focus-ring);
+    }
+
+    /* WebGPU error */
+    .webgpu-error {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--error-text);
+    }
+
+    .webgpu-error h2 {
+      font-size: 1.1rem;
+      margin-bottom: 8px;
+    }
+
+    .webgpu-error p {
+      font-size: 0.88rem;
+      color: var(--gray-600);
+      max-width: 400px;
+      margin: 0 auto;
+    }
+
+    /* Footer */
+    .footer-nav {
+      position: fixed;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 24px;
+      background: rgba(255,255,255,0.92);
+      padding: 6px 18px;
+      border-radius: 20px;
+      box-shadow: 0 1px 6px rgba(0,0,0,0.06);
+      font-size: 0.72rem;
+      white-space: nowrap;
+    }
+
+    .footer-nav a {
+      color: #0366d6;
+      text-decoration: none;
+      transition: opacity 0.2s;
+    }
+
+    .footer-nav a:hover { opacity: 0.7; }
+
+    /* Mobile */
+    @media (max-width: 600px) {
+      body { padding: 12px 8px 56px; }
+      .app { height: calc(100vh - 80px); }
+      .header h1 { font-size: 1.2rem; }
+      .msg { max-width: 92%; }
+      .chat-area { padding: 14px 12px; }
+      .help-popover { width: 280px; right: -8px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <div class="header">
+      <h1>LocalMind</h1>
+      <div class="header-right">
+        <div class="help-wrap">
+          <button class="help-btn" id="helpBtn" aria-label="Help">?</button>
+          <div class="help-popover" id="helpPopover">
+            <h3>About LocalMind</h3>
+            <p>A private AI chatbot running <strong>Gemma</strong> entirely in your browser via WebGPU.</p>
+            <ul>
+              <li>No server &mdash; all inference runs locally</li>
+              <li>No API keys &mdash; the model runs in your tab</li>
+              <li>No data leaves your device &mdash; ever</li>
+            </ul>
+            <p><strong>Models:</strong></p>
+            <ul>
+              <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; fast to load, good for everyday chat</li>
+              <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; much smarter, best quality</li>
+            </ul>
+            <p>Models are cached after first download &mdash; future visits load instantly.</p>
+            <p><strong>Requirements:</strong> Chrome 113+, Edge 113+, or Firefox 130+ with WebGPU.</p>
+            <div class="help-note">Powered by Transformers.js + Google Gemma (Apache 2.0).</div>
+          </div>
+        </div>
+        <div class="status-badge loading" id="statusBadge">
+          <div class="spinner" id="statusSpinner"></div>
+          <span id="statusText">Initializing...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main card -->
+    <div class="card">
+      <!-- Chat messages -->
+      <div class="chat-area" id="chatArea">
+        <div class="welcome" id="welcomeMsg">
+          <div class="welcome-icon">&#129504;</div>
+          <h2>Private AI, right in your browser</h2>
+          <p>Gemma runs entirely on your device. Nothing is sent to any server.</p>
+        </div>
+      </div>
+
+      <!-- Progress bar (model loading) -->
+      <div class="progress-section" id="progressSection">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <div class="progress-text" id="progressText">Preparing to download model...</div>
+      </div>
+
+      <!-- Settings (system prompt) -->
+      <div class="settings-panel" id="settingsPanel">
+        <label for="systemPrompt">System prompt (optional)</label>
+        <textarea id="systemPrompt" placeholder="e.g. You are a helpful coding assistant."></textarea>
+      </div>
+
+      <!-- Actions bar -->
+      <div class="actions-bar">
+        <button class="btn-icon" id="clearBtn" disabled title="Clear chat">Clear</button>
+        <button class="btn-icon" id="settingsBtn" title="System prompt settings">Settings</button>
+        <span style="flex:1"></span>
+        <select class="model-select" id="modelSelect" title="Choose model">
+          <option value="gemma3-1b" selected>Gemma 3 1B &middot; Fast (~760 MB)</option>
+          <option value="gemma4-e4b">Gemma 4 E4B &middot; Smart (~4.9 GB)</option>
+        </select>
+      </div>
+
+      <!-- Input -->
+      <div class="input-bar">
+        <textarea id="chatInput" rows="1" placeholder="Type a message..." disabled></textarea>
+        <button class="send-btn" id="sendBtn" disabled aria-label="Send">&#9654;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer-nav">
+    <a href="https://naklitechie.github.io/" target="_blank" rel="noopener">&#11013; More Projects</a>
+    <a href="https://github.com/NakliTechie/LocalMind" target="_blank" rel="noopener">&#9000; Source</a>
+  </div>
+
+  <script type="module">
+    // ── WebGPU check ────────────────────────────────────────────
+    const hasWebGPU = !!navigator.gpu;
+    if (!hasWebGPU) {
+      document.getElementById('chatArea').innerHTML = `
+        <div class="webgpu-error">
+          <div style="font-size:2rem;margin-bottom:12px">&#9888;</div>
+          <h2>WebGPU Not Available</h2>
+          <p>LocalMind requires WebGPU to run the AI model in your browser.
+          Please use Chrome 113+, Edge 113+, or Firefox 130+ on a device with a compatible GPU.</p>
+        </div>`;
+      document.getElementById('statusBadge').className = 'status-badge error';
+      document.getElementById('statusSpinner').style.display = 'none';
+      document.getElementById('statusText').textContent = 'Not supported';
+      throw new Error('WebGPU not available');
+    }
+
+    // ── Model registry ──────────────────────────────────────────
+    const MODELS = {
+      'gemma3-1b': {
+        id: 'onnx-community/gemma-3-1b-it-ONNX',
+        label: 'Gemma 3 1B',
+        dtype: 'q4f16',
+        size: '~760 MB',
+        type: 'causal',       // uses pipeline("text-generation")
+      },
+      'gemma4-e4b': {
+        id: 'onnx-community/gemma-4-E4B-it-ONNX',
+        label: 'Gemma 4 E4B',
+        dtype: 'q4f16',
+        size: '~4.9 GB',
+        type: 'multimodal',   // uses Gemma4ForConditionalGeneration
+      },
+    };
+
+    // ── State ───────────────────────────────────────────────────
+    let messages = [];
+    let generating = false;
+    let msgIdCounter = 0;
+    let currentAssistantEl = null;
+    let currentAssistantText = '';
+    let activeModelKey = null;
+    let worker = null;
+    let modelReady = false;
+
+    // Restore from sessionStorage
+    try {
+      const saved = sessionStorage.getItem('localmind_chat');
+      if (saved) messages = JSON.parse(saved);
+    } catch {}
+
+    // ── DOM refs ────────────────────────────────────────────────
+    const chatArea = document.getElementById('chatArea');
+    const chatInput = document.getElementById('chatInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsPanel = document.getElementById('settingsPanel');
+    const systemPrompt = document.getElementById('systemPrompt');
+    const statusBadge = document.getElementById('statusBadge');
+    const statusSpinner = document.getElementById('statusSpinner');
+    const statusText = document.getElementById('statusText');
+    const progressSection = document.getElementById('progressSection');
+    const progressFill = document.getElementById('progressFill');
+    const progressText = document.getElementById('progressText');
+    const welcomeMsg = document.getElementById('welcomeMsg');
+    const helpBtn = document.getElementById('helpBtn');
+    const helpPopover = document.getElementById('helpPopover');
+    const modelSelect = document.getElementById('modelSelect');
+
+    // ── Help popover ────────────────────────────────────────────
+    helpBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      helpPopover.classList.toggle('open');
+    });
+    document.addEventListener('click', () => helpPopover.classList.remove('open'));
+
+    // ── Settings panel ──────────────────────────────────────────
+    settingsBtn.addEventListener('click', () => {
+      settingsPanel.classList.toggle('open');
+    });
+
+    // ── Auto-resize textarea ────────────────────────────────────
+    chatInput.addEventListener('input', () => {
+      chatInput.style.height = 'auto';
+      chatInput.style.height = Math.min(chatInput.scrollHeight, 140) + 'px';
+    });
+
+    // ── Markdown renderer (lightweight) ─────────────────────────
+    function renderMarkdown(text) {
+      let thinkContent = '';
+      let mainContent = text;
+      const thinkMatch = text.match(/<\|think\|>([\s\S]*?)(<\|\/think\|>|$)/);
+      if (thinkMatch) {
+        thinkContent = thinkMatch[1].trim();
+        mainContent = text.replace(/<\|think\|>[\s\S]*?(<\|\/think\|>|$)/, '').trim();
+      }
+
+      let html = '';
+
+      if (thinkContent) {
+        const thinkId = 'think-' + Math.random().toString(36).slice(2, 8);
+        html += `<div class="thinking-block">
+          <div class="thinking-toggle" onclick="document.getElementById('${thinkId}').classList.toggle('open'); this.querySelector('span').textContent = document.getElementById('${thinkId}').classList.contains('open') ? '&#9660;' : '&#9654;'">
+            <span>&#9654;</span> Thinking...
+          </div>
+          <div class="thinking-content" id="${thinkId}">${escapeHtml(thinkContent)}</div>
+        </div>`;
+      }
+
+      if (!mainContent) return html || '<span style="color:var(--gray-400)">...</span>';
+
+      mainContent = mainContent.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+        return `<pre><code>${escapeHtml(code.trim())}</code></pre>`;
+      });
+
+      const parts = mainContent.split(/(<pre><code>[\s\S]*?<\/code><\/pre>)/g);
+      html += parts.map(part => {
+        if (part.startsWith('<pre>')) return part;
+        part = part.replace(/`([^`]+)`/g, '<code>$1</code>');
+        part = part.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        part = part.replace(/\*(.+?)\*/g, '<em>$1</em>');
+        part = part.replace(/(?:^|\n)((?:[-*] .+\n?)+)/g, (_, list) => {
+          const items = list.trim().split('\n').map(l => `<li>${l.replace(/^[-*] /, '')}</li>`).join('');
+          return `<ul>${items}</ul>`;
+        });
+        part = part.replace(/(?:^|\n)((?:\d+\. .+\n?)+)/g, (_, list) => {
+          const items = list.trim().split('\n').map(l => `<li>${l.replace(/^\d+\. /, '')}</li>`).join('');
+          return `<ol>${items}</ol>`;
+        });
+        part = part.replace(/\n\n+/g, '</p><p>');
+        part = part.replace(/\n/g, '<br>');
+        if (part.trim() && !part.startsWith('<')) part = `<p>${part}</p>`;
+        return part;
+      }).join('');
+
+      return html;
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // ── Chat rendering ──────────────────────────────────────────
+    function renderRestoredMessages() {
+      if (messages.length === 0) return;
+      welcomeMsg.style.display = 'none';
+      for (const msg of messages) {
+        const role = msg.role === 'user' ? 'user' : 'assistant';
+        const el = document.createElement('div');
+        el.className = `msg ${role}`;
+        const bubble = document.createElement('div');
+        bubble.className = 'msg-bubble';
+        if (role === 'user') {
+          bubble.textContent = msg.content;
+        } else {
+          bubble.innerHTML = renderMarkdown(msg.content);
+        }
+        el.appendChild(bubble);
+        chatArea.appendChild(el);
+      }
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function addUserMessage(text) {
+      welcomeMsg.style.display = 'none';
+      const el = document.createElement('div');
+      el.className = 'msg user';
+      const bubble = document.createElement('div');
+      bubble.className = 'msg-bubble';
+      bubble.textContent = text;
+      el.appendChild(bubble);
+      chatArea.appendChild(el);
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function addAssistantPlaceholder() {
+      const el = document.createElement('div');
+      el.className = 'msg assistant';
+      const bubble = document.createElement('div');
+      bubble.className = 'msg-bubble';
+      bubble.innerHTML = '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>';
+      el.appendChild(bubble);
+      chatArea.appendChild(el);
+      chatArea.scrollTop = chatArea.scrollHeight;
+      return { el, bubble };
+    }
+
+    function updateAssistantBubble(bubble, text) {
+      bubble.innerHTML = renderMarkdown(text);
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function saveChat() {
+      try {
+        sessionStorage.setItem('localmind_chat', JSON.stringify(messages));
+      } catch {}
+    }
+
+    // ── Worker factory ──────────────────────────────────────────
+    // The worker handles both model types: "causal" (Gemma 3 via pipeline)
+    // and "multimodal" (Gemma 4 via Gemma4ForConditionalGeneration).
+    function createWorker() {
+      const code = `
+import {
+  pipeline,
+  env,
+  AutoProcessor,
+  AutoTokenizer,
+  Gemma4ForConditionalGeneration,
+  TextStreamer,
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/+esm';
+
+// Match BabelLocal cache config — try local first, fall back to remote
+env.allowLocalModels  = true;
+env.localModelPath    = '/models/';
+env.allowRemoteModels = true;
+
+let generator = null;   // pipeline instance (causal models)
+let model = null;        // direct model instance (multimodal)
+let processor = null;
+let tokenizer = null;
+let stopping = false;
+let loadedType = null;   // 'causal' or 'multimodal'
+
+function progressCallback(p) {
+  self.postMessage({ type: 'progress', data: p });
+}
+
+async function loadCausal(modelId, dtype) {
+  generator = null; model = null; processor = null; tokenizer = null;
+
+  generator = await pipeline('text-generation', modelId, {
+    dtype: dtype,
+    device: 'webgpu',
+    progress_callback: progressCallback,
+  });
+
+  tokenizer = generator.tokenizer;
+  loadedType = 'causal';
+  self.postMessage({ type: 'ready' });
+}
+
+async function loadMultimodal(modelId, dtype) {
+  generator = null; model = null; processor = null; tokenizer = null;
+
+  processor = await AutoProcessor.from_pretrained(modelId, {
+    progress_callback: progressCallback,
+  });
+  tokenizer = processor.tokenizer;
+
+  model = await Gemma4ForConditionalGeneration.from_pretrained(modelId, {
+    dtype: dtype,
+    device: 'webgpu',
+    progress_callback: progressCallback,
+  });
+
+  loadedType = 'multimodal';
+  self.postMessage({ type: 'ready' });
+}
+
+async function generate(chatMessages, id) {
+  stopping = false;
+
+  try {
+    if (loadedType === 'causal') {
+      // Pipeline-based generation with streaming
+      const streamer = new TextStreamer(tokenizer, {
+        skip_prompt: true,
+        skip_special_tokens: true,
+        callback_function: (text) => {
+          if (stopping) return;
+          self.postMessage({ type: 'token', token: text, id });
+        },
+      });
+
+      await generator(chatMessages, {
+        max_new_tokens: 2048,
+        do_sample: true,
+        temperature: 0.7,
+        top_k: 50,
+        top_p: 0.95,
+        streamer,
+      });
+
+    } else {
+      // Direct model generation (Gemma 4)
+      const inputs = await tokenizer.apply_chat_template(chatMessages, {
+        tokenize: true,
+        return_dict: true,
+        add_generation_prompt: true,
+        enable_thinking: false,
+      });
+
+      const streamer = new TextStreamer(tokenizer, {
+        skip_prompt: true,
+        skip_special_tokens: true,
+        callback_function: (text) => {
+          if (stopping) return;
+          self.postMessage({ type: 'token', token: text, id });
+        },
+      });
+
+      await model.generate({
+        ...inputs,
+        max_new_tokens: 2048,
+        do_sample: true,
+        temperature: 0.7,
+        top_k: 50,
+        top_p: 0.95,
+        streamer,
+      });
+    }
+
+    self.postMessage({ type: 'complete', id });
+  } catch (err) {
+    if (!stopping) {
+      self.postMessage({ type: 'error', message: err.message || String(err) });
+    }
+    self.postMessage({ type: 'complete', id });
+  }
+}
+
+self.addEventListener('message', async (e) => {
+  const { type, messages, id, modelId, dtype, modelType } = e.data;
+
+  if (type === 'load') {
+    try {
+      if (modelType === 'multimodal') {
+        await loadMultimodal(modelId, dtype);
+      } else {
+        await loadCausal(modelId, dtype);
+      }
+    } catch (err) {
+      self.postMessage({ type: 'error', message: 'Failed to load model: ' + (err.message || String(err)) });
+    }
+  } else if (type === 'generate') {
+    await generate(messages, id);
+  } else if (type === 'stop') {
+    stopping = true;
+  }
+});
+`;
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      return new Worker(url, { type: 'module' });
+    }
+
+    // ── Worker message handling ─────────────────────────────────
+    function attachWorkerHandlers(w) {
+      w.addEventListener('message', (e) => {
+        const data = e.data;
+
+        if (data.type === 'progress') {
+          const p = data.data;
+          progressSection.classList.add('visible');
+          if (p.status === 'downloading' || p.status === 'loading') {
+            const pct = p.total ? Math.round((p.loaded / p.total) * 100) : 0;
+            progressFill.style.width = pct + '%';
+            const fileName = p.file ? p.file.split('/').pop() : 'files';
+            if (p.status === 'downloading' && p.loaded && p.total) {
+              const loadedMB = (p.loaded / 1024 / 1024).toFixed(0);
+              const totalMB = (p.total / 1024 / 1024).toFixed(0);
+              progressText.textContent = `Downloading ${fileName} — ${loadedMB} / ${totalMB} MB (${pct}%)`;
+              statusText.textContent = 'Downloading...';
+            } else {
+              progressText.textContent = `Loading ${fileName}...`;
+              statusText.textContent = 'Loading into memory...';
+            }
+          } else if (p.status === 'initiate') {
+            const fileName = p.file ? p.file.split('/').pop() : '';
+            progressText.textContent = `Fetching ${fileName}...`;
+          }
+        }
+
+        else if (data.type === 'ready') {
+          modelReady = true;
+          progressSection.classList.remove('visible');
+          statusBadge.className = 'status-badge ready';
+          statusSpinner.style.display = 'none';
+          const m = MODELS[activeModelKey];
+          statusText.textContent = m.label;
+          chatInput.disabled = false;
+          chatInput.placeholder = 'Type a message...';
+          sendBtn.disabled = false;
+          clearBtn.disabled = false;
+          modelSelect.disabled = false;
+          chatInput.focus();
+        }
+
+        else if (data.type === 'token') {
+          if (currentAssistantEl) {
+            currentAssistantText += data.token;
+            updateAssistantBubble(currentAssistantEl.bubble, currentAssistantText);
+          }
+        }
+
+        else if (data.type === 'complete') {
+          generating = false;
+          if (currentAssistantText) {
+            messages.push({ role: 'assistant', content: currentAssistantText });
+            saveChat();
+          }
+          currentAssistantEl = null;
+          currentAssistantText = '';
+          sendBtn.innerHTML = '&#9654;';
+          sendBtn.classList.remove('stop');
+          sendBtn.disabled = false;
+          chatInput.disabled = false;
+          chatInput.focus();
+        }
+
+        else if (data.type === 'error') {
+          if (!modelReady) {
+            statusBadge.className = 'status-badge error';
+            statusSpinner.style.display = 'none';
+            statusText.textContent = 'Error';
+            progressSection.classList.remove('visible');
+            modelSelect.disabled = false;
+          }
+          console.error('Worker error:', data.message);
+          if (generating && currentAssistantEl) {
+            currentAssistantText += `\n\n*Error: ${data.message}*`;
+            updateAssistantBubble(currentAssistantEl.bubble, currentAssistantText);
+          }
+        }
+      });
+    }
+
+    // ── Load model ──────────────────────────────────────────────
+    function loadModel(key) {
+      const m = MODELS[key];
+      if (!m) return;
+
+      // Terminate previous worker if switching models
+      if (worker) {
+        worker.terminate();
+        worker = null;
+      }
+
+      activeModelKey = key;
+      modelReady = false;
+
+      // Reset UI
+      statusBadge.className = 'status-badge loading';
+      statusSpinner.style.display = '';
+      statusText.textContent = 'Loading...';
+      progressFill.style.width = '0%';
+      progressText.textContent = `Preparing to download ${m.label} (${m.size})...`;
+      progressSection.classList.add('visible');
+      chatInput.disabled = true;
+      chatInput.placeholder = `Loading ${m.label}...`;
+      sendBtn.disabled = true;
+      modelSelect.disabled = true;
+
+      // Create fresh worker and load
+      worker = createWorker();
+      attachWorkerHandlers(worker);
+      worker.postMessage({
+        type: 'load',
+        modelId: m.id,
+        dtype: m.dtype,
+        modelType: m.type,
+      });
+    }
+
+    // ── Model selector ──────────────────────────────────────────
+    modelSelect.addEventListener('change', () => {
+      if (generating) return;
+      const key = modelSelect.value;
+      if (key === activeModelKey) return;
+      loadModel(key);
+    });
+
+    // ── Send message ────────────────────────────────────────────
+    function sendMessage() {
+      const text = chatInput.value.trim();
+      if (!text || !modelReady || generating) return;
+
+      messages.push({ role: 'user', content: text });
+      addUserMessage(text);
+      saveChat();
+
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+
+      const chatMessages = [];
+      const sysPrompt = systemPrompt.value.trim();
+      if (sysPrompt) {
+        chatMessages.push({ role: 'system', content: sysPrompt });
+      }
+      for (const m of messages) {
+        chatMessages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content });
+      }
+
+      currentAssistantEl = addAssistantPlaceholder();
+      currentAssistantText = '';
+      generating = true;
+
+      sendBtn.innerHTML = '&#9632;';
+      sendBtn.classList.add('stop');
+      chatInput.disabled = true;
+      modelSelect.disabled = true;
+
+      const id = ++msgIdCounter;
+      worker.postMessage({ type: 'generate', messages: chatMessages, id });
+    }
+
+    sendBtn.addEventListener('click', () => {
+      if (generating) {
+        worker.postMessage({ type: 'stop' });
+        generating = false;
+        sendBtn.innerHTML = '&#9654;';
+        sendBtn.classList.remove('stop');
+        chatInput.disabled = false;
+        modelSelect.disabled = false;
+        if (currentAssistantText) {
+          messages.push({ role: 'assistant', content: currentAssistantText });
+          saveChat();
+        }
+        currentAssistantEl = null;
+        currentAssistantText = '';
+        chatInput.focus();
+      } else {
+        sendMessage();
+      }
+    });
+
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (!generating) sendMessage();
+      }
+    });
+
+    // ── Clear chat ──────────────────────────────────────────────
+    clearBtn.addEventListener('click', () => {
+      if (generating) return;
+      messages = [];
+      saveChat();
+      chatArea.innerHTML = '';
+      chatArea.appendChild(welcomeMsg);
+      welcomeMsg.style.display = '';
+    });
+
+    // ── Init ────────────────────────────────────────────────────
+    renderRestoredMessages();
+    loadModel(modelSelect.value);
+  </script>
+</body>
+</html>
