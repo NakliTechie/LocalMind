@@ -714,7 +714,7 @@
         label: 'Gemma 4 E4B',
         dtype: 'q4f16',
         size: '~4.9 GB',
-        type: 'multimodal',   // uses Gemma4ForConditionalGeneration
+        type: 'multimodal',   // uses Gemma3nForConditionalGeneration
       },
     };
 
@@ -884,7 +884,7 @@
 
     // ── Worker factory ──────────────────────────────────────────
     // The worker handles both model types: "causal" (Gemma 3 via pipeline)
-    // and "multimodal" (Gemma 4 via Gemma4ForConditionalGeneration).
+    // and "multimodal" (Gemma 4 via Gemma3nForConditionalGeneration).
     function createWorker() {
       const code = `
 import {
@@ -892,7 +892,7 @@ import {
   env,
   AutoProcessor,
   AutoTokenizer,
-  Gemma4ForConditionalGeneration,
+  Gemma3nForConditionalGeneration,
   TextStreamer,
 } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/+esm';
 
@@ -934,7 +934,7 @@ async function loadMultimodal(modelId, dtype) {
   });
   tokenizer = processor.tokenizer;
 
-  model = await Gemma4ForConditionalGeneration.from_pretrained(modelId, {
+  model = await Gemma3nForConditionalGeneration.from_pretrained(modelId, {
     dtype: dtype,
     device: 'webgpu',
     progress_callback: progressCallback,
