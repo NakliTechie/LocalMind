@@ -1616,12 +1616,31 @@
     };
 
     // ── Web: Search Provider Adapters ─────────────────────────
+    async function parseApiError(res, provider) {
+      const status = res.status;
+      let detail = '';
+      try {
+        const body = await res.text();
+        try {
+          const json = JSON.parse(body);
+          detail = json.message || json.error?.message || json.detail || json.error || '';
+        } catch { detail = body.slice(0, 200); }
+      } catch {}
+
+      // Human-readable messages for common HTTP errors
+      if (status === 401 || status === 403) return `${provider}: Invalid or expired API key. Check your key in Settings.`;
+      if (status === 429) return `${provider}: Rate limit or quota exceeded. ${detail || 'Try again later or check your plan.'}`;
+      if (status === 402) return `${provider}: Payment required. Your free tier may be exhausted.`;
+      if (status === 503 || status === 502) return `${provider}: Service temporarily unavailable. Try again in a moment.`;
+      return `${provider} error ${status}: ${detail || res.statusText}`;
+    }
+
     const SearchProviders = {
       async brave(query, apiKey) {
         const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`, {
           headers: { 'Accept': 'application/json', 'Accept-Encoding': 'gzip', 'X-Subscription-Token': apiKey },
         });
-        if (!res.ok) throw new Error(`Brave API ${res.status}: ${res.statusText}`);
+        if (!res.ok) throw new Error(await parseApiError(res, 'Brave Search'));
         const data = await res.json();
         return (data.web?.results || []).slice(0, 5).map(r => ({
           title: r.title, url: r.url, snippet: r.description || '', content: null, age: r.age || null,
@@ -1633,7 +1652,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ api_key: apiKey, query, search_depth: 'basic', include_raw_content: false, max_results: 5 }),
         });
-        if (!res.ok) throw new Error(`Tavily API ${res.status}: ${res.statusText}`);
+        if (!res.ok) throw new Error(await parseApiError(res, 'Tavily'));
         const data = await res.json();
         return (data.results || []).map(r => ({
           title: r.title, url: r.url, snippet: r.content || '', content: r.raw_content || null, age: null,
@@ -1642,7 +1661,7 @@
       async searxng(query, instanceUrl) {
         const base = instanceUrl.replace(/\/+$/, '');
         const res = await fetch(`${base}/search?q=${encodeURIComponent(query)}&format=json&categories=general`);
-        if (!res.ok) throw new Error(`SearXNG ${res.status}: ${res.statusText}`);
+        if (!res.ok) throw new Error(await parseApiError(res, 'SearXNG'));
         const data = await res.json();
         return (data.results || []).slice(0, 5).map(r => ({
           title: r.title, url: r.url, snippet: r.content || '', content: null, age: null,
@@ -3401,6 +3420,7 @@ self.addEventListener('message', async (e) => {
           }
         } catch (e) {
           console.warn('Web search failed:', e);
+          showToast(e.message || 'Web search failed');
         }
       }
 
