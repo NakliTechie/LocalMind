@@ -881,6 +881,99 @@
 
     .toggle-row.hidden { display: none; }
 
+    .settings-divider {
+      border-top: 1px solid var(--gray-200);
+      margin-top: 12px;
+      padding-top: 12px;
+    }
+
+    .settings-select, .settings-input {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid var(--gray-200);
+      border-radius: 8px;
+      font-size: 0.82rem;
+      background: var(--white);
+      margin-top: 4px;
+      margin-bottom: 8px;
+      outline: none;
+    }
+
+    .settings-select:focus, .settings-input:focus {
+      border-color: var(--indigo-500);
+      box-shadow: 0 0 0 3px var(--indigo-focus-ring);
+    }
+
+    /* Dual send buttons */
+    .send-group {
+      display: flex;
+      gap: 4px;
+    }
+
+    .search-send-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 1.5px solid var(--indigo-400);
+      background: var(--white);
+      color: var(--indigo-600);
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s, transform 0.1s;
+      flex-shrink: 0;
+    }
+
+    .search-send-btn:hover:not(:disabled) {
+      background: rgba(102, 126, 234, 0.08);
+    }
+
+    .search-send-btn:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    /* Source badges on messages */
+    .msg-source-badge {
+      display: inline-block;
+      font-size: 0.65rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+
+    .msg-source-badge.on-device {
+      background: var(--gray-100);
+      color: var(--gray-500);
+    }
+
+    .msg-source-badge.web-enriched {
+      background: rgba(16, 185, 129, 0.1);
+      color: #059669;
+    }
+
+    .source-links {
+      margin-top: 8px;
+      padding-top: 6px;
+      border-top: 1px solid var(--gray-200);
+      font-size: 0.72rem;
+    }
+
+    .source-links a {
+      color: var(--indigo-600);
+      text-decoration: none;
+      display: block;
+      margin-bottom: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .source-links a:hover { text-decoration: underline; }
+
     /* Memory inspector panel */
     .memory-panel {
       display: none;
@@ -1201,6 +1294,23 @@
           <input type="checkbox" id="thinkingToggle">
           Show reasoning (thinking mode)
         </label>
+        <div class="settings-divider" id="searchSettingsSection" style="display:none">
+          <label for="searchProvider">Web search provider</label>
+          <select id="searchProvider" class="settings-select">
+            <option value="none">None (offline only)</option>
+            <option value="tavily">Tavily (free tier, no card)</option>
+            <option value="brave">Brave Search (privacy-first)</option>
+            <option value="searxng">SearXNG (self-hosted)</option>
+          </select>
+          <div id="apiKeyRow" style="display:none">
+            <label for="searchApiKey">API key</label>
+            <input type="password" id="searchApiKey" class="settings-input" placeholder="Paste your API key">
+          </div>
+          <div id="searxngUrlRow" style="display:none">
+            <label for="searxngUrl">SearXNG instance URL</label>
+            <input type="text" id="searxngUrl" class="settings-input" placeholder="https://searx.example.com">
+          </div>
+        </div>
       </div>
 
       <!-- Attachment bar -->
@@ -1240,7 +1350,10 @@
           <button class="afford-btn" id="micBtn" title="Record audio" aria-label="Record audio">&#127908;</button>
         </div>
         <textarea id="chatInput" rows="1" placeholder="Type a message..." disabled></textarea>
-        <button class="send-btn" id="sendBtn" disabled aria-label="Send">&#9654;</button>
+        <div class="send-group">
+          <button class="send-btn" id="sendBtn" disabled aria-label="Send" title="Send (offline)">&#9654;</button>
+          <button class="search-send-btn" id="searchSendBtn" disabled aria-label="Search and Send" title="Search web + Send" style="display:none">&#127760;</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1413,12 +1526,175 @@
       },
     };
 
+    // ── Web: Search Provider Adapters ─────────────────────────
+    const SearchProviders = {
+      async brave(query, apiKey) {
+        const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`, {
+          headers: { 'Accept': 'application/json', 'Accept-Encoding': 'gzip', 'X-Subscription-Token': apiKey },
+        });
+        if (!res.ok) throw new Error(`Brave API ${res.status}: ${res.statusText}`);
+        const data = await res.json();
+        return (data.web?.results || []).slice(0, 5).map(r => ({
+          title: r.title, url: r.url, snippet: r.description || '', content: null, age: r.age || null,
+        }));
+      },
+      async tavily(query, apiKey) {
+        const res = await fetch('https://api.tavily.com/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: apiKey, query, search_depth: 'basic', include_raw_content: false, max_results: 5 }),
+        });
+        if (!res.ok) throw new Error(`Tavily API ${res.status}: ${res.statusText}`);
+        const data = await res.json();
+        return (data.results || []).map(r => ({
+          title: r.title, url: r.url, snippet: r.content || '', content: r.raw_content || null, age: null,
+        }));
+      },
+      async searxng(query, instanceUrl) {
+        const base = instanceUrl.replace(/\/+$/, '');
+        const res = await fetch(`${base}/search?q=${encodeURIComponent(query)}&format=json&categories=general`);
+        if (!res.ok) throw new Error(`SearXNG ${res.status}: ${res.statusText}`);
+        const data = await res.json();
+        return (data.results || []).slice(0, 5).map(r => ({
+          title: r.title, url: r.url, snippet: r.content || '', content: null, age: null,
+        }));
+      },
+    };
+
+    function getSearchConfig() {
+      const provider = localStorage.getItem('lm_search_provider') || 'none';
+      const apiKey = localStorage.getItem('lm_search_key') || '';
+      const searxngUrl = localStorage.getItem('lm_searxng_url') || '';
+      return { provider, apiKey, searxngUrl };
+    }
+
+    function isSearchConfigured() {
+      const { provider, apiKey, searxngUrl } = getSearchConfig();
+      if (provider === 'none') return false;
+      if (provider === 'searxng') return !!searxngUrl;
+      return !!apiKey;
+    }
+
+    async function executeWebSearch(query) {
+      const { provider, apiKey, searxngUrl } = getSearchConfig();
+      if (provider === 'brave') return SearchProviders.brave(query, apiKey);
+      if (provider === 'tavily') return SearchProviders.tavily(query, apiKey);
+      if (provider === 'searxng') return SearchProviders.searxng(query, searxngUrl);
+      throw new Error('No search provider configured');
+    }
+
+    // ── Web: Page Fetcher ───────────────────────────────────────
+    let readabilityLoaded = false;
+
+    async function ensureReadability() {
+      if (readabilityLoaded) return;
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/@mozilla/readability@0.5.0/Readability.min.js';
+        script.onload = () => { readabilityLoaded = true; resolve(); };
+        script.onerror = () => reject(new Error('Failed to load Readability.js'));
+        document.head.appendChild(script);
+      });
+    }
+
+    async function fetchAndExtract(url, userQuery) {
+      // Try direct fetch, fallback to CORS proxy
+      let html;
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+        html = await res.text();
+      } catch {
+        try {
+          const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(10000) });
+          html = await res.text();
+        } catch (e) {
+          return { error: `Could not fetch page: ${e.message}`, url };
+        }
+      }
+
+      // Extract with Readability
+      try {
+        await ensureReadability();
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const reader = new Readability(doc);
+        const article = reader.parse();
+        let text = article ? article.textContent : doc.body?.textContent || '';
+        text = text.replace(/\s+/g, ' ').trim();
+
+        // Semantic pre-filter if embedding is ready
+        if (embeddingReady && userQuery && text.length > 1500) {
+          try {
+            const paragraphs = text.match(/.{200,1000}[.!?\n]|.{200,1000}$/g) || [text.slice(0, 3000)];
+            const paraVecs = await embedTexts(paragraphs);
+            const queryVec = (await embedTexts([userQuery]))[0];
+            const scored = paragraphs.map((p, i) => ({ text: p, score: cosineSimilarity(queryVec, paraVecs[i]) }));
+            scored.sort((a, b) => b.score - a.score);
+            text = scored.slice(0, 5).map(s => s.text).join('\n\n');
+          } catch {
+            text = text.slice(0, 3500);
+          }
+        } else {
+          text = text.slice(0, 3500);
+        }
+
+        return { title: article?.title || '', content: text, url };
+      } catch (e) {
+        return { content: html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 3500), url };
+      }
+    }
+
+    // ── Web: Register web_search + fetch_page tools ─────────────
+    // Added dynamically so they only appear in the tool schema when configured
+    TOOL_REGISTRY.web_search = {
+      description: 'Search the web for current information. Use when you need facts, news, or data you don\'t know.',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string', description: 'Search query, 3-8 words' } },
+        required: ['query'],
+      },
+      requiresWeb: true,
+      async execute(args) {
+        try {
+          const results = await executeWebSearch(args.query);
+          // Cache results in RAG for future offline use
+          if (embeddingReady && results.length > 0) {
+            const snippetText = results.map(r => `${r.title}: ${r.snippet}`).join('\n');
+            embedAndStore(snippetText, 'finding', 'web-search').catch(() => {});
+          }
+          return { provider: getSearchConfig().provider, query: args.query, results };
+        } catch (e) { return { error: e.message }; }
+      },
+    };
+
+    TOOL_REGISTRY.fetch_page = {
+      description: 'Fetch and read content from a URL. Use after web_search to get details from a promising result.',
+      parameters: {
+        type: 'object',
+        properties: { url: { type: 'string', description: 'Full URL to fetch' } },
+        required: ['url'],
+      },
+      requiresWeb: true,
+      async execute(args, context) {
+        try {
+          const result = await fetchAndExtract(args.url, context?.userQuery || '');
+          // Cache fetched content in RAG
+          if (embeddingReady && result.content) {
+            embedAndStore(result.content, 'finding', args.url).catch(() => {});
+          }
+          return result;
+        } catch (e) { return { error: e.message }; }
+      },
+    };
+
     // ── Agent: System Prompt Builder ────────────────────────────
     function buildAgentSystemPrompt(userPrompt) {
-      const toolDefs = Object.entries(TOOL_REGISTRY).map(([name, t]) => ({
-        type: 'function',
-        function: { name, description: t.description, parameters: t.parameters },
-      }));
+      const webConfigured = isSearchConfigured();
+      const toolDefs = Object.entries(TOOL_REGISTRY)
+        .filter(([_, t]) => !t.requiresWeb || webConfigured)
+        .map(([name, t]) => ({
+          type: 'function',
+          function: { name, description: t.description, parameters: t.parameters },
+        }));
 
       let prompt = `You are a helpful AI assistant with access to tools. Use them when they would help answer the user's question. If tools aren't needed, respond directly.
 
@@ -1909,6 +2185,45 @@ self.addEventListener('message', async (e) => {
       memoryPanel.classList.remove('open');
     });
 
+    // ── Web search settings ───────────────────────────────────
+    const searchProvider = document.getElementById('searchProvider');
+    const searchApiKey = document.getElementById('searchApiKey');
+    const searxngUrl = document.getElementById('searxngUrl');
+    const apiKeyRow = document.getElementById('apiKeyRow');
+    const searxngUrlRow = document.getElementById('searxngUrlRow');
+    const searchSettingsSection = document.getElementById('searchSettingsSection');
+    const searchSendBtn = document.getElementById('searchSendBtn');
+    let webEnrichedMode = false;
+
+    // Restore saved settings
+    searchProvider.value = localStorage.getItem('lm_search_provider') || 'none';
+    searchApiKey.value = localStorage.getItem('lm_search_key') || '';
+    searxngUrl.value = localStorage.getItem('lm_searxng_url') || '';
+
+    function updateSearchUI() {
+      const p = searchProvider.value;
+      apiKeyRow.style.display = (p === 'brave' || p === 'tavily') ? '' : 'none';
+      searxngUrlRow.style.display = p === 'searxng' ? '' : 'none';
+      const configured = isSearchConfigured();
+      searchSendBtn.style.display = configured ? '' : 'none';
+    }
+
+    searchProvider.addEventListener('change', () => {
+      localStorage.setItem('lm_search_provider', searchProvider.value);
+      updateSearchUI();
+    });
+    searchApiKey.addEventListener('input', () => localStorage.setItem('lm_search_key', searchApiKey.value));
+    searxngUrl.addEventListener('input', () => localStorage.setItem('lm_searxng_url', searxngUrl.value));
+
+    // Search+Send button
+    searchSendBtn.addEventListener('click', () => {
+      if (generating) return;
+      webEnrichedMode = true;
+      sendMessage();
+    });
+
+    updateSearchUI();
+
     // ── Memory inspector ────────────────────────────────────────
     const memoryBtn = document.getElementById('memoryBtn');
     const memoryPanel = document.getElementById('memoryPanel');
@@ -1986,8 +2301,11 @@ self.addEventListener('message', async (e) => {
     function updateModelUI() {
       const m = MODELS[activeModelKey];
       const isMultimodal = m && m.multimodal;
+      const isAgent = m && m.agentCapable;
       inputAffordances.classList.toggle('visible', isMultimodal && modelReady);
       thinkingRow.classList.toggle('hidden', !isMultimodal);
+      searchSettingsSection.style.display = isAgent ? '' : 'none';
+      updateSearchUI();
     }
 
     // ── Attachment management ───────────────────────────────────
@@ -2696,7 +3014,7 @@ self.addEventListener('message', async (e) => {
           statusText.textContent = m.label;
           chatInput.disabled = false;
           chatInput.placeholder = m.multimodal ? 'Type a message, or attach images/audio...' : 'Type a message...';
-          sendBtn.disabled = false;
+          sendBtn.disabled = false; searchSendBtn.disabled = false;
           clearBtn.disabled = false;
           modelSelect.disabled = false;
           updateModelUI();
@@ -2727,7 +3045,7 @@ self.addEventListener('message', async (e) => {
             currentAssistantText = '';
             sendBtn.innerHTML = '&#9654;';
             sendBtn.classList.remove('stop');
-            sendBtn.disabled = false;
+            sendBtn.disabled = false; searchSendBtn.disabled = false;
             chatInput.disabled = false;
             modelSelect.disabled = false;
             chatInput.focus();
@@ -2777,7 +3095,7 @@ self.addEventListener('message', async (e) => {
       progressSection.classList.add('visible');
       chatInput.disabled = true;
       chatInput.placeholder = `Loading ${m.label}...`;
-      sendBtn.disabled = true;
+      sendBtn.disabled = true; searchSendBtn.disabled = true;
       modelSelect.disabled = true;
       updateModelUI();
 
@@ -2972,6 +3290,30 @@ self.addEventListener('message', async (e) => {
         }
       }
 
+      // Web-enriched mode: pre-search and inject results into context
+      const isWebEnriched = webEnrichedMode && isAgent && isSearchConfigured();
+      let searchSources = [];
+      webEnrichedMode = false; // reset flag
+
+      if (isWebEnriched) {
+        try {
+          const userText = typeof userContent === 'string' ? userContent : text;
+          const results = await executeWebSearch(userText);
+          if (results.length > 0) {
+            searchSources = results;
+            const searchBlock = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}\nURL: ${r.url}`).join('\n\n');
+            sysPrompt += `\n\n[Web search results for "${userText}" — cite sources by number]\n${searchBlock}`;
+            // Cache in RAG
+            if (embeddingReady) {
+              const snippetText = results.map(r => `${r.title}: ${r.snippet}`).join('\n');
+              embedAndStore(snippetText, 'finding', 'web-search').catch(() => {});
+            }
+          }
+        } catch (e) {
+          console.warn('Web search failed:', e);
+        }
+      }
+
       // Build context-windowed chat history
       const chatMessages = buildContextMessages(messages, sysPrompt, activeModelKey);
 
@@ -2993,7 +3335,7 @@ self.addEventListener('message', async (e) => {
       if (!isAgent) {
         // Non-agent path: single generation, no tool calling
         const response = await generateOnce(chatMessages, attData, enableThinking, genConfig);
-        finishGeneration(response);
+        finishGeneration(response, searchSources);
         return;
       }
 
@@ -3001,6 +3343,8 @@ self.addEventListener('message', async (e) => {
       const MAX_TOOL_ITERATIONS = 3;
       let loopMessages = [...chatMessages];
       let currentAttData = attData; // Only pass attachments on first iteration
+      // Collect any sources from tool-initiated web searches too
+      const allSources = [...searchSources];
 
       for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
         const response = await generateOnce(loopMessages, currentAttData, enableThinking, genConfig);
@@ -3008,7 +3352,7 @@ self.addEventListener('message', async (e) => {
 
         // User clicked stop while we were generating
         if (!generating) {
-          finishGeneration(response || null);
+          finishGeneration(response || null, allSources);
           return;
         }
 
@@ -3017,7 +3361,7 @@ self.addEventListener('message', async (e) => {
 
         if (toolCalls.length === 0) {
           // No tool calls — we're done
-          finishGeneration(response);
+          finishGeneration(response, allSources);
           return;
         }
 
@@ -3029,10 +3373,15 @@ self.addEventListener('message', async (e) => {
           toolResult = { error: `Unknown tool: ${tc.name}` };
         } else {
           try {
-            toolResult = await tool.execute(tc.arguments);
+            toolResult = await tool.execute(tc.arguments, { userQuery: text });
           } catch (e) {
             toolResult = { error: e.message };
           }
+        }
+
+        // Collect sources from web_search results
+        if (tc.name === 'web_search' && toolResult.results) {
+          allSources.push(...toolResult.results);
         }
 
         // Show tool call in UI
@@ -3049,23 +3398,36 @@ self.addEventListener('message', async (e) => {
         if (iter === MAX_TOOL_ITERATIONS - 1) {
           loopMessages.push({ role: 'user', content: '[System: Tool call limit reached. Please provide your final answer now.]' });
           const finalResponse = await generateOnce(loopMessages, null, enableThinking, genConfig);
-          finishGeneration(finalResponse);
+          finishGeneration(finalResponse, allSources);
           return;
         }
       }
     }
 
-    function finishGeneration(response) {
+    function finishGeneration(response, sources) {
       generating = false;
       if (response) {
         messages.push({ role: 'assistant', content: response });
         saveChat();
       }
+      // Transparency: add source badge and links to the assistant bubble
+      if (currentAssistantEl) {
+        const bubble = currentAssistantEl.bubble;
+        if (sources && sources.length > 0) {
+          const badge = document.createElement('div');
+          badge.innerHTML = `<span class="msg-source-badge web-enriched">Web-enriched &middot; ${sources.length} sources</span>`;
+          bubble.insertBefore(badge, bubble.firstChild);
+          const linksDiv = document.createElement('div');
+          linksDiv.className = 'source-links';
+          linksDiv.innerHTML = sources.map(s => `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title || s.url)}</a>`).join('');
+          bubble.appendChild(linksDiv);
+        }
+      }
       currentAssistantEl = null;
       currentAssistantText = '';
       sendBtn.innerHTML = '&#9654;';
       sendBtn.classList.remove('stop');
-      sendBtn.disabled = false;
+      sendBtn.disabled = false; searchSendBtn.disabled = false;
       chatInput.disabled = false;
       modelSelect.disabled = false;
       chatInput.focus();
