@@ -48,6 +48,7 @@
       display: flex;
       flex-direction: column;
       height: calc(100vh - 108px);
+      position: relative;
     }
 
     /* Header */
@@ -1112,6 +1113,60 @@
 
     .history-item-del:hover { color: #ef4444; }
 
+    /* History sidebar */
+    .history-backdrop {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.2);
+      z-index: 60;
+      border-radius: 16px;
+    }
+
+    .history-backdrop.open { display: block; }
+
+    .history-sidebar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 280px;
+      background: var(--white);
+      border-right: 1px solid var(--gray-200);
+      border-radius: 16px 0 0 16px;
+      z-index: 70;
+      display: flex;
+      flex-direction: column;
+      transform: translateX(-100%);
+      transition: transform 0.25s ease;
+      overflow: hidden;
+    }
+
+    .history-sidebar.open { transform: translateX(0); }
+
+    .history-sidebar-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--gray-200);
+      font-size: 0.85rem;
+      color: var(--gray-900);
+      flex-shrink: 0;
+    }
+
+    .history-sidebar-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .btn-danger-text { color: var(--gray-400); }
+    .btn-danger-text:hover { color: #ef4444; }
+
     /* Camera overlay */
     .camera-overlay {
       display: none;
@@ -1399,18 +1454,10 @@
         </div>
       </div>
 
-      <!-- History panel -->
-      <div class="memory-panel" id="historyPanel">
-        <div class="memory-header">
-          <strong>History</strong>
-          <span class="memory-count" id="historyCount">0 conversations</span>
-        </div>
-        <div class="memory-list" id="historyList"></div>
-      </div>
-
       <!-- Actions bar -->
       <div class="actions-bar">
-        <button class="btn-icon" id="clearBtn" disabled title="Clear chat">Clear</button>
+        <button class="btn-icon" id="newChatBtn" disabled title="Archive and start new chat">New Chat</button>
+        <button class="btn-icon btn-danger-text" id="clearBtn" disabled title="Delete current chat">Clear</button>
         <button class="btn-icon" id="settingsBtn" title="System prompt settings">Settings</button>
         <button class="btn-icon" id="memoryBtn" title="View stored memories">Memory</button>
         <button class="btn-icon" id="historyBtn" title="Past conversations">History</button>
@@ -1435,6 +1482,16 @@
           <button class="search-send-btn" id="searchSendBtn" disabled aria-label="Search and Send" title="Search web + Send" style="display:none">&#127760;</button>
         </div>
       </div>
+    </div>
+
+    <!-- History sidebar -->
+    <div class="history-backdrop" id="historyBackdrop"></div>
+    <div class="history-sidebar" id="historySidebar">
+      <div class="history-sidebar-header">
+        <strong>History</strong>
+        <span class="memory-count" id="historyCount">0 conversations</span>
+      </div>
+      <div class="history-sidebar-list" id="historyList"></div>
     </div>
   </div>
 
@@ -2433,7 +2490,7 @@ self.addEventListener('message', async (e) => {
     settingsBtn.addEventListener('click', () => {
       settingsPanel.classList.toggle('open');
       memoryPanel.classList.remove('open');
-      historyPanel.classList.remove('open');
+      closeHistorySidebar();
     });
 
     // ── Web search settings ───────────────────────────────────
@@ -2486,7 +2543,7 @@ self.addEventListener('message', async (e) => {
     memoryBtn.addEventListener('click', () => {
       memoryPanel.classList.toggle('open');
       settingsPanel.classList.remove('open');
-      historyPanel.classList.remove('open');
+      closeHistorySidebar();
       if (memoryPanel.classList.contains('open')) refreshMemoryPanel();
     });
 
@@ -2575,18 +2632,33 @@ self.addEventListener('message', async (e) => {
       importFileInput.value = '';
     });
 
-    // ── History panel ───────────────────────────────────────────
+    // ── History sidebar ────────────────────────────────────────
     const historyBtn = document.getElementById('historyBtn');
-    const historyPanel = document.getElementById('historyPanel');
+    const historySidebar = document.getElementById('historySidebar');
+    const historyBackdrop = document.getElementById('historyBackdrop');
     const historyList = document.getElementById('historyList');
     const historyCount = document.getElementById('historyCount');
+    const newChatBtn = document.getElementById('newChatBtn');
 
-    historyBtn.addEventListener('click', () => {
-      historyPanel.classList.toggle('open');
+    function openHistorySidebar() {
+      historySidebar.classList.add('open');
+      historyBackdrop.classList.add('open');
       memoryPanel.classList.remove('open');
       settingsPanel.classList.remove('open');
-      if (historyPanel.classList.contains('open')) refreshHistoryPanel();
+      refreshHistoryPanel();
+    }
+
+    function closeHistorySidebar() {
+      historySidebar.classList.remove('open');
+      historyBackdrop.classList.remove('open');
+    }
+
+    historyBtn.addEventListener('click', () => {
+      if (historySidebar.classList.contains('open')) closeHistorySidebar();
+      else openHistorySidebar();
     });
+
+    historyBackdrop.addEventListener('click', closeHistorySidebar);
 
     async function refreshHistoryPanel() {
       try {
@@ -2599,7 +2671,7 @@ self.addEventListener('message', async (e) => {
           return;
         }
 
-        for (const conv of convs.slice(0, 30)) {
+        for (const conv of convs.slice(0, 50)) {
           const item = document.createElement('div');
           item.className = 'history-item';
           const date = new Date(conv.updated).toLocaleDateString();
@@ -2611,7 +2683,6 @@ self.addEventListener('message', async (e) => {
             </div>
             <button class="history-item-del" title="Delete">&times;</button>
           `;
-          // Click to resume conversation
           item.addEventListener('click', (e) => {
             if (e.target.closest('.history-item-del')) return;
             resumeConversation(conv);
@@ -2628,6 +2699,17 @@ self.addEventListener('message', async (e) => {
       }
     }
 
+    function resetChatUI() {
+      messages = [];
+      conversationSummary = '';
+      activeConversationId = newConversationId();
+      saveChat();
+      clearAttachments();
+      chatArea.innerHTML = '';
+      chatArea.appendChild(welcomeMsg);
+      welcomeMsg.style.display = '';
+    }
+
     function resumeConversation(conv) {
       messages = conv.messages || [];
       activeConversationId = conv.id;
@@ -2637,9 +2719,29 @@ self.addEventListener('message', async (e) => {
       chatArea.appendChild(welcomeMsg);
       welcomeMsg.style.display = 'none';
       renderRestoredMessages();
-      historyPanel.classList.remove('open');
-      showToast('Resumed conversation');
+      closeHistorySidebar();
     }
+
+    // New Chat: archive current → start fresh
+    newChatBtn.addEventListener('click', async () => {
+      if (generating) return;
+      if (messages.length >= 2) {
+        try { await saveConversation(messages, activeConversationId); } catch (e) { console.warn('Failed to archive:', e); }
+        // Post-session summarization
+        if (embeddingReady) {
+          try {
+            const textParts = messages.map(m => {
+              const role = m.role === 'user' ? 'User' : 'Assistant';
+              const content = typeof m.content === 'string' ? m.content : m.content.filter(c => c.type === 'text').map(c => c.text).join(' ');
+              return `${role}: ${content}`;
+            }).filter(s => s.length > 10);
+            const summary = textParts.slice(-10).join('\n').slice(0, 2000);
+            await embedAndStore(summary, 'conversation', 'session-' + new Date().toISOString().slice(0, 10));
+          } catch {}
+        }
+      }
+      resetChatUI();
+    });
 
     // ── Auto-resize textarea ────────────────────────────────────
     chatInput.addEventListener('input', () => {
@@ -3372,6 +3474,7 @@ self.addEventListener('message', async (e) => {
           chatInput.placeholder = m.multimodal ? 'Type a message, or attach images/audio...' : 'Type a message...';
           sendBtn.disabled = false; searchSendBtn.disabled = false;
           clearBtn.disabled = false;
+          newChatBtn.disabled = false;
           modelSelect.disabled = false;
           updateModelUI();
           chatInput.focus();
@@ -3816,39 +3919,11 @@ self.addEventListener('message', async (e) => {
       }
     });
 
-    // ── Clear chat ──────────────────────────────────────────────
-    clearBtn.addEventListener('click', async () => {
+    // ── Clear chat (delete, no archive) ────────────────────────
+    clearBtn.addEventListener('click', () => {
       if (generating) return;
-
-      // Archive conversation to history before clearing
-      if (messages.length >= 2) {
-        try { await saveConversation(messages, activeConversationId); } catch (e) { console.warn('Failed to archive:', e); }
-      }
-      activeConversationId = newConversationId();
-
-      // Post-session summarization: if >4 messages and embedding ready, summarize and store
-      if (messages.length >= 4 && embeddingReady) {
-        try {
-          const textParts = messages.map(m => {
-            const role = m.role === 'user' ? 'User' : 'Assistant';
-            const content = typeof m.content === 'string' ? m.content : m.content.filter(c => c.type === 'text').map(c => c.text).join(' ');
-            return `${role}: ${content}`;
-          }).filter(s => s.length > 10);
-          // Truncate to keep summary input manageable
-          const summary = textParts.slice(-10).join('\n').slice(0, 2000);
-          await embedAndStore(summary, 'conversation', 'session-' + new Date().toISOString().slice(0, 10));
-        } catch (e) {
-          console.warn('Post-session summarization failed:', e);
-        }
-      }
-
-      messages = [];
-      conversationSummary = '';
-      saveChat();
-      clearAttachments();
-      chatArea.innerHTML = '';
-      chatArea.appendChild(welcomeMsg);
-      welcomeMsg.style.display = '';
+      if (messages.length > 0 && !confirm('Delete this conversation? It will not be saved to History.')) return;
+      resetChatUI();
     });
 
     // ── Init ────────────────────────────────────────────────────
