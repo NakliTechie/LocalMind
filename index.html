@@ -385,6 +385,48 @@
       font-size: inherit;
     }
 
+    .msg.assistant .msg-bubble pre {
+      position: relative;
+    }
+
+    .code-download-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      background: rgba(255,255,255,0.8);
+      border: 1px solid var(--gray-200);
+      border-radius: 4px;
+      width: 24px;
+      height: 24px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+
+    .msg.assistant .msg-bubble pre:hover .code-download-btn { opacity: 1; }
+
+    .save-md-btn {
+      display: inline-block;
+      margin-top: 6px;
+      padding: 2px 8px;
+      font-size: 0.68rem;
+      color: var(--gray-400);
+      border: 1px solid var(--gray-200);
+      border-radius: 4px;
+      background: none;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .save-md-btn:hover {
+      color: var(--gray-600);
+      border-color: var(--gray-400);
+    }
+
     .msg.assistant .msg-bubble ol,
     .msg.assistant .msg-bubble ul {
       padding-left: 20px;
@@ -1452,6 +1494,14 @@
             <input type="text" id="searxngUrl" class="settings-input" placeholder="https://searx.example.com">
           </div>
         </div>
+        <label class="toggle-row" style="border-top:1px solid var(--gray-200);padding-top:10px;margin-top:10px">
+          <input type="checkbox" id="autoBackupToggle">
+          Auto-download backup on New Chat
+        </label>
+        <div class="settings-divider">
+          <label>Model cache</label>
+          <div id="cacheInfo" style="font-size:0.75rem;color:var(--gray-500);margin-top:4px">Loading...</div>
+        </div>
       </div>
 
       <!-- Attachment bar -->
@@ -1526,7 +1576,7 @@
   </div>
 
   <!-- Hidden file input -->
-  <input type="file" id="fileInput" style="display:none" multiple accept="image/*,audio/*,video/mp4,.txt,.md,.json,.csv">
+  <input type="file" id="fileInput" style="display:none" multiple accept="image/*,audio/*,video/mp4,.txt,.md,.json,.csv,.pdf,.docx">
 
   <!-- Footer -->
   <div class="footer-nav">
@@ -2514,6 +2564,54 @@ self.addEventListener('message', async (e) => {
       closeHistorySidebar();
     });
 
+    // ── Model cache management ────────────────────────────────
+    const cacheInfo = document.getElementById('cacheInfo');
+
+    async function refreshCacheInfo() {
+      try {
+        const keys = await caches.keys();
+        const modelCaches = keys.filter(k => k.includes('transformers'));
+        if (modelCaches.length === 0) {
+          cacheInfo.innerHTML = 'No cached models';
+          return;
+        }
+        let totalSize = 0;
+        const entries = [];
+        for (const key of modelCaches) {
+          const cache = await caches.open(key);
+          const requests = await cache.keys();
+          let size = 0;
+          for (const req of requests) {
+            try {
+              const res = await cache.match(req);
+              if (res) {
+                const blob = await res.blob();
+                size += blob.size;
+              }
+            } catch {}
+          }
+          totalSize += size;
+          entries.push({ key, size, count: requests.length });
+        }
+        const sizeMB = (totalSize / 1024 / 1024).toFixed(0);
+        let html = `<strong>${sizeMB} MB</strong> cached (${entries.reduce((a, e) => a + e.count, 0)} files)<br>`;
+        html += `<button class="btn-icon btn-danger-text" style="font-size:0.7rem;margin-top:4px" id="clearCacheBtn">Clear model cache</button>`;
+        cacheInfo.innerHTML = html;
+        document.getElementById('clearCacheBtn')?.addEventListener('click', async () => {
+          if (!confirm('Delete all cached models? They will re-download on next use.')) return;
+          for (const key of modelCaches) await caches.delete(key);
+          refreshCacheInfo();
+          showToast('Model cache cleared');
+        });
+      } catch (e) {
+        cacheInfo.innerHTML = 'Cache info unavailable';
+      }
+    }
+
+    // Refresh cache info when settings panel opens
+    settingsBtn.addEventListener('click', () => { if (settingsPanel.classList.contains('open')) refreshCacheInfo(); });
+    refreshCacheInfo();
+
     // ── Web search settings ───────────────────────────────────
     const searchProvider = document.getElementById('searchProvider');
     const searchApiKey = document.getElementById('searchApiKey');
@@ -2746,6 +2844,11 @@ self.addEventListener('message', async (e) => {
     }
 
     // New Chat: archive current → start fresh
+    // Auto-backup toggle
+    const autoBackupToggle = document.getElementById('autoBackupToggle');
+    autoBackupToggle.checked = localStorage.getItem('lm_auto_backup') === 'true';
+    autoBackupToggle.addEventListener('change', () => localStorage.setItem('lm_auto_backup', autoBackupToggle.checked));
+
     newChatBtn.addEventListener('click', async () => {
       if (generating) return;
       if (messages.length >= 2) {
@@ -2760,6 +2863,18 @@ self.addEventListener('message', async (e) => {
             }).filter(s => s.length > 10);
             const summary = textParts.slice(-10).join('\n').slice(0, 2000);
             await embedAndStore(summary, 'conversation', 'session-' + new Date().toISOString().slice(0, 10));
+          } catch {}
+        }
+        // Auto-backup if enabled
+        if (autoBackupToggle.checked) {
+          try {
+            const data = await exportAllData();
+            const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = `localmind-backup-${new Date().toISOString().slice(0, 10)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
           } catch {}
         }
       }
@@ -2891,17 +3006,118 @@ self.addEventListener('message', async (e) => {
           });
         } else if (/\.(txt|md|json|csv)$/i.test(file.name) || file.type.startsWith('text/')) {
           // Text document → embed into RAG memory
-          file.text().then(async (text) => {
-            if (!text.trim()) return;
+          ingestDocument(file.name, file.text());
+        } else if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
+          // PDF → extract text → embed
+          (async () => {
             try {
+              showToast(`Extracting text from ${file.name}...`);
+              const { text, pageCount } = await extractPDFText(file);
+              if (!text.trim()) { showToast('PDF appears to be empty or image-only'); return; }
               const count = await embedAndStore(text, 'document', file.name);
-              showToast(`Stored "${file.name}" as ${count} chunk${count > 1 ? 's' : ''} in memory`);
+              const summary = extractiveSummary(text);
+              await embedAndStore(summary, 'document_summary', file.name);
+              showToast(`Stored "${file.name}" (${pageCount} pages, ${count} chunks) — ${summary.slice(0, 80)}...`);
             } catch (e) {
-              console.error('Document embed error:', e);
-              showToast('Failed to store document: ' + e.message);
+              console.error('PDF error:', e);
+              showToast('Failed to process PDF: ' + e.message);
             }
-          });
+          })();
+        } else if (/\.docx$/i.test(file.name) || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+          // DOCX → extract text → embed
+          (async () => {
+            try {
+              showToast(`Extracting text from ${file.name}...`);
+              const text = await extractDOCXText(file);
+              if (!text.trim()) { showToast('Document appears to be empty'); return; }
+              const count = await embedAndStore(text, 'document', file.name);
+              const summary = extractiveSummary(text);
+              await embedAndStore(summary, 'document_summary', file.name);
+              showToast(`Stored "${file.name}" (${count} chunks) — ${summary.slice(0, 80)}...`);
+            } catch (e) {
+              console.error('DOCX error:', e);
+              showToast('Failed to process DOCX: ' + e.message);
+            }
+          })();
         }
+      }
+    }
+
+    // ── Document extractors (lazy-loaded) ─────────────────────
+    let pdfjsLoaded = false;
+
+    async function ensurePDFJS() {
+      if (pdfjsLoaded) return;
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs';
+        script.type = 'module';
+        script.onload = () => {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
+          pdfjsLoaded = true;
+          resolve();
+        };
+        script.onerror = () => reject(new Error('Failed to load PDF.js'));
+        document.head.appendChild(script);
+      });
+    }
+
+    let mammothLoaded = false;
+
+    async function ensureMammoth() {
+      if (mammothLoaded) return;
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js';
+        script.onload = () => { mammothLoaded = true; resolve(); };
+        script.onerror = () => reject(new Error('Failed to load mammoth.js'));
+        document.head.appendChild(script);
+      });
+    }
+
+    async function extractPDFText(blob) {
+      await ensurePDFJS();
+      const arrayBuffer = await blob.arrayBuffer();
+      const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const pages = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        pages.push(content.items.map(item => item.str).join(' '));
+      }
+      return { text: pages.join('\n\n'), pageCount: pdf.numPages };
+    }
+
+    async function extractDOCXText(blob) {
+      await ensureMammoth();
+      const arrayBuffer = await blob.arrayBuffer();
+      const result = await mammoth.extractRawText({ arrayBuffer });
+      return result.value;
+    }
+
+    function extractiveSummary(text, maxSentences = 3) {
+      const sentences = text.match(/[^.!?\n]+[.!?]+/g) || [];
+      if (sentences.length <= maxSentences) return text.slice(0, 300);
+      // Score by word count (longer = more informative) and position (earlier = more important)
+      const scored = sentences.map((s, i) => ({
+        text: s.trim(),
+        score: s.split(/\s+/).length * (1 - i / sentences.length * 0.3),
+      }));
+      scored.sort((a, b) => b.score - a.score);
+      return scored.slice(0, maxSentences).map(s => s.text).join(' ');
+    }
+
+    async function ingestDocument(fileName, textPromise) {
+      try {
+        const text = await textPromise;
+        if (!text || !text.trim()) { showToast(`${fileName} appears to be empty`); return; }
+        const count = await embedAndStore(text, 'document', fileName);
+        const summary = extractiveSummary(text);
+        if (summary) await embedAndStore(summary, 'document_summary', fileName);
+        showToast(`Stored "${fileName}" (${count} chunks) — ${summary.slice(0, 80)}...`);
+      } catch (e) {
+        console.error('Document ingest error:', e);
+        showToast('Failed to store document: ' + e.message);
       }
     }
 
@@ -3101,7 +3317,9 @@ self.addEventListener('message', async (e) => {
       if (!mainContent) return html || '<span style="color:var(--gray-400)">...</span>';
 
       mainContent = mainContent.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-        return `<pre><code>${escapeHtml(code.trim())}</code></pre>`;
+        const ext = lang || 'txt';
+        const codeId = 'code-' + Math.random().toString(36).slice(2, 8);
+        return `<pre><code id="${codeId}">${escapeHtml(code.trim())}</code><button class="code-download-btn" onclick="downloadCodeBlock('${codeId}','${ext}')" title="Download">&#8595;</button></pre>`;
       });
 
       const parts = mainContent.split(/(<pre><code>[\s\S]*?<\/code><\/pre>)/g);
@@ -3126,6 +3344,19 @@ self.addEventListener('message', async (e) => {
 
       return html;
     }
+
+    // Global: download a code block by ID
+    window.downloadCodeBlock = function(codeId, ext) {
+      const el = document.getElementById(codeId);
+      if (!el) return;
+      const text = el.textContent;
+      const blob = new Blob([text], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `code.${ext}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
 
     function escapeHtml(s) {
       return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -3870,8 +4101,12 @@ self.addEventListener('message', async (e) => {
           allSources.push(...toolResult.results);
         }
 
-        // Show tool call in UI
+        // Show tool call in UI with step indicator
         toolsUsedInLoop = true;
+        const stepLabel = document.createElement('div');
+        stepLabel.style.cssText = 'font-size:0.68rem;color:var(--gray-400);margin:6px 0 2px;font-weight:500';
+        stepLabel.textContent = `Step ${iter + 1}/${MAX_TOOL_ITERATIONS}`;
+        currentAssistantEl.bubble.appendChild(stepLabel);
         renderToolCallBlock(currentAssistantEl.bubble, tc.name, tc.arguments, toolResult);
 
         // Append assistant response + tool result to loop messages
@@ -3897,6 +4132,19 @@ self.addEventListener('message', async (e) => {
         messages.push({ role: 'assistant', content: response });
         saveChat();
       }
+      // Force-collapse any open thinking blocks (they expand during streaming)
+      if (currentAssistantEl) {
+        const bubble = currentAssistantEl.bubble;
+        bubble.querySelectorAll('.thinking-content.open').forEach(el => {
+          el.classList.remove('open');
+          const toggle = el.previousElementSibling;
+          if (toggle) {
+            const arrow = toggle.querySelector('span');
+            if (arrow) arrow.innerHTML = '&#9654;';
+            toggle.childNodes.forEach(n => { if (n.nodeType === 3 && n.textContent.includes('Thinking')) n.textContent = ' Thought process'; });
+          }
+        });
+      }
       // Transparency: add source badge and links to the assistant bubble
       if (currentAssistantEl) {
         const bubble = currentAssistantEl.bubble;
@@ -3913,6 +4161,21 @@ self.addEventListener('message', async (e) => {
           badge.innerHTML = `<span class="msg-source-badge on-device">On-device</span>`;
         }
         bubble.insertBefore(badge, bubble.firstChild);
+        // Save as Markdown button
+        if (response && response.length > 20) {
+          const saveBtn = document.createElement('button');
+          saveBtn.className = 'save-md-btn';
+          saveBtn.textContent = 'Save as MD';
+          saveBtn.addEventListener('click', () => {
+            const blob = new Blob([response], { type: 'text/markdown' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = `response-${new Date().toISOString().slice(0, 16).replace(/:/g, '')}.md`;
+            a.click();
+            URL.revokeObjectURL(url);
+          });
+          bubble.appendChild(saveBtn);
+        }
       }
       currentAssistantEl = null;
       currentAssistantText = '';
