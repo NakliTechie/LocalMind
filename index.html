@@ -1211,7 +1211,8 @@
               <button class="help-tab" data-tab="try">Things to Try</button>
             </div>
             <div class="help-tab-content active" data-tab="about">
-              <p>A private AI chatbot running <strong>Gemma</strong> entirely in your browser via WebGPU. No server, no API keys, no data leaves your device.</p>
+              <p>A private AI research agent running <strong>Gemma</strong> entirely in your browser via WebGPU. Tool calling, persistent memory, and web search &mdash; all on-device.</p>
+              <p>Only your search queries touch the network (and only when you choose to). All reasoning stays on your device.</p>
               <p>Models are cached after first download &mdash; future visits load instantly.</p>
               <p><strong>Requirements:</strong> Chrome 113+, Edge 113+, or Firefox 130+ with WebGPU.</p>
               <div class="help-note">Powered by Transformers.js + Google Gemma (Apache 2.0).</div>
@@ -1220,26 +1221,35 @@
               <h4>Available Models</h4>
               <ul>
                 <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; fast, text-only chat</li>
-                <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; text + image + audio + agent</li>
-                <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; text + image + audio + agent, best quality</li>
+                <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal + agent</li>
+                <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality</li>
               </ul>
-              <h4>Agent Tools (Gemma 4)</h4>
-              <p>Gemma 4 models have built-in tool calling &mdash; math, time, and persistent memory (store &amp; search).</p>
-              <h4>Memory</h4>
-              <p>Memories persist across sessions. Upload .txt/.md files or tell the model to remember things. Click <strong>Memory</strong> to browse stored memories.</p>
+              <h4>Gemma 4 Agent Tools</h4>
+              <ul>
+                <li><strong>calculate</strong> &mdash; math, percentages, conversions</li>
+                <li><strong>get_current_time</strong> &mdash; date/time with timezone</li>
+                <li><strong>store_memory</strong> &mdash; save facts to persistent memory</li>
+                <li><strong>search_memory</strong> &mdash; recall from stored memories</li>
+                <li><strong>web_search</strong> &mdash; search the web (requires API key)</li>
+                <li><strong>fetch_page</strong> &mdash; read a web page&rsquo;s content</li>
+              </ul>
+              <p>Gemma 3 1B works as a simple chatbot &mdash; no agent tools.</p>
             </div>
             <div class="help-tab-content" data-tab="features">
               <h4>Multimodal (Gemma 4)</h4>
               <ul>
-                <li><strong>&#128206; Attach</strong> &mdash; images, audio, or MP4 video</li>
+                <li><strong>&#128206; Attach</strong> &mdash; images, audio, video, or text files</li>
                 <li><strong>&#128247; Camera</strong> &mdash; snap a photo</li>
                 <li><strong>&#127908; Mic</strong> &mdash; record a voice clip</li>
                 <li><strong>Paste</strong> &mdash; Ctrl/Cmd+V an image</li>
                 <li><strong>Drag &amp; drop</strong> &mdash; drop files onto the chat</li>
               </ul>
-              <p>Video is experimental &mdash; keyframes and audio are extracted separately.</p>
+              <h4>Memory</h4>
+              <p>Memories persist across sessions in your browser. Upload .txt/.md/.csv files to store as knowledge. Click <strong>Memory</strong> to browse, search, or delete.</p>
+              <h4>Web Search</h4>
+              <p>Open Settings &rarr; pick a provider (Tavily, Brave, or SearXNG) &rarr; enter your API key. Then use the &#127760; button to search the web alongside your message.</p>
               <h4>Thinking Mode</h4>
-              <p>Open Settings and check &ldquo;Show reasoning&rdquo; to see the model&rsquo;s chain-of-thought.</p>
+              <p>Check &ldquo;Show reasoning&rdquo; in Settings to see the model&rsquo;s chain-of-thought.</p>
             </div>
             <div class="help-tab-content" data-tab="try">
               <h4>Math</h4>
@@ -1249,11 +1259,14 @@
               <span class="try-prompt" data-prompt="What time is it in Tokyo?">What time is it in Tokyo?</span>
               <span class="try-prompt" data-prompt="What day of the week is it?">What day of the week is it?</span>
               <h4>Memory</h4>
-              <span class="try-prompt" data-prompt="Remember that I prefer dark mode">Remember that I prefer dark mode</span>
+              <span class="try-prompt" data-prompt="Remember that my favorite language is Rust">Remember that my favorite language is Rust</span>
               <span class="try-prompt" data-prompt="What do you know about my preferences?">What do you know about my preferences?</span>
+              <h4>Web Search (requires API key)</h4>
+              <span class="try-prompt" data-prompt="What are the latest developments in WebGPU?">What are the latest developments in WebGPU?</span>
+              <span class="try-prompt" data-prompt="Current weather in San Francisco">Current weather in San Francisco</span>
               <h4>General</h4>
               <span class="try-prompt" data-prompt="Explain how WebGPU works in simple terms">Explain how WebGPU works in simple terms</span>
-              <div class="help-note">Click any prompt above to paste it into the chat input.</div>
+              <div class="help-note">Click any prompt to paste it into the chat input. Web search prompts need a configured provider in Settings.</div>
             </div>
           </div>
         </div>
