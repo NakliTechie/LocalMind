@@ -1292,16 +1292,19 @@
 ${JSON.stringify(toolDefs, null, 2)}
 </tools>
 
-To call a function, output:
+To call a function, output EXACTLY this format (not inside thinking):
 <tool_call>
 {"name": "function_name", "arguments": {"arg1": "value1"}}
 </tool_call>
+
+CRITICAL: The <tool_call> block must appear in your main response, NEVER inside your thinking/reasoning. Think first, then output the <tool_call> block as your response.
 
 Rules:
 - Call one tool at a time. Wait for the result before calling another.
 - When citing sources, mention where the information came from.
 - If you don't need tools, just answer directly.
-- Never fabricate tool results.`;
+- Never fabricate tool results.
+- Always use the exact <tool_call> XML format shown above. Do not invent other formats like "tool.call:" or function-call syntax.`;
 
       if (userPrompt) prompt += '\n\n' + userPrompt;
       return prompt;
@@ -1335,6 +1338,35 @@ Rules:
               cleanText = cleanText.replace(match[0], '');
             }
           } catch {}
+        }
+      }
+
+      // Fallback: tool call buried inside thinking block (model puts intent in thinking
+      // but emits nothing in main output — e.g. "tool.call:get_current_time{timezone:Europe/Paris}")
+      if (toolCalls.length === 0) {
+        // Strip thinking content to check if main output is empty
+        let mainContent = text
+          .replace(/<\|think\|>[\s\S]*?(<\|\/think\|>|$)/, '')
+          .replace(/<\|channel>thought\n?[\s\S]*?(<channel\|>|$)/, '')
+          .trim();
+
+        if (!mainContent) {
+          // Main output is empty — scan full text for tool call intent
+          const toolNames = Object.keys(TOOL_REGISTRY).join('|');
+          // Match patterns like: tool.call:name{args} or tool_call:name{args}
+          const intentRegex = new RegExp(`tool[._]?call\\s*[:.]\\s*(${toolNames})\\s*[{(]([^})]*)`, 'i');
+          const intentMatch = text.match(intentRegex);
+          if (intentMatch) {
+            const name = intentMatch[1];
+            // Try to parse the args as key:value pairs
+            const argsStr = intentMatch[2];
+            const args = {};
+            argsStr.split(/[,;]/).forEach(pair => {
+              const [k, ...rest] = pair.split(':');
+              if (k && rest.length) args[k.trim()] = rest.join(':').trim().replace(/["']/g, '');
+            });
+            toolCalls.push({ name, arguments: args });
+          }
         }
       }
 
