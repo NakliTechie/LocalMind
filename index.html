@@ -368,6 +368,50 @@
 
     .thinking-content.open { display: block; }
 
+    /* Tool call block */
+    .tool-call-block {
+      background: rgba(245, 158, 11, 0.06);
+      border-left: 3px solid #f59e0b;
+      padding: 8px 12px;
+      border-radius: 0 8px 8px 0;
+      margin: 8px 0;
+      font-size: 0.82rem;
+      color: var(--gray-600);
+    }
+
+    .tool-call-toggle {
+      cursor: pointer;
+      font-size: 0.75rem;
+      color: #d97706;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-bottom: 4px;
+    }
+
+    .tool-call-toggle strong {
+      font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    }
+
+    .tool-call-result {
+      display: none;
+      white-space: pre-wrap;
+      font-size: 0.78rem;
+      margin-top: 4px;
+    }
+
+    .tool-call-result.open { display: block; }
+
+    .tool-call-result pre {
+      margin: 0;
+      padding: 6px 8px;
+      background: rgba(245, 158, 11, 0.04);
+      border-radius: 4px;
+      font-size: 0.78rem;
+      overflow-x: auto;
+    }
+
     /* Typing indicator */
     .typing-dot {
       display: inline-block;
@@ -1048,6 +1092,9 @@
         size: '~760 MB',
         type: 'causal',       // uses AutoModelForCausalLM
         multimodal: false,
+        agentCapable: false,
+        contextSize: 4096,
+        genConfig: { temperature: 0.7, top_k: 50, top_p: 0.95, max_new_tokens: 2048 },
       },
       'gemma4-e2b': {
         id: 'onnx-community/gemma-4-E2B-it-ONNX',
@@ -1056,6 +1103,9 @@
         size: '~1.5 GB',
         type: 'multimodal',   // uses Gemma4ForConditionalGeneration
         multimodal: true,
+        agentCapable: true,
+        contextSize: 8192,
+        genConfig: { temperature: 0.7, top_k: 40, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.1 },
       },
       'gemma4-e4b': {
         id: 'onnx-community/gemma-4-E4B-it-ONNX',
@@ -1064,6 +1114,9 @@
         size: '~4.9 GB',
         type: 'multimodal',   // uses Gemma4ForConditionalGeneration
         multimodal: true,
+        agentCapable: true,
+        contextSize: 12288,
+        genConfig: { temperature: 0.7, top_k: 40, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.1 },
       },
     };
 
@@ -1079,12 +1132,216 @@
     let attachments = [];      // [{type:'image'|'audio', blob:Blob, thumb:string, name:string, experimental?:bool}]
     let mediaRecorder = null;
     let cameraStream = null;
+    let generateResolve = null; // Promise resolve for agentic loop
 
     // Restore from sessionStorage
     try {
       const saved = sessionStorage.getItem('localmind_chat');
       if (saved) messages = JSON.parse(saved);
     } catch {}
+
+    // ── Agent: Tool Registry ──────────────────────────────────
+    const memoryStore = new Map(); // Phase 1 in-memory; Phase 2 upgrades to IndexedDB
+
+    const TOOL_REGISTRY = {
+      calculate: {
+        description: 'Evaluate a mathematical expression. Use for arithmetic, unit conversions, percentages.',
+        parameters: {
+          type: 'object',
+          properties: { expression: { type: 'string', description: 'Math expression to evaluate, e.g. "2 * 3 + 1"' } },
+          required: ['expression'],
+        },
+        execute(args) {
+          try {
+            const expr = String(args.expression).replace(/[^0-9+\-*/.()% ]/g, '');
+            const result = Function('"use strict"; return (' + expr + ')')();
+            return { result: Number(result) };
+          } catch (e) { return { error: e.message }; }
+        },
+      },
+      get_current_time: {
+        description: 'Get the current date and time.',
+        parameters: {
+          type: 'object',
+          properties: { timezone: { type: 'string', description: 'IANA timezone, e.g. "America/New_York". Defaults to local.' } },
+          required: [],
+        },
+        execute(args) {
+          try {
+            const opts = { dateStyle: 'full', timeStyle: 'long' };
+            if (args.timezone) opts.timeZone = args.timezone;
+            const formatted = new Intl.DateTimeFormat('en-US', opts).format(new Date());
+            return { datetime: formatted, iso: new Date().toISOString() };
+          } catch (e) { return { error: e.message }; }
+        },
+      },
+      store_memory: {
+        description: 'Store an important fact, preference, or finding for later recall.',
+        parameters: {
+          type: 'object',
+          properties: {
+            content: { type: 'string', description: 'The information to remember' },
+            category: { type: 'string', enum: ['fact', 'preference', 'finding', 'task'], description: 'Category of memory' },
+          },
+          required: ['content'],
+        },
+        execute(args) {
+          const key = Date.now().toString(36);
+          memoryStore.set(key, { content: args.content, category: args.category || 'fact', ts: Date.now() });
+          return { stored: true, id: key };
+        },
+      },
+    };
+
+    // ── Agent: System Prompt Builder ────────────────────────────
+    function buildAgentSystemPrompt(userPrompt) {
+      const toolDefs = Object.entries(TOOL_REGISTRY).map(([name, t]) => ({
+        type: 'function',
+        function: { name, description: t.description, parameters: t.parameters },
+      }));
+
+      let prompt = `You are a helpful AI assistant with access to tools. Use them when they would help answer the user's question. If tools aren't needed, respond directly.
+
+<tools>
+${JSON.stringify(toolDefs, null, 2)}
+</tools>
+
+To call a function, output:
+<tool_call>
+{"name": "function_name", "arguments": {"arg1": "value1"}}
+</tool_call>
+
+Rules:
+- Call one tool at a time. Wait for the result before calling another.
+- When citing sources, mention where the information came from.
+- If you don't need tools, just answer directly.
+- Never fabricate tool results.`;
+
+      if (userPrompt) prompt += '\n\n' + userPrompt;
+      return prompt;
+    }
+
+    // ── Agent: Tool Call Parser ─────────────────────────────────
+    function parseToolCalls(text) {
+      const toolCalls = [];
+      // Match <tool_call>...</tool_call> blocks
+      const tagRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+      let match;
+      let cleanText = text;
+
+      while ((match = tagRegex.exec(text)) !== null) {
+        const jsonStr = match[1].trim();
+        const parsed = repairAndParseJSON(jsonStr);
+        if (parsed && parsed.name) {
+          toolCalls.push({ name: parsed.name, arguments: parsed.arguments || {} });
+        }
+        cleanText = cleanText.replace(match[0], '');
+      }
+
+      // Fallback: bare JSON without tags (model sometimes omits tags)
+      if (toolCalls.length === 0) {
+        const bareRegex = /\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[\s\S]*?\})\s*\}/g;
+        while ((match = bareRegex.exec(text)) !== null) {
+          try {
+            const args = repairAndParseJSON(match[2]);
+            if (args) {
+              toolCalls.push({ name: match[1], arguments: args });
+              cleanText = cleanText.replace(match[0], '');
+            }
+          } catch {}
+        }
+      }
+
+      return { toolCalls, cleanText: cleanText.trim() };
+    }
+
+    function repairAndParseJSON(str) {
+      // Try direct parse first
+      try { return JSON.parse(str); } catch {}
+      // Repair: trailing commas, single quotes, unquoted keys
+      let fixed = str
+        .replace(/,\s*([}\]])/g, '$1')           // trailing commas
+        .replace(/'/g, '"')                        // single → double quotes
+        .replace(/(\w+)\s*:/g, '"$1":');           // unquoted keys
+      try { return JSON.parse(fixed); } catch {}
+      return null;
+    }
+
+    function formatToolResponse(name, result) {
+      return `<tool_response>
+${JSON.stringify({ name, result })}
+</tool_response>`;
+    }
+
+    // ── Agent: Context Budget Helper ────────────────────────────
+    function approxTokens(text) {
+      if (!text) return 0;
+      return Math.ceil(String(text).length / 3.5);
+    }
+
+    // ── Agent: Sliding Window Conversation Builder ────────────
+    let conversationSummary = '';
+
+    function buildContextMessages(allMessages, systemPrompt, modelKey) {
+      const m = MODELS[modelKey];
+      const maxCtx = m ? m.contextSize : 4096;
+      // Reserve tokens: system ~500, response ~2048, headroom ~300
+      const budgetForHistory = maxCtx - 2048 - 300;
+
+      const out = [];
+      if (systemPrompt) out.push({ role: 'system', content: systemPrompt });
+
+      // Calculate system prompt cost
+      let used = approxTokens(systemPrompt);
+
+      // Always include all messages if they fit
+      let historyTokens = 0;
+      for (const msg of allMessages) {
+        historyTokens += approxTokens(typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content));
+      }
+
+      if (used + historyTokens <= budgetForHistory) {
+        // Everything fits — send it all
+        for (const msg of allMessages) {
+          out.push({ role: msg.role === 'assistant' ? 'assistant' : 'user', content: msg.content });
+        }
+        return out;
+      }
+
+      // Doesn't fit — sliding window: keep last 3 turn-pairs verbatim, summarize the rest
+      // A "turn pair" = one user + one assistant message
+      const pairs = [];
+      let i = 0;
+      while (i < allMessages.length) {
+        if (allMessages[i].role === 'user') {
+          const user = allMessages[i];
+          const asst = (i + 1 < allMessages.length && allMessages[i + 1].role === 'assistant') ? allMessages[i + 1] : null;
+          pairs.push({ user, assistant: asst });
+          i += asst ? 2 : 1;
+        } else {
+          // Orphan assistant message
+          pairs.push({ user: null, assistant: allMessages[i] });
+          i++;
+        }
+      }
+
+      const keepPairs = Math.min(3, pairs.length);
+      const recentPairs = pairs.slice(-keepPairs);
+
+      // If we have a conversation summary from older turns, prepend it
+      if (conversationSummary && pairs.length > keepPairs) {
+        out.push({ role: 'user', content: '[Previous conversation summary]\n' + conversationSummary });
+        out.push({ role: 'assistant', content: 'Understood, I have context from our earlier conversation.' });
+      }
+
+      // Add recent turns
+      for (const pair of recentPairs) {
+        if (pair.user) out.push({ role: 'user', content: pair.user.content });
+        if (pair.assistant) out.push({ role: 'assistant', content: pair.assistant.content });
+      }
+
+      return out;
+    }
 
     // ── DOM refs ────────────────────────────────────────────────
     const chatArea = document.getElementById('chatArea');
@@ -1136,8 +1393,8 @@
       chatInput.style.height = Math.min(chatInput.scrollHeight, 140) + 'px';
     });
 
-    // ── Multimodal UI visibility ────────────────────────────────
-    function updateMultimodalUI() {
+    // ── Model UI visibility ───────────────────────────────────
+    function updateModelUI() {
       const m = MODELS[activeModelKey];
       const isMultimodal = m && m.multimodal;
       inputAffordances.classList.toggle('visible', isMultimodal && modelReady);
@@ -1638,7 +1895,7 @@ async function loadMultimodal(modelId, dtype) {
   self.postMessage({ type: 'ready' });
 }
 
-async function generateCausal(chatMessages, id) {
+async function generateCausal(chatMessages, id, genConfig) {
   stopping_criteria.reset();
 
   try {
@@ -1655,13 +1912,15 @@ async function generateCausal(chatMessages, id) {
       },
     });
 
+    const gc = genConfig || {};
     await model.generate({
       ...inputs,
-      max_new_tokens: 2048,
+      max_new_tokens: gc.max_new_tokens || 2048,
       do_sample: true,
-      temperature: 0.7,
-      top_k: 50,
-      top_p: 0.95,
+      temperature: gc.temperature ?? 0.7,
+      top_k: gc.top_k ?? 50,
+      top_p: gc.top_p ?? 0.95,
+      repetition_penalty: gc.repetition_penalty ?? 1.0,
       streamer,
       stopping_criteria,
     });
@@ -1673,7 +1932,7 @@ async function generateCausal(chatMessages, id) {
   }
 }
 
-async function generateMultimodal(chatMessages, id, attachmentData, enableThinking) {
+async function generateMultimodal(chatMessages, id, attachmentData, enableThinking, genConfig) {
   stopping_criteria.reset();
 
   try {
@@ -1726,13 +1985,15 @@ async function generateMultimodal(chatMessages, id, attachmentData, enableThinki
       },
     });
 
+    const gc = genConfig || {};
     await model.generate({
       ...inputs,
-      max_new_tokens: 2048,
+      max_new_tokens: gc.max_new_tokens || 2048,
       do_sample: true,
-      temperature: 1.0,
-      top_k: 64,
-      top_p: 0.95,
+      temperature: gc.temperature ?? 1.0,
+      top_k: gc.top_k ?? 64,
+      top_p: gc.top_p ?? 0.95,
+      repetition_penalty: gc.repetition_penalty ?? 1.0,
       streamer,
       stopping_criteria,
     });
@@ -1745,7 +2006,7 @@ async function generateMultimodal(chatMessages, id, attachmentData, enableThinki
 }
 
 self.addEventListener('message', async (e) => {
-  const { type, messages, id, modelId, dtype, modelType, attachments: attData, enableThinking } = e.data;
+  const { type, messages, id, modelId, dtype, modelType, attachments: attData, enableThinking, generationConfig } = e.data;
 
   if (type === 'load') {
     try {
@@ -1759,9 +2020,9 @@ self.addEventListener('message', async (e) => {
     }
   } else if (type === 'generate') {
     if (loadedType === 'multimodal') {
-      await generateMultimodal(messages, id, attData, enableThinking);
+      await generateMultimodal(messages, id, attData, enableThinking, generationConfig);
     } else {
-      await generateCausal(messages, id);
+      await generateCausal(messages, id, generationConfig);
     }
   } else if (type === 'stop') {
     stopping_criteria.interrupt();
@@ -1828,7 +2089,7 @@ self.addEventListener('message', async (e) => {
           sendBtn.disabled = false;
           clearBtn.disabled = false;
           modelSelect.disabled = false;
-          updateMultimodalUI();
+          updateModelUI();
           chatInput.focus();
         }
 
@@ -1840,19 +2101,27 @@ self.addEventListener('message', async (e) => {
         }
 
         else if (data.type === 'complete') {
-          generating = false;
-          if (currentAssistantText) {
-            messages.push({ role: 'assistant', content: currentAssistantText });
-            saveChat();
+          // If agentic loop is awaiting, resolve promise (loop manages state)
+          if (generateResolve) {
+            const resolve = generateResolve;
+            generateResolve = null;
+            resolve(currentAssistantText);
+          } else {
+            // Fallback: no agentic loop (shouldn't happen, but safe)
+            generating = false;
+            if (currentAssistantText) {
+              messages.push({ role: 'assistant', content: currentAssistantText });
+              saveChat();
+            }
+            currentAssistantEl = null;
+            currentAssistantText = '';
+            sendBtn.innerHTML = '&#9654;';
+            sendBtn.classList.remove('stop');
+            sendBtn.disabled = false;
+            chatInput.disabled = false;
+            modelSelect.disabled = false;
+            chatInput.focus();
           }
-          currentAssistantEl = null;
-          currentAssistantText = '';
-          sendBtn.innerHTML = '&#9654;';
-          sendBtn.classList.remove('stop');
-          sendBtn.disabled = false;
-          chatInput.disabled = false;
-          modelSelect.disabled = false;
-          chatInput.focus();
         }
 
         else if (data.type === 'error') {
@@ -1900,7 +2169,7 @@ self.addEventListener('message', async (e) => {
       chatInput.placeholder = `Loading ${m.label}...`;
       sendBtn.disabled = true;
       modelSelect.disabled = true;
-      updateMultimodalUI();
+      updateModelUI();
 
       // Create fresh worker and load
       worker = createWorker();
@@ -2004,6 +2273,37 @@ self.addEventListener('message', async (e) => {
     }
 
     // ── Send message ────────────────────────────────────────────
+    function generateOnce(chatMessages, attData, enableThinking, genConfig) {
+      return new Promise((resolve) => {
+        generateResolve = resolve;
+        const id = ++msgIdCounter;
+        worker.postMessage({
+          type: 'generate',
+          messages: chatMessages,
+          id,
+          attachments: attData || null,
+          enableThinking,
+          generationConfig: genConfig,
+        });
+      });
+    }
+
+    function renderToolCallBlock(bubble, toolName, args, result) {
+      const blockId = 'tc-' + Math.random().toString(36).slice(2, 8);
+      const argsStr = Object.entries(args).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(', ');
+      const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+      const block = document.createElement('div');
+      block.className = 'tool-call-block';
+      block.innerHTML = `
+        <div class="tool-call-toggle" onclick="document.getElementById('${blockId}').classList.toggle('open'); this.querySelector('span').textContent = document.getElementById('${blockId}').classList.contains('open') ? '&#9660;' : '&#9654;'">
+          <span>&#9654;</span> <strong>${escapeHtml(toolName)}</strong>(${escapeHtml(argsStr)})
+        </div>
+        <div class="tool-call-result" id="${blockId}"><pre>${escapeHtml(resultStr)}</pre></div>
+      `;
+      bubble.appendChild(block);
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
     async function sendMessage() {
       const text = chatInput.value.trim();
       if ((!text && attachments.length === 0) || !modelReady || generating) return;
@@ -2011,10 +2311,7 @@ self.addEventListener('message', async (e) => {
       const m = MODELS[activeModelKey];
       const isMultimodal = m && m.multimodal && attachments.length > 0;
       const hasAttachments = attachments.length > 0;
-
-      // Build user message content
-      let userContent;
-      let chatMessages;
+      const isAgent = m && m.agentCapable;
 
       // Prepare attachment data first (video decomposition happens here)
       let attData = null;
@@ -2022,8 +2319,9 @@ self.addEventListener('message', async (e) => {
         attData = await prepareAttachmentsForWorker();
       }
 
+      // Build user message content
+      let userContent;
       if (isMultimodal) {
-        // Build content blocks from the actual decomposed attachments
         const contentBlocks = [];
         if (attData) {
           for (const att of attData) {
@@ -2044,53 +2342,115 @@ self.addEventListener('message', async (e) => {
       chatInput.value = '';
       chatInput.style.height = 'auto';
 
-      // Build chat history for worker
-      chatMessages = [];
-      const sysPrompt = systemPrompt.value.trim();
-      if (sysPrompt) {
-        chatMessages.push({ role: 'system', content: sysPrompt });
-      }
-      for (const msg of messages) {
-        chatMessages.push({ role: msg.role === 'assistant' ? 'assistant' : 'user', content: msg.content });
-      }
+      // Build system prompt
+      const userSysPrompt = systemPrompt.value.trim();
+      const sysPrompt = isAgent ? buildAgentSystemPrompt(userSysPrompt) : userSysPrompt;
 
+      // Build context-windowed chat history
+      const chatMessages = buildContextMessages(messages, sysPrompt, activeModelKey);
+
+      // UI: enter generating state
       currentAssistantEl = addAssistantPlaceholder();
       currentAssistantText = '';
       generating = true;
-
       sendBtn.innerHTML = '&#9632;';
       sendBtn.classList.add('stop');
       chatInput.disabled = true;
       modelSelect.disabled = true;
 
-      const id = ++msgIdCounter;
-      worker.postMessage({
-        type: 'generate',
-        messages: chatMessages,
-        id,
-        attachments: attData,
-        enableThinking: thinkingToggle.checked,
-      });
+      const genConfig = m.genConfig;
+      const enableThinking = thinkingToggle.checked;
 
-      // Clear attachments after sending
+      // Clear attachments after capturing data
       clearAttachments();
+
+      if (!isAgent) {
+        // Non-agent path: single generation, no tool calling
+        const response = await generateOnce(chatMessages, attData, enableThinking, genConfig);
+        finishGeneration(response);
+        return;
+      }
+
+      // ── Agentic loop ──────────────────────────────────────────
+      const MAX_TOOL_ITERATIONS = 3;
+      let loopMessages = [...chatMessages];
+      let currentAttData = attData; // Only pass attachments on first iteration
+
+      for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+        const response = await generateOnce(loopMessages, currentAttData, enableThinking, genConfig);
+        currentAttData = null; // Attachments only on first pass
+
+        // User clicked stop while we were generating
+        if (!generating) {
+          finishGeneration(response || null);
+          return;
+        }
+
+        // Check for tool calls in the response
+        const { toolCalls, cleanText } = parseToolCalls(response);
+
+        if (toolCalls.length === 0) {
+          // No tool calls — we're done
+          finishGeneration(response);
+          return;
+        }
+
+        // Execute the first tool call (one at a time per the system prompt rules)
+        const tc = toolCalls[0];
+        const tool = TOOL_REGISTRY[tc.name];
+        let toolResult;
+        if (!tool) {
+          toolResult = { error: `Unknown tool: ${tc.name}` };
+        } else {
+          try {
+            toolResult = tool.execute(tc.arguments);
+          } catch (e) {
+            toolResult = { error: e.message };
+          }
+        }
+
+        // Show tool call in UI
+        renderToolCallBlock(currentAssistantEl.bubble, tc.name, tc.arguments, toolResult);
+
+        // Append assistant response + tool result to loop messages
+        loopMessages.push({ role: 'assistant', content: response });
+        loopMessages.push({ role: 'user', content: formatToolResponse(tc.name, toolResult) });
+
+        // Reset streaming state for next generation pass
+        currentAssistantText = '';
+
+        // If this is the last iteration, force a final response
+        if (iter === MAX_TOOL_ITERATIONS - 1) {
+          loopMessages.push({ role: 'user', content: '[System: Tool call limit reached. Please provide your final answer now.]' });
+          const finalResponse = await generateOnce(loopMessages, null, enableThinking, genConfig);
+          finishGeneration(finalResponse);
+          return;
+        }
+      }
+    }
+
+    function finishGeneration(response) {
+      generating = false;
+      if (response) {
+        messages.push({ role: 'assistant', content: response });
+        saveChat();
+      }
+      currentAssistantEl = null;
+      currentAssistantText = '';
+      sendBtn.innerHTML = '&#9654;';
+      sendBtn.classList.remove('stop');
+      sendBtn.disabled = false;
+      chatInput.disabled = false;
+      modelSelect.disabled = false;
+      chatInput.focus();
     }
 
     sendBtn.addEventListener('click', () => {
       if (generating) {
+        // Stop generation — interrupt worker, let complete handler resolve the promise.
+        // Set generating=false so the agentic loop knows to exit after awaiting.
         worker.postMessage({ type: 'stop' });
         generating = false;
-        sendBtn.innerHTML = '&#9654;';
-        sendBtn.classList.remove('stop');
-        chatInput.disabled = false;
-        modelSelect.disabled = false;
-        if (currentAssistantText) {
-          messages.push({ role: 'assistant', content: currentAssistantText });
-          saveChat();
-        }
-        currentAssistantEl = null;
-        currentAssistantText = '';
-        chatInput.focus();
       } else {
         sendMessage();
       }
