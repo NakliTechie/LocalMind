@@ -1069,6 +1069,49 @@
       padding: 16px 0;
     }
 
+    .history-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--gray-50);
+      border-radius: 8px;
+      font-size: 0.78rem;
+      color: var(--gray-700);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .history-item:hover { background: rgba(102, 126, 234, 0.06); }
+
+    .history-item-text { flex: 1; overflow: hidden; }
+
+    .history-item-title {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 500;
+    }
+
+    .history-item-meta {
+      font-size: 0.68rem;
+      color: var(--gray-400);
+      margin-top: 1px;
+    }
+
+    .history-item-del {
+      cursor: pointer;
+      color: var(--gray-400);
+      font-size: 0.8rem;
+      padding: 0 4px;
+      border: none;
+      background: none;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+
+    .history-item-del:hover { color: #ef4444; }
+
     /* Camera overlay */
     .camera-overlay {
       display: none;
@@ -1349,6 +1392,20 @@
           <button class="btn-icon memory-clear-btn" id="memoryClearAll" title="Clear all memories">Clear All</button>
         </div>
         <div class="memory-list" id="memoryList"></div>
+        <div class="memory-search-row" style="margin-top:8px;border-top:1px solid var(--gray-200);padding-top:8px">
+          <button class="btn-icon" id="memoryExport" title="Export all data">Export</button>
+          <button class="btn-icon" id="memoryImport" title="Import data">Import</button>
+          <input type="file" id="importFileInput" accept=".json" style="display:none">
+        </div>
+      </div>
+
+      <!-- History panel -->
+      <div class="memory-panel" id="historyPanel">
+        <div class="memory-header">
+          <strong>History</strong>
+          <span class="memory-count" id="historyCount">0 conversations</span>
+        </div>
+        <div class="memory-list" id="historyList"></div>
       </div>
 
       <!-- Actions bar -->
@@ -1356,6 +1413,7 @@
         <button class="btn-icon" id="clearBtn" disabled title="Clear chat">Clear</button>
         <button class="btn-icon" id="settingsBtn" title="System prompt settings">Settings</button>
         <button class="btn-icon" id="memoryBtn" title="View stored memories">Memory</button>
+        <button class="btn-icon" id="historyBtn" title="Past conversations">History</button>
         <span style="flex:1"></span>
         <select class="model-select" id="modelSelect" title="Choose model">
           <option value="gemma3-1b" selected>Gemma 3 1B &middot; Fast (~760 MB)</option>
@@ -2077,7 +2135,7 @@ self.addEventListener('message', async (e) => {
 
     // ── RAG: IndexedDB Vector Store ─────────────────────────────
     const DB_NAME = 'localmind_rag';
-    const DB_VERSION = 1;
+    const DB_VERSION = 2;
 
     function openRAGDB() {
       return new Promise((resolve, reject) => {
@@ -2091,6 +2149,10 @@ self.addEventListener('message', async (e) => {
           }
           if (!db.objectStoreNames.contains('profile')) {
             db.createObjectStore('profile', { keyPath: 'key' });
+          }
+          if (!db.objectStoreNames.contains('conversations')) {
+            const convStore = db.createObjectStore('conversations', { keyPath: 'id' });
+            convStore.createIndex('updated', 'updated', { unique: false });
           }
         };
         req.onsuccess = () => resolve(req.result);
@@ -2137,6 +2199,85 @@ self.addEventListener('message', async (e) => {
         tx.oncomplete = resolve;
         tx.onerror = () => reject(tx.error);
       });
+    }
+
+    // ── Conversation History (IndexedDB) ──────────────────────
+    let activeConversationId = null;
+
+    function newConversationId() { return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6); }
+
+    async function saveConversation(msgs, id) {
+      if (!msgs || msgs.length === 0) return;
+      const db = await openRAGDB();
+      const tx = db.transaction('conversations', 'readwrite');
+      const now = Date.now();
+      // Generate title from first user message
+      const firstUser = msgs.find(m => m.role === 'user');
+      let title = 'Untitled';
+      if (firstUser) {
+        const text = typeof firstUser.content === 'string' ? firstUser.content : firstUser.content.filter(c => c.type === 'text').map(c => c.text).join(' ');
+        title = text.slice(0, 60) + (text.length > 60 ? '...' : '');
+      }
+      tx.objectStore('conversations').put({
+        id: id || activeConversationId || newConversationId(),
+        title,
+        messages: msgs.map(m => {
+          if (m.role === 'assistant') return m;
+          if (typeof m.content === 'string') return m;
+          const text = m.content.filter(c => c.type === 'text').map(c => c.text).join(' ');
+          return { role: m.role, content: text };
+        }),
+        modelKey: activeModelKey,
+        messageCount: msgs.length,
+        created: now,
+        updated: now,
+      });
+      return new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
+    }
+
+    async function getAllConversations() {
+      const db = await openRAGDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('conversations', 'readonly');
+        const req = tx.objectStore('conversations').getAll();
+        req.onsuccess = () => resolve(req.result.sort((a, b) => b.updated - a.updated));
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function getConversation(id) {
+      const db = await openRAGDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('conversations', 'readonly');
+        const req = tx.objectStore('conversations').get(id);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function deleteConversation(id) {
+      const db = await openRAGDB();
+      const tx = db.transaction('conversations', 'readwrite');
+      tx.objectStore('conversations').delete(id);
+      return new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
+    }
+
+    async function exportAllData() {
+      const [chunks, convs, profile] = await Promise.all([getAllChunks(), getAllConversations(), getProfile()]);
+      return { version: 1, exported: new Date().toISOString(), memories: chunks, conversations: convs, profile };
+    }
+
+    async function importData(data) {
+      if (!data || data.version !== 1) throw new Error('Invalid export format');
+      if (data.memories?.length) await storeChunks(data.memories);
+      if (data.profile) await saveProfile(data.profile);
+      if (data.conversations?.length) {
+        const db = await openRAGDB();
+        const tx = db.transaction('conversations', 'readwrite');
+        const store = tx.objectStore('conversations');
+        for (const c of data.conversations) store.put(c);
+        await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
+      }
     }
 
     function cosineSimilarity(a, b) {
@@ -2292,6 +2433,7 @@ self.addEventListener('message', async (e) => {
     settingsBtn.addEventListener('click', () => {
       settingsPanel.classList.toggle('open');
       memoryPanel.classList.remove('open');
+      historyPanel.classList.remove('open');
     });
 
     // ── Web search settings ───────────────────────────────────
@@ -2344,6 +2486,7 @@ self.addEventListener('message', async (e) => {
     memoryBtn.addEventListener('click', () => {
       memoryPanel.classList.toggle('open');
       settingsPanel.classList.remove('open');
+      historyPanel.classList.remove('open');
       if (memoryPanel.classList.contains('open')) refreshMemoryPanel();
     });
 
@@ -2399,6 +2542,104 @@ self.addEventListener('message', async (e) => {
       await clearAllChunks();
       refreshMemoryPanel();
     });
+
+    // ── Export / Import ─────────────────────────────────────────
+    const memoryExport = document.getElementById('memoryExport');
+    const memoryImport = document.getElementById('memoryImport');
+    const importFileInput = document.getElementById('importFileInput');
+
+    memoryExport.addEventListener('click', async () => {
+      try {
+        const data = await exportAllData();
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `localmind-export-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('Data exported');
+      } catch (e) { showToast('Export failed: ' + e.message); }
+    });
+
+    memoryImport.addEventListener('click', () => importFileInput.click());
+    importFileInput.addEventListener('change', async () => {
+      const file = importFileInput.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        await importData(data);
+        showToast(`Imported ${data.memories?.length || 0} memories, ${data.conversations?.length || 0} conversations`);
+        refreshMemoryPanel();
+      } catch (e) { showToast('Import failed: ' + e.message); }
+      importFileInput.value = '';
+    });
+
+    // ── History panel ───────────────────────────────────────────
+    const historyBtn = document.getElementById('historyBtn');
+    const historyPanel = document.getElementById('historyPanel');
+    const historyList = document.getElementById('historyList');
+    const historyCount = document.getElementById('historyCount');
+
+    historyBtn.addEventListener('click', () => {
+      historyPanel.classList.toggle('open');
+      memoryPanel.classList.remove('open');
+      settingsPanel.classList.remove('open');
+      if (historyPanel.classList.contains('open')) refreshHistoryPanel();
+    });
+
+    async function refreshHistoryPanel() {
+      try {
+        const convs = await getAllConversations();
+        historyCount.textContent = `${convs.length} conversation${convs.length === 1 ? '' : 's'}`;
+        historyList.innerHTML = '';
+
+        if (convs.length === 0) {
+          historyList.innerHTML = '<div class="memory-empty">No saved conversations</div>';
+          return;
+        }
+
+        for (const conv of convs.slice(0, 30)) {
+          const item = document.createElement('div');
+          item.className = 'history-item';
+          const date = new Date(conv.updated).toLocaleDateString();
+          const model = MODELS[conv.modelKey]?.label || conv.modelKey || '';
+          item.innerHTML = `
+            <div class="history-item-text">
+              <div class="history-item-title">${escapeHtml(conv.title)}</div>
+              <div class="history-item-meta">${conv.messageCount} messages &middot; ${model} &middot; ${date}</div>
+            </div>
+            <button class="history-item-del" title="Delete">&times;</button>
+          `;
+          // Click to resume conversation
+          item.addEventListener('click', (e) => {
+            if (e.target.closest('.history-item-del')) return;
+            resumeConversation(conv);
+          });
+          item.querySelector('.history-item-del').addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await deleteConversation(conv.id);
+            refreshHistoryPanel();
+          });
+          historyList.appendChild(item);
+        }
+      } catch (e) {
+        historyList.innerHTML = '<div class="memory-empty">Error loading history</div>';
+      }
+    }
+
+    function resumeConversation(conv) {
+      messages = conv.messages || [];
+      activeConversationId = conv.id;
+      conversationSummary = '';
+      saveChat();
+      chatArea.innerHTML = '';
+      chatArea.appendChild(welcomeMsg);
+      welcomeMsg.style.display = 'none';
+      renderRestoredMessages();
+      historyPanel.classList.remove('open');
+      showToast('Resumed conversation');
+    }
 
     // ── Auto-resize textarea ────────────────────────────────────
     chatInput.addEventListener('input', () => {
@@ -2718,11 +2959,17 @@ self.addEventListener('message', async (e) => {
 
       if (thinkContent) {
         const thinkId = 'think-' + Math.random().toString(36).slice(2, 8);
+        // During streaming: mainContent is empty → thinking is in progress → show open
+        // After streaming: mainContent has text → thinking is done → show collapsed
+        const isStillThinking = !mainContent;
+        const openClass = isStillThinking ? ' open' : '';
+        const arrow = isStillThinking ? '&#9660;' : '&#9654;';
+        const label = isStillThinking ? 'Thinking...' : 'Thought process';
         html += `<div class="thinking-block">
           <div class="thinking-toggle" onclick="document.getElementById('${thinkId}').classList.toggle('open'); this.querySelector('span').textContent = document.getElementById('${thinkId}').classList.contains('open') ? '&#9660;' : '&#9654;'">
-            <span>&#9654;</span> Thinking...
+            <span>${arrow}</span> ${label}
           </div>
-          <div class="thinking-content" id="${thinkId}">${escapeHtml(thinkContent)}</div>
+          <div class="thinking-content${openClass}" id="${thinkId}">${escapeHtml(thinkContent)}</div>
         </div>`;
       }
 
@@ -3455,14 +3702,17 @@ self.addEventListener('message', async (e) => {
       let currentAttData = attData; // Only pass attachments on first iteration
       // Collect any sources from tool-initiated web searches too
       const allSources = [...searchSources];
+      let toolsUsedInLoop = false;
 
       for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
-        const response = await generateOnce(loopMessages, currentAttData, enableThinking, genConfig);
+        // Disable thinking on follow-up iterations to avoid tool calls inside thinking blocks
+        const iterThinking = iter === 0 ? enableThinking : false;
+        const response = await generateOnce(loopMessages, currentAttData, iterThinking, genConfig);
         currentAttData = null; // Attachments only on first pass
 
         // User clicked stop while we were generating
         if (!generating) {
-          finishGeneration(response || null, allSources);
+          finishGeneration(response || null, allSources, toolsUsedInLoop);
           return;
         }
 
@@ -3471,7 +3721,7 @@ self.addEventListener('message', async (e) => {
 
         if (toolCalls.length === 0) {
           // No tool calls — we're done
-          finishGeneration(response, allSources);
+          finishGeneration(response, allSources, toolsUsedInLoop);
           return;
         }
 
@@ -3495,6 +3745,7 @@ self.addEventListener('message', async (e) => {
         }
 
         // Show tool call in UI
+        toolsUsedInLoop = true;
         renderToolCallBlock(currentAssistantEl.bubble, tc.name, tc.arguments, toolResult);
 
         // Append assistant response + tool result to loop messages
@@ -3508,13 +3759,13 @@ self.addEventListener('message', async (e) => {
         if (iter === MAX_TOOL_ITERATIONS - 1) {
           loopMessages.push({ role: 'user', content: '[System: Tool call limit reached. Please provide your final answer now.]' });
           const finalResponse = await generateOnce(loopMessages, null, enableThinking, genConfig);
-          finishGeneration(finalResponse, allSources);
+          finishGeneration(finalResponse, allSources, toolsUsedInLoop);
           return;
         }
       }
     }
 
-    function finishGeneration(response, sources) {
+    function finishGeneration(response, sources, usedTools) {
       generating = false;
       if (response) {
         messages.push({ role: 'assistant', content: response });
@@ -3523,15 +3774,19 @@ self.addEventListener('message', async (e) => {
       // Transparency: add source badge and links to the assistant bubble
       if (currentAssistantEl) {
         const bubble = currentAssistantEl.bubble;
+        const badge = document.createElement('div');
         if (sources && sources.length > 0) {
-          const badge = document.createElement('div');
           badge.innerHTML = `<span class="msg-source-badge web-enriched">Web-enriched &middot; ${sources.length} sources</span>`;
-          bubble.insertBefore(badge, bubble.firstChild);
           const linksDiv = document.createElement('div');
           linksDiv.className = 'source-links';
           linksDiv.innerHTML = sources.map(s => `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title || s.url)}</a>`).join('');
           bubble.appendChild(linksDiv);
+        } else if (usedTools) {
+          badge.innerHTML = `<span class="msg-source-badge" style="background:rgba(102,126,234,0.1);color:var(--indigo-600)">Agent</span>`;
+        } else {
+          badge.innerHTML = `<span class="msg-source-badge on-device">On-device</span>`;
         }
+        bubble.insertBefore(badge, bubble.firstChild);
       }
       currentAssistantEl = null;
       currentAssistantText = '';
@@ -3564,6 +3819,12 @@ self.addEventListener('message', async (e) => {
     // ── Clear chat ──────────────────────────────────────────────
     clearBtn.addEventListener('click', async () => {
       if (generating) return;
+
+      // Archive conversation to history before clearing
+      if (messages.length >= 2) {
+        try { await saveConversation(messages, activeConversationId); } catch (e) { console.warn('Failed to archive:', e); }
+      }
+      activeConversationId = newConversationId();
 
       // Post-session summarization: if >4 messages and embedding ready, summarize and store
       if (messages.length >= 4 && embeddingReady) {
