@@ -100,15 +100,15 @@
       position: absolute;
       top: calc(100% + 10px);
       right: 0;
-      width: 320px;
+      width: 340px;
       background: var(--white);
       border-radius: 12px;
       box-shadow: 0 4px 24px rgba(0,0,0,0.12);
-      padding: 16px;
       font-size: 0.82rem;
       color: var(--gray-700);
       line-height: 1.55;
       z-index: 100;
+      overflow: hidden;
     }
 
     .help-popover::before {
@@ -121,32 +121,90 @@
       background: var(--white);
       transform: rotate(45deg);
       box-shadow: -2px -2px 4px rgba(0,0,0,0.04);
+      z-index: 1;
     }
 
     .help-popover.open { display: block; }
 
-    .help-popover h3 {
-      font-size: 0.88rem;
-      font-weight: 600;
-      color: var(--gray-900);
-      margin-bottom: 8px;
+    .help-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--gray-200);
+      background: var(--gray-50);
     }
 
-    .help-popover p { margin-bottom: 8px; }
+    .help-tab {
+      flex: 1;
+      padding: 10px 6px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--gray-500);
+      text-align: center;
+      cursor: pointer;
+      border: none;
+      background: none;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
 
-    .help-popover ul {
+    .help-tab:hover { color: var(--gray-700); }
+
+    .help-tab.active {
+      color: var(--indigo-600);
+      border-bottom-color: var(--indigo-500);
+    }
+
+    .help-tab-content {
+      display: none;
+      padding: 14px 16px;
+      max-height: 320px;
+      overflow-y: auto;
+    }
+
+    .help-tab-content.active { display: block; }
+
+    .help-tab-content h4 {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--gray-900);
+      margin: 10px 0 4px;
+    }
+
+    .help-tab-content h4:first-child { margin-top: 0; }
+
+    .help-tab-content p { margin-bottom: 8px; }
+
+    .help-tab-content ul {
       padding-left: 18px;
       margin-bottom: 8px;
     }
 
-    .help-popover li { margin-bottom: 4px; }
+    .help-tab-content li { margin-bottom: 4px; }
 
-    .help-popover .help-note {
+    .help-tab-content .help-note {
       font-size: 0.75rem;
       color: var(--gray-400);
       border-top: 1px solid var(--gray-200);
       padding-top: 8px;
       margin-top: 8px;
+    }
+
+    .try-prompt {
+      display: block;
+      background: var(--gray-50);
+      border: 1px solid var(--gray-200);
+      border-radius: 8px;
+      padding: 7px 10px;
+      margin-bottom: 6px;
+      font-size: 0.78rem;
+      color: var(--gray-700);
+      font-style: italic;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .try-prompt:hover {
+      background: rgba(102, 126, 234, 0.06);
+      border-color: var(--indigo-300);
     }
 
     /* Status badge */
@@ -941,7 +999,7 @@
       .header h1 { font-size: 1.2rem; }
       .msg { max-width: 92%; }
       .chat-area { padding: 14px 12px; }
-      .help-popover { width: 280px; right: -8px; }
+      .help-popover { width: calc(100vw - 32px); right: -8px; max-width: 340px; }
       .afford-btn { width: 32px; height: 32px; font-size: 0.9rem; }
       .attachment-chip { width: 48px; height: 48px; }
       .attachment-chip.video-chip { width: 80px; height: 52px; }
@@ -958,27 +1016,55 @@
         <div class="help-wrap">
           <button class="help-btn" id="helpBtn" aria-label="Help">?</button>
           <div class="help-popover" id="helpPopover">
-            <h3>About LocalMind</h3>
-            <p>A private AI chatbot running <strong>Gemma</strong> entirely in your browser via WebGPU. No server, no API keys, no data leaves your device.</p>
-            <p><strong>Models:</strong></p>
-            <ul>
-              <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; fast, text-only chat</li>
-              <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; text + image + audio</li>
-              <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; text + image + audio, best quality</li>
-            </ul>
-            <p><strong>Multimodal (Gemma 4 models):</strong></p>
-            <ul>
-              <li><strong>&#128206; Attach</strong> &mdash; upload images, audio files, or MP4 video</li>
-              <li><strong>&#128247; Camera</strong> &mdash; snap a photo with your webcam</li>
-              <li><strong>&#127908; Mic</strong> &mdash; record a voice clip to send</li>
-              <li><strong>Paste</strong> &mdash; Ctrl/Cmd+V an image from clipboard</li>
-              <li><strong>Drag &amp; drop</strong> &mdash; drop files onto the chat</li>
-            </ul>
-            <p>Video uploads are experimental &mdash; keyframes and audio are extracted and sent separately to the model.</p>
-            <p><strong>Thinking mode:</strong> Open Settings and check &ldquo;Show reasoning&rdquo; to see the model&rsquo;s chain-of-thought before its answer.</p>
-            <p>Models are cached after first download &mdash; future visits load instantly.</p>
-            <p><strong>Requirements:</strong> Chrome 113+, Edge 113+, or Firefox 130+ with WebGPU.</p>
-            <div class="help-note">Powered by Transformers.js + Google Gemma (Apache 2.0).</div>
+            <div class="help-tabs">
+              <button class="help-tab active" data-tab="about">About</button>
+              <button class="help-tab" data-tab="models">Models</button>
+              <button class="help-tab" data-tab="features">Features</button>
+              <button class="help-tab" data-tab="try">Things to Try</button>
+            </div>
+            <div class="help-tab-content active" data-tab="about">
+              <p>A private AI chatbot running <strong>Gemma</strong> entirely in your browser via WebGPU. No server, no API keys, no data leaves your device.</p>
+              <p>Models are cached after first download &mdash; future visits load instantly.</p>
+              <p><strong>Requirements:</strong> Chrome 113+, Edge 113+, or Firefox 130+ with WebGPU.</p>
+              <div class="help-note">Powered by Transformers.js + Google Gemma (Apache 2.0).</div>
+            </div>
+            <div class="help-tab-content" data-tab="models">
+              <h4>Available Models</h4>
+              <ul>
+                <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; fast, text-only chat</li>
+                <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; text + image + audio + agent</li>
+                <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; text + image + audio + agent, best quality</li>
+              </ul>
+              <h4>Agent Tools (Gemma 4)</h4>
+              <p>Gemma 4 models have built-in tool calling &mdash; they can do math, check the time, and remember facts.</p>
+            </div>
+            <div class="help-tab-content" data-tab="features">
+              <h4>Multimodal (Gemma 4)</h4>
+              <ul>
+                <li><strong>&#128206; Attach</strong> &mdash; images, audio, or MP4 video</li>
+                <li><strong>&#128247; Camera</strong> &mdash; snap a photo</li>
+                <li><strong>&#127908; Mic</strong> &mdash; record a voice clip</li>
+                <li><strong>Paste</strong> &mdash; Ctrl/Cmd+V an image</li>
+                <li><strong>Drag &amp; drop</strong> &mdash; drop files onto the chat</li>
+              </ul>
+              <p>Video is experimental &mdash; keyframes and audio are extracted separately.</p>
+              <h4>Thinking Mode</h4>
+              <p>Open Settings and check &ldquo;Show reasoning&rdquo; to see the model&rsquo;s chain-of-thought.</p>
+            </div>
+            <div class="help-tab-content" data-tab="try">
+              <h4>Math</h4>
+              <span class="try-prompt" data-prompt="What is 15% of 2450?">What is 15% of 2450?</span>
+              <span class="try-prompt" data-prompt="Convert 72 Fahrenheit to Celsius">Convert 72 Fahrenheit to Celsius</span>
+              <h4>Time</h4>
+              <span class="try-prompt" data-prompt="What time is it in Tokyo?">What time is it in Tokyo?</span>
+              <span class="try-prompt" data-prompt="What day of the week is it?">What day of the week is it?</span>
+              <h4>Memory</h4>
+              <span class="try-prompt" data-prompt="Remember that I prefer dark mode">Remember that I prefer dark mode</span>
+              <span class="try-prompt" data-prompt="What do you know about my preferences?">What do you know about my preferences?</span>
+              <h4>General</h4>
+              <span class="try-prompt" data-prompt="Explain how WebGPU works in simple terms">Explain how WebGPU works in simple terms</span>
+              <div class="help-note">Click any prompt above to paste it into the chat input.</div>
+            </div>
           </div>
         </div>
         <div class="status-badge loading" id="statusBadge">
@@ -1381,6 +1467,27 @@ ${JSON.stringify({ name, result })}
       helpPopover.classList.toggle('open');
     });
     document.addEventListener('click', () => helpPopover.classList.remove('open'));
+
+    // Help popover: tab switching
+    helpPopover.addEventListener('click', e => {
+      e.stopPropagation();
+      const tab = e.target.closest('.help-tab');
+      if (tab) {
+        helpPopover.querySelectorAll('.help-tab').forEach(t => t.classList.remove('active'));
+        helpPopover.querySelectorAll('.help-tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        helpPopover.querySelector(`.help-tab-content[data-tab="${tab.dataset.tab}"]`).classList.add('active');
+        return;
+      }
+      // Click-to-paste prompt
+      const prompt = e.target.closest('.try-prompt');
+      if (prompt && prompt.dataset.prompt) {
+        chatInput.value = prompt.dataset.prompt;
+        chatInput.dispatchEvent(new Event('input'));
+        helpPopover.classList.remove('open');
+        chatInput.focus();
+      }
+    });
 
     // ── Settings panel ──────────────────────────────────────────
     settingsBtn.addEventListener('click', () => {
