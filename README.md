@@ -41,10 +41,19 @@ LocalMind remembers across sessions. Powered by a local RAG pipeline:
 - **MiniLM embeddings** (~23 MB, runs on CPU alongside the main model)
 - **IndexedDB vector store** with cosine similarity search
 - **Document upload** — drop .txt, .md, .csv, or .json files to store as searchable knowledge
-- **Post-session summarization** — conversations are summarized and stored when you clear the chat
+- **Post-session summarization** — conversations are summarized and stored when you start a new chat
 - **Memory inspector** — click "Memory" to browse, search, and delete stored memories
+- **Export / Import** — download all data (memories, conversations, profile) as JSON, or import from a previous export
 
 Every search result and fetched page is cached in the RAG index. The context window stays fixed. The accessible knowledge grows without limit.
+
+## Conversation history
+
+- **New Chat** — archives the current conversation to History, then starts fresh
+- **Clear** — deletes the current conversation without saving (with confirmation)
+- **History sidebar** — slides in from the left showing past conversations sorted by date. Click any to resume, or delete individual entries.
+
+Conversations are automatically summarized and embedded into the RAG index when archived, so the model can recall past discussions.
 
 ## Web search (BYOK)
 
@@ -58,11 +67,11 @@ Open Settings, pick a provider, enter your API key. The key stays in your browse
 
 Two send buttons: **Send** (offline, no network) and **Search+Send** (globe icon, web-enriched). The globe button only appears when a provider is configured.
 
-Web-enriched responses show a "Web-enriched" badge with clickable source links.
+Every response shows a transparency badge: **On-device** (pure local), **Agent** (tools used), or **Web-enriched** (search results with clickable source links).
 
 ## Multimodal input (Gemma 4 models)
 
-- **Attach** — images, audio files, MP4 video, or text documents
+- **Attach** — images, audio files, MP4 video, or text documents (.txt, .md, .json, .csv)
 - **Camera** — snap a photo with your webcam
 - **Mic** — record a voice clip
 - **Paste** — Ctrl/Cmd+V an image from clipboard

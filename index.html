@@ -1340,18 +1340,28 @@
             <div class="help-tab-content" data-tab="features">
               <h4>Multimodal (Gemma 4)</h4>
               <ul>
-                <li><strong>&#128206; Attach</strong> &mdash; images, audio, video, or text files</li>
+                <li><strong>&#128206; Attach</strong> &mdash; images, audio, MP4 video, or documents (.txt, .md, .json, .csv)</li>
                 <li><strong>&#128247; Camera</strong> &mdash; snap a photo</li>
                 <li><strong>&#127908; Mic</strong> &mdash; record a voice clip</li>
                 <li><strong>Paste</strong> &mdash; Ctrl/Cmd+V an image</li>
                 <li><strong>Drag &amp; drop</strong> &mdash; drop files onto the chat</li>
               </ul>
+              <p>Text documents (.txt, .md, .json, .csv) are automatically chunked and stored as searchable knowledge in memory.</p>
+              <h4>Conversations</h4>
+              <ul>
+                <li><strong>New Chat</strong> &mdash; archives current chat to History, starts fresh</li>
+                <li><strong>Clear</strong> &mdash; deletes current chat without saving</li>
+                <li><strong>History</strong> &mdash; sidebar with past conversations, click to resume</li>
+                <li><strong>Export / Import</strong> &mdash; in Memory panel, download or upload all data as JSON</li>
+              </ul>
               <h4>Memory</h4>
-              <p>Memories persist across sessions in your browser. Upload .txt/.md/.csv files to store as knowledge. Click <strong>Memory</strong> to browse, search, or delete.</p>
+              <p>Memories persist across sessions. Click <strong>Memory</strong> to browse, search, or delete. Conversations are summarized when you start a new chat.</p>
               <h4>Web Search</h4>
-              <p>Open Settings &rarr; pick a provider (Tavily, Brave, or SearXNG) &rarr; enter your API key. Then use the &#127760; button to search the web alongside your message.</p>
+              <p>Settings &rarr; pick a provider (Tavily, Brave, or SearXNG) &rarr; enter API key. Use the &#127760; button to search alongside your message.</p>
               <h4>Thinking Mode</h4>
-              <p>Check &ldquo;Show reasoning&rdquo; in Settings to see the model&rsquo;s chain-of-thought.</p>
+              <p>Check &ldquo;Show reasoning&rdquo; in Settings to see chain-of-thought.</p>
+              <h4>Response Badges</h4>
+              <p>Each response shows its source: <strong>On-device</strong> (pure local), <strong>Agent</strong> (tools used), or <strong>Web-enriched</strong> (search results).</p>
             </div>
             <div class="help-tab-content" data-tab="try">
               <h4>Math</h4>
