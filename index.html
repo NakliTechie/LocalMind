@@ -1232,7 +1232,11 @@
                 <li><strong>search_memory</strong> &mdash; recall from stored memories</li>
                 <li><strong>web_search</strong> &mdash; search the web (requires API key)</li>
                 <li><strong>fetch_page</strong> &mdash; read a web page&rsquo;s content</li>
+                <li><strong>set_reminder</strong> &mdash; browser notification after N minutes</li>
+                <li><strong>list_memories</strong> &mdash; show what&rsquo;s stored in memory</li>
+                <li><strong>delete_memory</strong> &mdash; forget specific memories</li>
               </ul>
+              <p>Translation works directly &mdash; Gemma 4 speaks 140+ languages natively, no tool needed.</p>
               <p>Gemma 3 1B works as a simple chatbot &mdash; no agent tools.</p>
             </div>
             <div class="help-tab-content" data-tab="features">
@@ -1261,12 +1265,16 @@
               <h4>Memory</h4>
               <span class="try-prompt" data-prompt="Remember that my favorite language is Rust">Remember that my favorite language is Rust</span>
               <span class="try-prompt" data-prompt="What do you know about my preferences?">What do you know about my preferences?</span>
+              <h4>Reminders</h4>
+              <span class="try-prompt" data-prompt="Remind me in 5 minutes to check the oven">Remind me in 5 minutes to check the oven</span>
+              <h4>Translation</h4>
+              <span class="try-prompt" data-prompt="Translate 'Good morning, how are you?' to Japanese, French, and Hindi">Translate "Good morning" to Japanese, French, Hindi</span>
               <h4>Web Search (requires API key)</h4>
               <span class="try-prompt" data-prompt="What are the latest developments in WebGPU?">What are the latest developments in WebGPU?</span>
-              <span class="try-prompt" data-prompt="Current weather in San Francisco">Current weather in San Francisco</span>
-              <h4>General</h4>
-              <span class="try-prompt" data-prompt="Explain how WebGPU works in simple terms">Explain how WebGPU works in simple terms</span>
-              <div class="help-note">Click any prompt to paste it into the chat input. Web search prompts need a configured provider in Settings.</div>
+              <h4>Memory Management</h4>
+              <span class="try-prompt" data-prompt="What do you have stored in your memory?">What do you have in memory?</span>
+              <span class="try-prompt" data-prompt="Forget everything about my preferences">Forget my preferences</span>
+              <div class="help-note">Click any prompt to paste it. Web search needs a provider in Settings.</div>
             </div>
           </div>
         </div>
@@ -1537,6 +1545,73 @@
           } catch (e) { return { error: e.message }; }
         },
       },
+      set_reminder: {
+        description: 'Set a reminder that will notify the user after a specified number of minutes. Uses browser notifications.',
+        parameters: {
+          type: 'object',
+          properties: {
+            message: { type: 'string', description: 'The reminder message to show' },
+            minutes: { type: 'number', description: 'Minutes from now (1-120)' },
+          },
+          required: ['message', 'minutes'],
+        },
+        execute(args) {
+          const mins = Math.max(1, Math.min(120, Number(args.minutes) || 5));
+          const msg = args.message || 'Reminder';
+          // Request notification permission if needed
+          if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+          }
+          setTimeout(() => {
+            // Browser notification
+            if ('Notification' in window && Notification.permission === 'granted') {
+              new Notification('LocalMind Reminder', { body: msg, icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🧠</text></svg>' });
+            }
+            // Also show a toast in case notifications are blocked
+            showToast('Reminder: ' + msg);
+          }, mins * 60 * 1000);
+          const time = new Date(Date.now() + mins * 60 * 1000);
+          return { set: true, message: msg, fires_at: time.toLocaleTimeString(), minutes: mins };
+        },
+      },
+      list_memories: {
+        description: 'List all stored memories grouped by category with counts. Use to see what you remember about the user.',
+        parameters: { type: 'object', properties: {}, required: [] },
+        async execute() {
+          try {
+            const chunks = await getAllChunks();
+            if (chunks.length === 0) return { total: 0, message: 'No memories stored.' };
+            const byCategory = {};
+            for (const c of chunks) {
+              byCategory[c.category] = (byCategory[c.category] || 0) + 1;
+            }
+            const recent = chunks.sort((a, b) => b.timestamp - a.timestamp).slice(0, 5);
+            return {
+              total: chunks.length,
+              categories: byCategory,
+              recent: recent.map(r => ({ text: r.text.slice(0, 80), category: r.category, source: r.source })),
+            };
+          } catch (e) { return { error: e.message }; }
+        },
+      },
+      delete_memory: {
+        description: 'Delete memories matching a search query. Use when the user asks you to forget something.',
+        parameters: {
+          type: 'object',
+          properties: { query: { type: 'string', description: 'What to forget — will delete matching memories' } },
+          required: ['query'],
+        },
+        async execute(args) {
+          try {
+            const results = await searchMemory(args.query, 10);
+            if (results.length === 0) return { deleted: 0, message: 'No matching memories found.' };
+            // Delete matches above 0.5 similarity (confident matches only)
+            const toDelete = results.filter(r => r.score >= 0.5);
+            for (const r of toDelete) await deleteChunk(r.id);
+            return { deleted: toDelete.length, message: `Deleted ${toDelete.length} matching memor${toDelete.length === 1 ? 'y' : 'ies'}.` };
+          } catch (e) { return { error: e.message }; }
+        },
+      },
     };
 
     // ── Web: Search Provider Adapters ─────────────────────────
@@ -1727,7 +1802,8 @@ Rules:
 - When citing sources, mention where the information came from.
 - If you don't need tools, just answer directly.
 - Never fabricate tool results.
-- Always use the exact <tool_call> XML format shown above. Do not invent other formats like "tool.call:" or function-call syntax.`;
+- Always use the exact <tool_call> XML format shown above. Do not invent other formats like "tool.call:" or function-call syntax.
+- You can translate text between 140+ languages directly in your response — no tool needed for translation.`;
 
       if (userPrompt) prompt += '\n\n' + userPrompt;
       return prompt;
