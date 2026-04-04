@@ -4208,7 +4208,7 @@ self.addEventListener('message', async (e) => {
     // ── Clear chat (delete, no archive) ────────────────────────
     clearBtn.addEventListener('click', () => {
       if (generating) return;
-      if (messages.length > 0 && !confirm('Delete this conversation? It will not be saved to History.')) return;
+      if (messages.length > 0) showToast('Chat cleared (not saved to History)');
       resetChatUI();
     });
 
