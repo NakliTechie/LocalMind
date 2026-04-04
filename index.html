@@ -49,6 +49,7 @@
       flex-direction: column;
       height: calc(100vh - 108px);
       position: relative;
+      overflow: hidden;
     }
 
     /* Header */
@@ -2522,8 +2523,10 @@ self.addEventListener('message', async (e) => {
       const p = searchProvider.value;
       apiKeyRow.style.display = (p === 'brave' || p === 'tavily') ? '' : 'none';
       searxngUrlRow.style.display = p === 'searxng' ? '' : 'none';
+      const m = MODELS[activeModelKey];
+      const isAgent = m && m.agentCapable;
       const configured = isSearchConfigured();
-      searchSendBtn.style.display = configured ? '' : 'none';
+      searchSendBtn.style.display = (configured && isAgent) ? '' : 'none';
     }
 
     searchProvider.addEventListener('change', () => {
