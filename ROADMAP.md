@@ -68,6 +68,16 @@ Single-file (4,220 lines) private AI research agent running entirely in-browser.
 
 **~60 lines.**
 
+### Custom model loading
+- User pastes a Hugging Face model ID in Settings
+- Validate before loading: check ONNX format available, check quantized size, check architecture compatibility (causal or multimodal)
+- Use `fetch()` to probe `config.json` from the HF hub for model type and size
+- If valid, add to model selector dropdown and load via existing `AutoModelForCausalLM` or `Gemma4ForConditionalGeneration` paths
+- Store custom model IDs in localStorage
+- Limits: must be ONNX-exported, must fit in GPU memory, must be a supported architecture (causal LM or Gemma4-style multimodal)
+
+**~80 lines.**
+
 ---
 
 ## Tier 3 — Blocked on ecosystem
