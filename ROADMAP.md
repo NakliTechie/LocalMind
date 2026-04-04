@@ -39,7 +39,20 @@ Single-file (4,220 lines) private AI research agent running entirely in-browser.
 
 ## Next — Tier 2
 
-### Plugin / custom tool API
+### 1. Multi-step planner agent
+- First pass: "Break this into steps" → parse plan → execute each step with tools → synthesize
+- Same model, different system prompts per phase
+- Reliability depends on model quality at 4.5B
+
+**~80 lines.**
+
+### 2. Conversation branching
+- Right-click or long-press a user message → "Branch from here"
+- Creates new conversation in history with messages up to that point
+
+**~40 lines.**
+
+### 3. Plugin / custom tool API
 - Settings: "Custom Tools" section
 - User defines tools as JSON: `{ name, description, parameters, endpoint }`
 - On tool call: `fetch(endpoint, { method: 'POST', body: JSON.stringify(args) })`
@@ -48,27 +61,7 @@ Single-file (4,220 lines) private AI research agent running entirely in-browser.
 
 **~100 lines.**
 
-### Multi-step planner agent
-- First pass: "Break this into steps" → parse plan → execute each step with tools → synthesize
-- Same model, different system prompts per phase
-- Reliability depends on model quality at 4.5B
-
-**~80 lines.**
-
-### Conversation branching
-- Right-click or long-press a user message → "Branch from here"
-- Creates new conversation in history with messages up to that point
-
-**~40 lines.**
-
-### Voice mode
-- Web Speech API (`SpeechRecognition`) for input (free, built into Chrome)
-- Web Speech API (`SpeechSynthesis`) for output
-- Toggle button in input bar
-
-**~60 lines.**
-
-### Custom model loading
+### 4. Custom model loading
 - User pastes a Hugging Face model ID in Settings
 - Validate before loading: check ONNX format available, check quantized size, check architecture compatibility (causal or multimodal)
 - Use `fetch()` to probe `config.json` from the HF hub for model type and size
@@ -77,6 +70,13 @@ Single-file (4,220 lines) private AI research agent running entirely in-browser.
 - Limits: must be ONNX-exported, must fit in GPU memory, must be a supported architecture (causal LM or Gemma4-style multimodal)
 
 **~80 lines.**
+
+### 5. Voice mode
+- Web Speech API (`SpeechRecognition`) for input (free, built into Chrome)
+- Web Speech API (`SpeechSynthesis`) for output
+- Toggle button in input bar
+
+**~60 lines.**
 
 ---
 
