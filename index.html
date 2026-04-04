@@ -881,6 +881,101 @@
 
     .toggle-row.hidden { display: none; }
 
+    /* Memory inspector panel */
+    .memory-panel {
+      display: none;
+      padding: 12px 16px;
+      border-top: 1px solid var(--gray-200);
+      max-height: 260px;
+      overflow-y: auto;
+    }
+
+    .memory-panel.open { display: block; }
+
+    .memory-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 0.82rem;
+      color: var(--gray-900);
+    }
+
+    .memory-count {
+      font-size: 0.72rem;
+      color: var(--gray-400);
+    }
+
+    .memory-search-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .memory-search-input {
+      flex: 1;
+      padding: 6px 10px;
+      border: 1px solid var(--gray-200);
+      border-radius: 8px;
+      font-size: 0.78rem;
+      background: var(--white);
+      outline: none;
+    }
+
+    .memory-search-input:focus {
+      border-color: var(--indigo-500);
+    }
+
+    .memory-clear-btn {
+      font-size: 0.7rem;
+      color: var(--gray-500);
+    }
+
+    .memory-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .memory-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--gray-50);
+      border-radius: 8px;
+      font-size: 0.78rem;
+      color: var(--gray-700);
+      line-height: 1.45;
+    }
+
+    .memory-item-text { flex: 1; }
+
+    .memory-item-meta {
+      font-size: 0.68rem;
+      color: var(--gray-400);
+      margin-top: 2px;
+    }
+
+    .memory-item-del {
+      cursor: pointer;
+      color: var(--gray-400);
+      font-size: 0.8rem;
+      padding: 0 4px;
+      border: none;
+      background: none;
+      line-height: 1;
+    }
+
+    .memory-item-del:hover { color: #ef4444; }
+
+    .memory-empty {
+      text-align: center;
+      color: var(--gray-400);
+      font-size: 0.78rem;
+      padding: 16px 0;
+    }
+
     /* Camera overlay */
     .camera-overlay {
       display: none;
@@ -1036,7 +1131,9 @@
                 <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; text + image + audio + agent, best quality</li>
               </ul>
               <h4>Agent Tools (Gemma 4)</h4>
-              <p>Gemma 4 models have built-in tool calling &mdash; they can do math, check the time, and remember facts.</p>
+              <p>Gemma 4 models have built-in tool calling &mdash; math, time, and persistent memory (store &amp; search).</p>
+              <h4>Memory</h4>
+              <p>Memories persist across sessions. Upload .txt/.md files or tell the model to remember things. Click <strong>Memory</strong> to browse stored memories.</p>
             </div>
             <div class="help-tab-content" data-tab="features">
               <h4>Multimodal (Gemma 4)</h4>
@@ -1109,10 +1206,24 @@
       <!-- Attachment bar -->
       <div class="attachment-bar" id="attachmentBar"></div>
 
+      <!-- Memory inspector panel -->
+      <div class="memory-panel" id="memoryPanel">
+        <div class="memory-header">
+          <strong>Memory</strong>
+          <span class="memory-count" id="memoryCount">0 memories</span>
+        </div>
+        <div class="memory-search-row">
+          <input type="text" id="memorySearch" placeholder="Search memories..." class="memory-search-input">
+          <button class="btn-icon memory-clear-btn" id="memoryClearAll" title="Clear all memories">Clear All</button>
+        </div>
+        <div class="memory-list" id="memoryList"></div>
+      </div>
+
       <!-- Actions bar -->
       <div class="actions-bar">
         <button class="btn-icon" id="clearBtn" disabled title="Clear chat">Clear</button>
         <button class="btn-icon" id="settingsBtn" title="System prompt settings">Settings</button>
+        <button class="btn-icon" id="memoryBtn" title="View stored memories">Memory</button>
         <span style="flex:1"></span>
         <select class="model-select" id="modelSelect" title="Choose model">
           <option value="gemma3-1b" selected>Gemma 3 1B &middot; Fast (~760 MB)</option>
@@ -1144,7 +1255,7 @@
   </div>
 
   <!-- Hidden file input -->
-  <input type="file" id="fileInput" style="display:none" multiple accept="image/*,audio/*,video/mp4">
+  <input type="file" id="fileInput" style="display:none" multiple accept="image/*,audio/*,video/mp4,.txt,.md,.json,.csv">
 
   <!-- Footer -->
   <div class="footer-nav">
@@ -1227,8 +1338,6 @@
     } catch {}
 
     // ── Agent: Tool Registry ──────────────────────────────────
-    const memoryStore = new Map(); // Phase 1 in-memory; Phase 2 upgrades to IndexedDB
-
     const TOOL_REGISTRY = {
       calculate: {
         description: 'Evaluate a mathematical expression. Use for arithmetic, unit conversions, percentages.',
@@ -1262,7 +1371,7 @@
         },
       },
       store_memory: {
-        description: 'Store an important fact, preference, or finding for later recall.',
+        description: 'Store an important fact, preference, or finding for later recall. Memories persist across sessions.',
         parameters: {
           type: 'object',
           properties: {
@@ -1271,10 +1380,35 @@
           },
           required: ['content'],
         },
-        execute(args) {
-          const key = Date.now().toString(36);
-          memoryStore.set(key, { content: args.content, category: args.category || 'fact', ts: Date.now() });
-          return { stored: true, id: key };
+        async execute(args) {
+          try {
+            const count = await embedAndStore(args.content, args.category || 'fact', 'assistant');
+            return { stored: true, chunks: count };
+          } catch (e) { return { error: e.message }; }
+        },
+      },
+      search_memory: {
+        description: 'Search your stored memories, past conversations, and documents. Use when the user asks about something you may have been told before.',
+        parameters: {
+          type: 'object',
+          properties: { query: { type: 'string', description: 'What to search for in memory' } },
+          required: ['query'],
+        },
+        async execute(args) {
+          try {
+            const results = await searchMemory(args.query, 5);
+            if (results.length === 0) return { found: false, message: 'No relevant memories found.' };
+            return {
+              found: true,
+              count: results.length,
+              memories: results.map(r => ({
+                content: r.text,
+                category: r.category,
+                score: Math.round(r.score * 100) / 100,
+                source: r.source,
+              })),
+            };
+          } catch (e) { return { error: e.message }; }
         },
       },
     };
@@ -1461,6 +1595,254 @@ ${JSON.stringify({ name, result })}
       return out;
     }
 
+    // ── RAG: Embedding Worker (MiniLM, WASM/CPU) ─────────────
+    let embeddingWorker = null;
+    let embeddingReady = false;
+    let embeddingQueue = Promise.resolve(); // serialize embedding calls
+
+    function createEmbeddingWorker() {
+      const code = `
+import {
+  env,
+  pipeline,
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+
+env.allowLocalModels  = true;
+env.localModelPath    = '/models/';
+env.allowRemoteModels = true;
+
+let embedder = null;
+
+self.addEventListener('message', async (e) => {
+  const { type, texts, id } = e.data;
+  if (type === 'load') {
+    try {
+      embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+        device: 'wasm',
+        progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
+      });
+      self.postMessage({ type: 'ready' });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: err.message || String(err) });
+    }
+  } else if (type === 'embed') {
+    try {
+      const results = [];
+      for (const text of texts) {
+        const output = await embedder(text, { pooling: 'mean', normalize: true });
+        results.push(Array.from(output.data));
+      }
+      self.postMessage({ type: 'embeddings', vectors: results, id });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: err.message || String(err), id });
+    }
+  }
+});
+`;
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url, { type: 'module' });
+      w.addEventListener('error', (e) => {
+        console.error('Embedding worker error:', e.message);
+      });
+      return w;
+    }
+
+    function ensureEmbeddingWorker() {
+      if (embeddingReady) return Promise.resolve();
+      if (embeddingWorker) {
+        // Already loading, wait for ready
+        return new Promise((resolve, reject) => {
+          const handler = (e) => {
+            if (e.data.type === 'ready') { embeddingReady = true; embeddingWorker.removeEventListener('message', handler); resolve(); }
+            else if (e.data.type === 'error') { embeddingWorker.removeEventListener('message', handler); reject(new Error(e.data.message)); }
+          };
+          embeddingWorker.addEventListener('message', handler);
+        });
+      }
+      embeddingWorker = createEmbeddingWorker();
+      return new Promise((resolve, reject) => {
+        const handler = (e) => {
+          if (e.data.type === 'ready') { embeddingReady = true; embeddingWorker.removeEventListener('message', handler); resolve(); }
+          else if (e.data.type === 'error') { embeddingWorker.removeEventListener('message', handler); reject(new Error(e.data.message)); }
+        };
+        embeddingWorker.addEventListener('message', handler);
+        embeddingWorker.postMessage({ type: 'load' });
+      });
+    }
+
+    function embedTexts(texts) {
+      // Serialize embedding calls to avoid race conditions
+      embeddingQueue = embeddingQueue.then(() => ensureEmbeddingWorker().then(() => {
+        return new Promise((resolve, reject) => {
+          const id = Math.random().toString(36).slice(2);
+          const handler = (e) => {
+            if (e.data.id === id) {
+              embeddingWorker.removeEventListener('message', handler);
+              if (e.data.type === 'embeddings') resolve(e.data.vectors);
+              else reject(new Error(e.data.message || 'Embedding failed'));
+            }
+          };
+          embeddingWorker.addEventListener('message', handler);
+          embeddingWorker.postMessage({ type: 'embed', texts, id });
+        });
+      }));
+      return embeddingQueue;
+    }
+
+    // ── RAG: IndexedDB Vector Store ─────────────────────────────
+    const DB_NAME = 'localmind_rag';
+    const DB_VERSION = 1;
+
+    function openRAGDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains('chunks')) {
+            const store = db.createObjectStore('chunks', { keyPath: 'id' });
+            store.createIndex('category', 'category', { unique: false });
+            store.createIndex('source', 'source', { unique: false });
+          }
+          if (!db.objectStoreNames.contains('profile')) {
+            db.createObjectStore('profile', { keyPath: 'key' });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function storeChunks(chunks) {
+      const db = await openRAGDB();
+      const tx = db.transaction('chunks', 'readwrite');
+      const store = tx.objectStore('chunks');
+      for (const chunk of chunks) store.put(chunk);
+      return new Promise((resolve, reject) => {
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function getAllChunks() {
+      const db = await openRAGDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('chunks', 'readonly');
+        const req = tx.objectStore('chunks').getAll();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function deleteChunk(id) {
+      const db = await openRAGDB();
+      const tx = db.transaction('chunks', 'readwrite');
+      tx.objectStore('chunks').delete(id);
+      return new Promise((resolve, reject) => {
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function clearAllChunks() {
+      const db = await openRAGDB();
+      const tx = db.transaction('chunks', 'readwrite');
+      tx.objectStore('chunks').clear();
+      return new Promise((resolve, reject) => {
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    function cosineSimilarity(a, b) {
+      let dot = 0, normA = 0, normB = 0;
+      for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+        normA += a[i] * a[i];
+        normB += b[i] * b[i];
+      }
+      return dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-8);
+    }
+
+    async function searchByVector(queryVec, topK = 5, threshold = 0.3) {
+      const chunks = await getAllChunks();
+      const scored = chunks.map(c => ({
+        ...c,
+        score: cosineSimilarity(queryVec, c.embedding),
+      })).filter(c => c.score >= threshold);
+      scored.sort((a, b) => b.score - a.score);
+      return scored.slice(0, topK);
+    }
+
+    // ── RAG: User Profile (Working Memory) ──────────────────────
+    async function getProfile() {
+      const db = await openRAGDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('profile', 'readonly');
+        const req = tx.objectStore('profile').get('user');
+        req.onsuccess = () => resolve(req.result || { key: 'user', name: '', preferences: [], facts: [] });
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function saveProfile(profile) {
+      const db = await openRAGDB();
+      const tx = db.transaction('profile', 'readwrite');
+      tx.objectStore('profile').put({ ...profile, key: 'user' });
+      return new Promise((resolve, reject) => {
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    // ── RAG: Chunk Pipeline ─────────────────────────────────────
+    function chunkText(text, maxChars = 900, overlapChars = 200) {
+      // Split at sentence boundaries, then group into chunks
+      const sentences = text.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [text];
+      const chunks = [];
+      let current = '';
+
+      for (const sentence of sentences) {
+        if (current.length + sentence.length > maxChars && current.length > 0) {
+          chunks.push(current.trim());
+          // Keep overlap from end of current chunk
+          const words = current.split(/\s+/);
+          const overlapWords = [];
+          let len = 0;
+          for (let i = words.length - 1; i >= 0 && len < overlapChars; i--) {
+            overlapWords.unshift(words[i]);
+            len += words[i].length + 1;
+          }
+          current = overlapWords.join(' ') + ' ' + sentence;
+        } else {
+          current += (current ? ' ' : '') + sentence;
+        }
+      }
+      if (current.trim()) chunks.push(current.trim());
+      return chunks;
+    }
+
+    async function embedAndStore(text, category, source) {
+      const textChunks = chunkText(text);
+      const vectors = await embedTexts(textChunks);
+      const now = Date.now();
+      const chunks = textChunks.map((t, i) => ({
+        id: `${now}-${i}-${Math.random().toString(36).slice(2, 6)}`,
+        text: t,
+        embedding: vectors[i],
+        category: category || 'fact',
+        source: source || 'user',
+        timestamp: now,
+      }));
+      await storeChunks(chunks);
+      return chunks.length;
+    }
+
+    async function searchMemory(query, topK = 5) {
+      const vectors = await embedTexts([query]);
+      return searchByVector(vectors[0], topK);
+    }
+
     // ── DOM refs ────────────────────────────────────────────────
     const chatArea = document.getElementById('chatArea');
     const chatInput = document.getElementById('chatInput');
@@ -1524,6 +1906,74 @@ ${JSON.stringify({ name, result })}
     // ── Settings panel ──────────────────────────────────────────
     settingsBtn.addEventListener('click', () => {
       settingsPanel.classList.toggle('open');
+      memoryPanel.classList.remove('open');
+    });
+
+    // ── Memory inspector ────────────────────────────────────────
+    const memoryBtn = document.getElementById('memoryBtn');
+    const memoryPanel = document.getElementById('memoryPanel');
+    const memoryList = document.getElementById('memoryList');
+    const memoryCount = document.getElementById('memoryCount');
+    const memorySearch = document.getElementById('memorySearch');
+    const memoryClearAll = document.getElementById('memoryClearAll');
+
+    memoryBtn.addEventListener('click', () => {
+      memoryPanel.classList.toggle('open');
+      settingsPanel.classList.remove('open');
+      if (memoryPanel.classList.contains('open')) refreshMemoryPanel();
+    });
+
+    async function refreshMemoryPanel(filter) {
+      try {
+        const chunks = await getAllChunks();
+        memoryCount.textContent = `${chunks.length} memor${chunks.length === 1 ? 'y' : 'ies'}`;
+        memoryList.innerHTML = '';
+
+        if (chunks.length === 0) {
+          memoryList.innerHTML = '<div class="memory-empty">No memories stored yet</div>';
+          return;
+        }
+
+        let display = chunks.sort((a, b) => b.timestamp - a.timestamp);
+        if (filter) {
+          const q = filter.toLowerCase();
+          display = display.filter(c => c.text.toLowerCase().includes(q) || c.category.includes(q) || (c.source && c.source.toLowerCase().includes(q)));
+        }
+
+        for (const chunk of display.slice(0, 50)) {
+          const item = document.createElement('div');
+          item.className = 'memory-item';
+          const preview = chunk.text.length > 120 ? chunk.text.slice(0, 120) + '...' : chunk.text;
+          const date = new Date(chunk.timestamp).toLocaleDateString();
+          item.innerHTML = `
+            <div class="memory-item-text">
+              ${escapeHtml(preview)}
+              <div class="memory-item-meta">${escapeHtml(chunk.category)} &middot; ${escapeHtml(chunk.source || 'unknown')} &middot; ${date}</div>
+            </div>
+            <button class="memory-item-del" title="Delete">&times;</button>
+          `;
+          item.querySelector('.memory-item-del').addEventListener('click', async () => {
+            await deleteChunk(chunk.id);
+            refreshMemoryPanel(memorySearch.value.trim());
+          });
+          memoryList.appendChild(item);
+        }
+
+        if (display.length > 50) {
+          memoryList.insertAdjacentHTML('beforeend', `<div class="memory-empty">${display.length - 50} more not shown</div>`);
+        }
+      } catch (e) {
+        memoryList.innerHTML = `<div class="memory-empty">Error loading memories</div>`;
+        console.error('Memory panel error:', e);
+      }
+    }
+
+    memorySearch.addEventListener('input', () => refreshMemoryPanel(memorySearch.value.trim()));
+
+    memoryClearAll.addEventListener('click', async () => {
+      if (!confirm('Delete all stored memories? This cannot be undone.')) return;
+      await clearAllChunks();
+      refreshMemoryPanel();
     });
 
     // ── Auto-resize textarea ────────────────────────────────────
@@ -1646,8 +2096,29 @@ ${JSON.stringify({ name, result })}
             thumb: URL.createObjectURL(file),
             name: file.name,
           });
+        } else if (/\.(txt|md|json|csv)$/i.test(file.name) || file.type.startsWith('text/')) {
+          // Text document → embed into RAG memory
+          file.text().then(async (text) => {
+            if (!text.trim()) return;
+            try {
+              const count = await embedAndStore(text, 'document', file.name);
+              showToast(`Stored "${file.name}" as ${count} chunk${count > 1 ? 's' : ''} in memory`);
+            } catch (e) {
+              console.error('Document embed error:', e);
+              showToast('Failed to store document: ' + e.message);
+            }
+          });
         }
       }
+    }
+
+    function showToast(msg) {
+      const toast = document.createElement('div');
+      toast.textContent = msg;
+      toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--gray-800);color:white;padding:10px 20px;border-radius:8px;font-size:0.82rem;z-index:1000;opacity:0;transition:opacity 0.3s';
+      document.body.appendChild(toast);
+      requestAnimationFrame(() => toast.style.opacity = '1');
+      setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
     }
 
     // ── Clipboard paste (images) ────────────────────────────────
@@ -2481,9 +2952,25 @@ self.addEventListener('message', async (e) => {
       chatInput.value = '';
       chatInput.style.height = 'auto';
 
-      // Build system prompt
+      // Build system prompt (with optional RAG context)
       const userSysPrompt = systemPrompt.value.trim();
-      const sysPrompt = isAgent ? buildAgentSystemPrompt(userSysPrompt) : userSysPrompt;
+      let sysPrompt = isAgent ? buildAgentSystemPrompt(userSysPrompt) : userSysPrompt;
+
+      // Auto-inject RAG context if embedding model is ready and agent-capable
+      if (isAgent && embeddingReady) {
+        try {
+          const userText = typeof userContent === 'string' ? userContent : text;
+          if (userText) {
+            const ragResults = await searchMemory(userText, 3);
+            if (ragResults.length > 0) {
+              const ragBlock = ragResults.map(r => `[${r.category}] ${r.text}`).join('\n\n');
+              sysPrompt += `\n\n[Retrieved from memory — use if relevant]\n${ragBlock}`;
+            }
+          }
+        } catch (e) {
+          console.warn('RAG retrieval failed:', e);
+        }
+      }
 
       // Build context-windowed chat history
       const chatMessages = buildContextMessages(messages, sysPrompt, activeModelKey);
@@ -2542,7 +3029,7 @@ self.addEventListener('message', async (e) => {
           toolResult = { error: `Unknown tool: ${tc.name}` };
         } else {
           try {
-            toolResult = tool.execute(tc.arguments);
+            toolResult = await tool.execute(tc.arguments);
           } catch (e) {
             toolResult = { error: e.message };
           }
@@ -2603,9 +3090,27 @@ self.addEventListener('message', async (e) => {
     });
 
     // ── Clear chat ──────────────────────────────────────────────
-    clearBtn.addEventListener('click', () => {
+    clearBtn.addEventListener('click', async () => {
       if (generating) return;
+
+      // Post-session summarization: if >4 messages and embedding ready, summarize and store
+      if (messages.length >= 4 && embeddingReady) {
+        try {
+          const textParts = messages.map(m => {
+            const role = m.role === 'user' ? 'User' : 'Assistant';
+            const content = typeof m.content === 'string' ? m.content : m.content.filter(c => c.type === 'text').map(c => c.text).join(' ');
+            return `${role}: ${content}`;
+          }).filter(s => s.length > 10);
+          // Truncate to keep summary input manageable
+          const summary = textParts.slice(-10).join('\n').slice(0, 2000);
+          await embedAndStore(summary, 'conversation', 'session-' + new Date().toISOString().slice(0, 10));
+        } catch (e) {
+          console.warn('Post-session summarization failed:', e);
+        }
+      }
+
       messages = [];
+      conversationSummary = '';
       saveChat();
       clearAttachments();
       chatArea.innerHTML = '';
