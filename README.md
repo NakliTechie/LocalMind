@@ -79,6 +79,44 @@ Every response shows a transparency badge: **On-device** (pure local), **Agent**
 
 Video is experimental — keyframes and audio are extracted and sent separately.
 
+## Things to try
+
+**Math & Conversions**
+- "What is 15% of 2450?"
+- "Convert 72 Fahrenheit to Celsius"
+- "If I invest $10,000 at 7% annual return, how much after 5 years with compound interest?"
+
+**Time & Reminders**
+- "What time is it in Tokyo?"
+- "Remind me in 5 minutes to check the oven"
+
+**Memory**
+- "Remember that I'm a software engineer working on a React project called Dashboard Pro"
+- "What do you know about me and my projects?"
+- "Forget everything about my preferences"
+
+**Translation** (140+ languages)
+- "Translate 'Good morning, how are you?' to Japanese, French, and Hindi"
+- "How do you say 'Where is the nearest train station?' in Spanish and German?"
+
+**Writing & Analysis**
+- "Write a professional email declining a meeting invitation politely"
+- "Summarize the pros and cons of microservices vs monolithic architecture"
+- "Explain the concept of WebGPU to a non-technical person in 3 sentences"
+
+**Multimodal** (attach an image first)
+- "Describe this image in detail"
+- "What text can you see in this image? Transcribe it."
+
+**Web Research** (requires API key in Settings)
+- "What are the top tech news stories today?"
+- "Search for the latest WebGPU browser support status and summarize"
+- "Find recent articles about AI running locally in the browser and give me a summary with sources"
+
+**Coding**
+- "Write a Python function that finds all prime numbers up to n using the Sieve of Eratosthenes"
+- "Explain the difference between async/await and Promises in JavaScript with examples"
+
 ## Context engineering
 
 The raw context window is 12-16K tokens depending on model. The effective knowledge is unlimited:
