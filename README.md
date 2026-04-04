@@ -40,17 +40,19 @@ LocalMind remembers across sessions. Powered by a local RAG pipeline:
 
 - **MiniLM embeddings** (~23 MB, runs on CPU alongside the main model)
 - **IndexedDB vector store** with cosine similarity search
-- **Document upload** — drop .txt, .md, .csv, or .json files to store as searchable knowledge
+- **Document upload** — PDF, DOCX, .txt, .md, .json, .csv — text extracted, chunked, and stored as searchable knowledge
+- **Auto-summarize on upload** — documents are summarized on ingestion for quick retrieval
 - **Post-session summarization** — conversations are summarized and stored when you start a new chat
 - **Memory inspector** — click "Memory" to browse, search, and delete stored memories
 - **Export / Import** — download all data (memories, conversations, profile) as JSON, or import from a previous export
+- **Auto-backup** — optional setting to auto-download a backup on every New Chat
 
 Every search result and fetched page is cached in the RAG index. The context window stays fixed. The accessible knowledge grows without limit.
 
 ## Conversation history
 
 - **New Chat** — archives the current conversation to History, then starts fresh
-- **Clear** — deletes the current conversation without saving (with confirmation)
+- **Clear** — deletes the current conversation without saving
 - **History sidebar** — slides in from the left showing past conversations sorted by date. Click any to resume, or delete individual entries.
 
 Conversations are automatically summarized and embedded into the RAG index when archived, so the model can recall past discussions.
@@ -71,13 +73,19 @@ Every response shows a transparency badge: **On-device** (pure local), **Agent**
 
 ## Multimodal input (Gemma 4 models)
 
-- **Attach** — images, audio files, MP4 video, or text documents (.txt, .md, .json, .csv)
+- **Attach** — images, audio, MP4 video, or documents (PDF, DOCX, .txt, .md, .json, .csv)
 - **Camera** — snap a photo with your webcam
 - **Mic** — record a voice clip
 - **Paste** — Ctrl/Cmd+V an image from clipboard
 - **Drag and drop** — drop files onto the chat
 
-Video is experimental — keyframes and audio are extracted and sent separately.
+Documents are extracted, chunked, embedded, and auto-summarized on upload. Video is experimental — keyframes and audio are extracted separately.
+
+## Output artifacts
+
+- **Save as Markdown** — download any assistant response as a .md file
+- **Code download** — hover over code blocks for a download button (saves with correct extension)
+- **Model cache management** — view cached model sizes and clear cache in Settings
 
 ## Things to try
 
@@ -103,6 +111,10 @@ Video is experimental — keyframes and audio are extracted and sent separately.
 - "Write a professional email declining a meeting invitation politely"
 - "Summarize the pros and cons of microservices vs monolithic architecture"
 - "Explain the concept of WebGPU to a non-technical person in 3 sentences"
+
+**Documents** (attach a PDF, DOCX, or text file)
+- "Summarize the key points from the document I just uploaded"
+- "What are the main conclusions or recommendations in my document?"
 
 **Multimodal** (attach an image first)
 - "Describe this image in detail"
@@ -147,6 +159,8 @@ No build step. No dependencies. No backend.
 - **[Gemma 4 E4B](https://huggingface.co/onnx-community/gemma-4-E4B-it-ONNX)** — multimodal, 4.5B effective params, q4f16
 - **[MiniLM](https://huggingface.co/Xenova/all-MiniLM-L6-v2)** — 384-dim embeddings for RAG (~23 MB, WASM)
 - **[Readability.js](https://github.com/mozilla/readability)** — article extraction from fetched pages (lazy-loaded)
+- **[PDF.js](https://mozilla.github.io/pdf.js/)** — PDF text extraction (lazy-loaded on first PDF upload)
+- **[mammoth.js](https://github.com/mwilliamson/mammoth.js)** — DOCX text extraction (lazy-loaded on first DOCX upload)
 - Web Workers for off-main-thread inference (LLM on WebGPU, embeddings on WASM)
 - IndexedDB for persistent vector store + user profile
 - Zero build tooling. One HTML file.
