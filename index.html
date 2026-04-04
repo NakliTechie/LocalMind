@@ -1381,30 +1381,38 @@
               <p>Gemma 3 1B works as a simple chatbot &mdash; no agent tools.</p>
             </div>
             <div class="help-tab-content" data-tab="features">
+              <h4>Document Upload</h4>
+              <ul>
+                <li><strong>Text</strong> &mdash; .txt, .md, .json, .csv</li>
+                <li><strong>PDF</strong> &mdash; extracted via PDF.js, auto-summarized</li>
+                <li><strong>DOCX</strong> &mdash; extracted via mammoth.js, auto-summarized</li>
+              </ul>
+              <p>Documents are chunked, embedded, and stored as searchable knowledge. A summary is generated on upload.</p>
               <h4>Multimodal (Gemma 4)</h4>
               <ul>
-                <li><strong>&#128206; Attach</strong> &mdash; images, audio, MP4 video, or documents (.txt, .md, .json, .csv)</li>
-                <li><strong>&#128247; Camera</strong> &mdash; snap a photo</li>
-                <li><strong>&#127908; Mic</strong> &mdash; record a voice clip</li>
-                <li><strong>Paste</strong> &mdash; Ctrl/Cmd+V an image</li>
-                <li><strong>Drag &amp; drop</strong> &mdash; drop files onto the chat</li>
+                <li><strong>&#128206; Attach</strong> &mdash; images, audio, MP4 video, or documents</li>
+                <li><strong>&#128247; Camera</strong> / <strong>&#127908; Mic</strong> / <strong>Paste</strong> / <strong>Drag &amp; drop</strong></li>
               </ul>
-              <p>Text documents (.txt, .md, .json, .csv) are automatically chunked and stored as searchable knowledge in memory.</p>
               <h4>Conversations</h4>
               <ul>
-                <li><strong>New Chat</strong> &mdash; archives current chat to History, starts fresh</li>
-                <li><strong>Clear</strong> &mdash; deletes current chat without saving</li>
-                <li><strong>History</strong> &mdash; sidebar with past conversations, click to resume</li>
-                <li><strong>Export / Import</strong> &mdash; in Memory panel, download or upload all data as JSON</li>
+                <li><strong>New Chat</strong> &mdash; archives to History + starts fresh</li>
+                <li><strong>Clear</strong> &mdash; deletes without saving</li>
+                <li><strong>History</strong> &mdash; sidebar, click to resume any past chat</li>
               </ul>
-              <h4>Memory</h4>
-              <p>Memories persist across sessions. Click <strong>Memory</strong> to browse, search, or delete. Conversations are summarized when you start a new chat.</p>
-              <h4>Web Search</h4>
-              <p>Settings &rarr; pick a provider (Tavily, Brave, or SearXNG) &rarr; enter API key. Use the &#127760; button to search alongside your message.</p>
-              <h4>Thinking Mode</h4>
-              <p>Check &ldquo;Show reasoning&rdquo; in Settings to see chain-of-thought.</p>
-              <h4>Response Badges</h4>
-              <p>Each response shows its source: <strong>On-device</strong> (pure local), <strong>Agent</strong> (tools used), or <strong>Web-enriched</strong> (search results).</p>
+              <h4>Output &amp; Export</h4>
+              <ul>
+                <li><strong>Save as MD</strong> &mdash; download any response as Markdown</li>
+                <li><strong>Code download</strong> &mdash; hover code blocks for download button</li>
+                <li><strong>Export / Import</strong> &mdash; in Memory panel, full data as JSON</li>
+                <li><strong>Auto-backup</strong> &mdash; toggle in Settings to download on New Chat</li>
+              </ul>
+              <h4>Other</h4>
+              <ul>
+                <li><strong>Web Search</strong> &mdash; Settings &rarr; provider + API key &rarr; &#127760; button</li>
+                <li><strong>Thinking Mode</strong> &mdash; see chain-of-thought (collapses when done)</li>
+                <li><strong>Cache management</strong> &mdash; view/clear cached models in Settings</li>
+                <li><strong>Response badges</strong> &mdash; On-device / Agent / Web-enriched</li>
+              </ul>
             </div>
             <div class="help-tab-content" data-tab="try">
               <h4>Math &amp; Conversions</h4>
@@ -1425,6 +1433,9 @@
               <span class="try-prompt" data-prompt="Write a professional email declining a meeting invitation politely">Write a polite meeting decline email</span>
               <span class="try-prompt" data-prompt="Summarize the pros and cons of microservices vs monolithic architecture">Microservices vs monolith: pros and cons</span>
               <span class="try-prompt" data-prompt="Explain the concept of WebGPU to a non-technical person in 3 sentences">Explain WebGPU in 3 simple sentences</span>
+              <h4>Documents (attach a PDF, DOCX, or text file)</h4>
+              <span class="try-prompt" data-prompt="Summarize the key points from the document I just uploaded">Summarize the uploaded document</span>
+              <span class="try-prompt" data-prompt="What are the main conclusions or recommendations in my document?">Main conclusions from my document</span>
               <h4>Multimodal (attach an image first)</h4>
               <span class="try-prompt" data-prompt="Describe this image in detail">Describe this image in detail</span>
               <span class="try-prompt" data-prompt="What text can you see in this image? Transcribe it.">Transcribe text from this image</span>
