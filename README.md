@@ -44,7 +44,15 @@ LocalMind remembers across sessions. Powered by a local RAG pipeline:
 - **Folder ingestion** — click "Folder" to open a local directory via the File System Access API; all `.md`, `.txt`, `.pdf`, `.docx` files are recursively ingested. Re-open the same folder to sync only changed files (fingerprint-based, size + last-modified)
 - **Auto-summarize on upload** — documents are summarized on ingestion for quick retrieval
 - **Post-session summarization** — conversations are summarized and stored when you start a new chat
-- **Memory inspector** — click "Memory" to browse, search, and delete stored memories
+- **Memory browser** — click "Memory" to open the browser panel:
+  - Filter by category (fact, preference, finding, document, doc summary, conversation) with live chunk counts per pill
+  - Document chunks grouped by source file with a bulk "Delete all per source" button — essential after folder ingestion
+  - Relative timestamps ("2h ago", "3d ago") and coloured category badges
+- **Memory audit** — "Audit" button in the memory panel flags three issue types:
+  - **Stale** — chunks older than 60 days
+  - **Near-duplicate** — pairs with cosine similarity ≥ 0.92 within the same category (keeps one, flags the other)
+  - **Outlier** — chunks whose average similarity to category peers is < 0.20 (requires ≥ 5 members in category)
+  - Each group has a "Delete all" button; individual deletes rerun the audit automatically; green pass when nothing is flagged
 - **Export / Import** — download all data (memories, conversations, profile) as JSON, or import from a previous export
 - **Auto-backup** — optional setting to auto-download a backup on every New Chat
 
