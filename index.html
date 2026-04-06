@@ -811,6 +811,11 @@
 
     .btn-icon:disabled { opacity: 0.4; cursor: not-allowed; }
 
+    .btn-icon.folder-open {
+      background: var(--indigo-100);
+      color: var(--indigo-600);
+    }
+
     /* Model selector */
     .model-select {
       appearance: none;
@@ -1259,6 +1264,133 @@
       color: var(--gray-800);
     }
 
+    /* Share modal */
+    .share-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 600;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    .share-backdrop.open { display: flex; }
+
+    .share-modal {
+      background: var(--white);
+      border-radius: 14px;
+      padding: 24px;
+      width: min(480px, 90vw);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .share-modal h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--gray-900);
+      margin: 0;
+    }
+
+    .share-modal label {
+      font-size: 0.82rem;
+      color: var(--gray-600);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .share-modal input[type="text"],
+    .share-modal input[type="password"] {
+      width: 100%;
+      border: 1.5px solid var(--gray-200);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.82rem;
+      color: var(--gray-800);
+      background: var(--gray-50);
+      outline: none;
+      transition: border-color 0.15s;
+      font-family: inherit;
+    }
+    .share-modal input:focus { border-color: var(--indigo-500); }
+
+    .share-url-row {
+      display: flex;
+      gap: 6px;
+    }
+    .share-url-row input { flex: 1; font-family: monospace; font-size: 0.75rem; }
+
+    .share-modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .share-modal-footer button {
+      padding: 7px 16px;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1.5px solid var(--gray-200);
+      background: var(--white);
+      color: var(--gray-700);
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .share-modal-footer button:hover { background: var(--gray-100); border-color: var(--gray-400); }
+    .share-modal-footer .btn-primary {
+      background: var(--indigo-500);
+      color: white;
+      border-color: var(--indigo-500);
+    }
+    .share-modal-footer .btn-primary:hover { background: var(--indigo-600); border-color: var(--indigo-600); }
+    .share-modal-footer .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .share-meta { font-size: 0.78rem; color: var(--gray-600); }
+
+    /* Import banner */
+    .import-banner {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      background: var(--indigo-500);
+      color: white;
+      padding: 12px 20px;
+      display: none;
+      align-items: center;
+      gap: 12px;
+      z-index: 700;
+      font-size: 0.85rem;
+      flex-wrap: wrap;
+    }
+    .import-banner.open { display: flex; }
+    .import-banner strong { flex: 1; min-width: 180px; }
+    .import-banner input[type="password"] {
+      border: none;
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-size: 0.82rem;
+      width: 160px;
+    }
+    .import-banner button {
+      background: white;
+      color: var(--indigo-600);
+      border: none;
+      border-radius: 6px;
+      padding: 5px 14px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .import-banner .dismiss-btn {
+      background: transparent;
+      color: rgba(255,255,255,0.8);
+      font-weight: 400;
+      padding: 5px 8px;
+    }
+
     /* Drag-drop overlay */
     .drag-overlay {
       display: none;
@@ -1393,15 +1525,23 @@
                 <li><strong>&#128206; Attach</strong> &mdash; images, audio, MP4 video, or documents</li>
                 <li><strong>&#128247; Camera</strong> / <strong>&#127908; Mic</strong> / <strong>Paste</strong> / <strong>Drag &amp; drop</strong></li>
               </ul>
+              <h4>Document Upload</h4>
+              <ul>
+                <li><strong>Text</strong> &mdash; .txt, .md, .json, .csv</li>
+                <li><strong>PDF</strong> &mdash; extracted via PDF.js, auto-summarized</li>
+                <li><strong>DOCX</strong> &mdash; extracted via mammoth.js, auto-summarized</li>
+                <li><strong>Folder</strong> &mdash; open a local folder to ingest all .md/.txt/.pdf files at once; re-open to sync only changed files (incremental)</li>
+              </ul>
               <h4>Conversations</h4>
               <ul>
                 <li><strong>New Chat</strong> &mdash; archives to History + starts fresh</li>
                 <li><strong>Clear</strong> &mdash; deletes without saving</li>
                 <li><strong>History</strong> &mdash; sidebar, click to resume any past chat</li>
+                <li><strong>Share</strong> &mdash; generate an encrypted or plain link to share any conversation; recipient opens the URL to load it</li>
               </ul>
               <h4>Output &amp; Export</h4>
               <ul>
-                <li><strong>Save as MD</strong> &mdash; download any response as Markdown</li>
+                <li><strong>Save as MD</strong> &mdash; download any response as Markdown (or write directly to open folder if one is active)</li>
                 <li><strong>Code download</strong> &mdash; hover code blocks for download button</li>
                 <li><strong>Export / Import</strong> &mdash; in Memory panel, full data as JSON</li>
                 <li><strong>Auto-backup</strong> &mdash; toggle in Settings to download on New Chat</li>
@@ -1542,7 +1682,9 @@
         <button class="btn-icon btn-danger-text" id="clearBtn" disabled title="Delete current chat">Clear</button>
         <button class="btn-icon" id="settingsBtn" title="System prompt settings">Settings</button>
         <button class="btn-icon" id="memoryBtn" title="View stored memories">Memory</button>
+        <button class="btn-icon" id="folderBtn" title="Open folder — ingest all .md/.txt/.pdf files into memory">Folder</button>
         <button class="btn-icon" id="historyBtn" title="Past conversations">History</button>
+        <button class="btn-icon" id="shareBtn" title="Share conversation (encrypted link)">Share</button>
         <span style="flex:1"></span>
         <select class="model-select" id="modelSelect" title="Choose model">
           <option value="gemma3-1b" selected>Gemma 3 1B &middot; Fast (~760 MB)</option>
@@ -1574,6 +1716,35 @@
         <span class="memory-count" id="historyCount">0 conversations</span>
       </div>
       <div class="history-sidebar-list" id="historyList"></div>
+    </div>
+  </div>
+
+  <!-- Import banner (shown when page loads with a share link) -->
+  <div class="import-banner" id="importBanner">
+    <strong id="importBannerMsg">Shared conversation detected</strong>
+    <input type="password" id="importPassphrase" placeholder="Passphrase" style="display:none">
+    <button id="importConfirmBtn">Load conversation</button>
+    <button class="dismiss-btn" id="importDismissBtn">Dismiss</button>
+  </div>
+
+  <!-- Share modal -->
+  <div class="share-backdrop" id="shareBackdrop">
+    <div class="share-modal">
+      <h3>Share Conversation</h3>
+      <p class="share-meta" id="shareMetaText"></p>
+      <label>
+        <input type="checkbox" id="shareUsePassphrase">
+        Encrypt with passphrase (AES-256-GCM)
+      </label>
+      <input type="password" id="sharePassphrase" placeholder="Passphrase" style="display:none" autocomplete="new-password">
+      <div class="share-url-row">
+        <input type="text" id="shareUrlInput" readonly placeholder="Click Generate to create link…">
+      </div>
+      <div class="share-modal-footer">
+        <button id="shareCopyBtn" disabled>Copy Link</button>
+        <button class="btn-primary" id="shareGenerateBtn">Generate</button>
+        <button id="shareCloseBtn">Close</button>
+      </div>
     </div>
   </div>
 
@@ -1662,6 +1833,7 @@
     let mediaRecorder = null;
     let cameraStream = null;
     let generateResolve = null; // Promise resolve for agentic loop
+    let dirHandle = null;       // FileSystemDirectoryHandle for open folder
 
     // Restore from sessionStorage
     try {
@@ -3054,6 +3226,91 @@ self.addEventListener('message', async (e) => {
       }
     }
 
+    // ── Folder ingestion (FS API) ──────────────────────────────
+    const folderBtn = document.getElementById('folderBtn');
+
+    folderBtn.addEventListener('click', async () => {
+      if (dirHandle) {
+        dirHandle = null;
+        folderBtn.classList.remove('folder-open');
+        folderBtn.title = 'Open folder — ingest all .md/.txt/.pdf files into memory';
+        showToast('Folder closed');
+        return;
+      }
+      if (!window.showDirectoryPicker) {
+        showToast('Folder picker not supported in this browser');
+        return;
+      }
+      try {
+        dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        folderBtn.classList.add('folder-open');
+        folderBtn.title = `Folder: ${dirHandle.name} (click to close)`;
+        await ingestFolder(dirHandle);
+      } catch (e) {
+        if (e.name !== 'AbortError') showToast('Could not open folder: ' + e.message);
+        dirHandle = null;
+        folderBtn.classList.remove('folder-open');
+      }
+    });
+
+    async function ingestFolder(handle) {
+      const SUPPORTED = /\.(md|txt|pdf|docx)$/i;
+      const fpKey = 'lm_folder_fp';
+      const fingerprints = JSON.parse(localStorage.getItem(fpKey) || '{}');
+      let ingested = 0, skipped = 0, failed = 0;
+
+      async function walk(dir, prefix) {
+        for await (const [name, entry] of dir.entries()) {
+          if (name.startsWith('.')) continue;
+          if (entry.kind === 'directory') {
+            await walk(entry, prefix ? `${prefix}/${name}` : name);
+          } else if (SUPPORTED.test(name)) {
+            const fullPath = prefix ? `${prefix}/${name}` : name;
+            const file = await entry.getFile();
+            const fp = `${file.lastModified}-${file.size}`;
+            if (fingerprints[fullPath] === fp) { skipped++; continue; }
+            try {
+              if (/\.pdf$/i.test(name)) {
+                const { text, pageCount } = await extractPDFText(file);
+                if (text.trim()) {
+                  const count = await embedAndStore(text, 'document', fullPath);
+                  const summary = extractiveSummary(text);
+                  if (summary) await embedAndStore(summary, 'document_summary', fullPath);
+                }
+              } else if (/\.docx$/i.test(name)) {
+                const text = await extractDOCXText(file);
+                if (text.trim()) {
+                  const count = await embedAndStore(text, 'document', fullPath);
+                  const summary = extractiveSummary(text);
+                  if (summary) await embedAndStore(summary, 'document_summary', fullPath);
+                }
+              } else {
+                const text = await file.text();
+                if (text.trim()) {
+                  const count = await embedAndStore(text, 'document', fullPath);
+                  const summary = extractiveSummary(text);
+                  if (summary) await embedAndStore(summary, 'document_summary', fullPath);
+                }
+              }
+              fingerprints[fullPath] = fp;
+              ingested++;
+            } catch (e) {
+              console.error(`Failed to ingest ${fullPath}:`, e);
+              failed++;
+            }
+          }
+        }
+      }
+
+      showToast(`Scanning "${handle.name}"…`);
+      await walk(handle, '');
+      localStorage.setItem(fpKey, JSON.stringify(fingerprints));
+      const parts = [`"${handle.name}": ${ingested} file(s) ingested`];
+      if (skipped) parts.push(`${skipped} unchanged`);
+      if (failed) parts.push(`${failed} failed`);
+      showToast(parts.join(', '));
+    }
+
     // ── Document extractors (lazy-loaded) ─────────────────────
     let pdfjsLoaded = false;
 
@@ -4176,14 +4433,27 @@ self.addEventListener('message', async (e) => {
         if (response && response.length > 20) {
           const saveBtn = document.createElement('button');
           saveBtn.className = 'save-md-btn';
-          saveBtn.textContent = 'Save as MD';
-          saveBtn.addEventListener('click', () => {
-            const blob = new Blob([response], { type: 'text/markdown' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url; a.download = `response-${new Date().toISOString().slice(0, 16).replace(/:/g, '')}.md`;
-            a.click();
-            URL.revokeObjectURL(url);
+          saveBtn.textContent = dirHandle ? `Save to ${dirHandle.name}` : 'Save as MD';
+          saveBtn.addEventListener('click', async () => {
+            const filename = `response-${new Date().toISOString().slice(0, 16).replace(/:/g, '')}.md`;
+            if (dirHandle) {
+              try {
+                const fh = await dirHandle.getFileHandle(filename, { create: true });
+                const writable = await fh.createWritable();
+                await writable.write(response);
+                await writable.close();
+                showToast(`Saved to ${dirHandle.name}/${filename}`);
+              } catch (e) {
+                showToast('Write failed: ' + e.message);
+              }
+            } else {
+              const blob = new Blob([response], { type: 'text/markdown' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url; a.download = filename;
+              a.click();
+              URL.revokeObjectURL(url);
+            }
           });
           bubble.appendChild(saveBtn);
         }
@@ -4222,6 +4492,197 @@ self.addEventListener('message', async (e) => {
       if (messages.length > 0) showToast('Chat cleared (not saved to History)');
       resetChatUI();
     });
+
+    // ── Encrypted share links ───────────────────────────────────
+    // URL format:
+    //   #lm:<base64>        plain
+    //   #lme:<b64salt>.<b64iv>.<b64ciphertext>   AES-256-GCM + PBKDF2
+
+    function b64ToArr(b64) {
+      return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    }
+    function arrToB64(arr) {
+      return btoa(String.fromCharCode(...new Uint8Array(arr)));
+    }
+
+    async function deriveKey(passphrase, salt) {
+      const enc = new TextEncoder();
+      const keyMat = await crypto.subtle.importKey(
+        'raw', enc.encode(passphrase), { name: 'PBKDF2' }, false, ['deriveKey']
+      );
+      return crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt, hash: 'SHA-256', iterations: 200000 },
+        keyMat, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+      );
+    }
+
+    async function encryptPayload(json, passphrase) {
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv   = crypto.getRandomValues(new Uint8Array(12));
+      const key  = await deriveKey(passphrase, salt);
+      const data = new TextEncoder().encode(json);
+      const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
+      return `${arrToB64(salt)}.${arrToB64(iv)}.${arrToB64(cipher)}`;
+    }
+
+    async function decryptPayload(encoded, passphrase) {
+      const parts = encoded.split('.');
+      if (parts.length !== 3) throw new Error('Invalid format');
+      const [saltB64, ivB64, cipherB64] = parts;
+      const salt = b64ToArr(saltB64), iv = b64ToArr(ivB64), cipher = b64ToArr(cipherB64);
+      const key = await deriveKey(passphrase, salt);
+      const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipher);
+      return new TextDecoder().decode(plain);
+    }
+
+    function buildConversationPayload() {
+      // Strip blobs; keep text content only
+      const clean = messages.map(m => {
+        if (typeof m.content === 'string') return { role: m.role, content: m.content };
+        if (Array.isArray(m.content)) {
+          const text = m.content.filter(p => p.type === 'text').map(p => p.text).join('\n');
+          return { role: m.role, content: text };
+        }
+        return { role: m.role, content: String(m.content || '') };
+      }).filter(m => m.content);
+      return { v: 1, model: activeModelKey, created: new Date().toISOString(), messages: clean };
+    }
+
+    // Share modal
+    const shareBackdrop  = document.getElementById('shareBackdrop');
+    const shareMetaText  = document.getElementById('shareMetaText');
+    const sharePassphrase    = document.getElementById('sharePassphrase');
+    const shareUsePassphrase = document.getElementById('shareUsePassphrase');
+    const shareUrlInput  = document.getElementById('shareUrlInput');
+    const shareGenerateBtn = document.getElementById('shareGenerateBtn');
+    const shareCopyBtn   = document.getElementById('shareCopyBtn');
+    const shareCloseBtn  = document.getElementById('shareCloseBtn');
+    const shareBtn       = document.getElementById('shareBtn');
+
+    shareBtn.addEventListener('click', () => {
+      if (!messages.length) { showToast('Nothing to share yet'); return; }
+      const userTurns = messages.filter(m => m.role === 'user').length;
+      shareMetaText.textContent = `${messages.length} message(s) · ${userTurns} turn(s)`;
+      shareUrlInput.value = '';
+      shareCopyBtn.disabled = true;
+      shareUsePassphrase.checked = false;
+      sharePassphrase.style.display = 'none';
+      sharePassphrase.value = '';
+      shareBackdrop.classList.add('open');
+    });
+
+    shareUsePassphrase.addEventListener('change', () => {
+      sharePassphrase.style.display = shareUsePassphrase.checked ? '' : 'none';
+      if (shareUsePassphrase.checked) sharePassphrase.focus();
+      shareUrlInput.value = '';
+      shareCopyBtn.disabled = true;
+    });
+
+    shareGenerateBtn.addEventListener('click', async () => {
+      const usePass = shareUsePassphrase.checked;
+      const pass    = sharePassphrase.value.trim();
+      if (usePass && !pass) { showToast('Enter a passphrase first'); sharePassphrase.focus(); return; }
+
+      shareGenerateBtn.disabled = true;
+      shareGenerateBtn.textContent = 'Generating…';
+      try {
+        const payload = buildConversationPayload();
+        const json    = JSON.stringify(payload);
+        let fragment;
+        if (usePass) {
+          const enc = await encryptPayload(json, pass);
+          fragment = '#lme:' + enc;
+        } else {
+          fragment = '#lm:' + btoa(unescape(encodeURIComponent(json)));
+        }
+        const url = location.origin + location.pathname + fragment;
+        shareUrlInput.value = url;
+        shareCopyBtn.disabled = false;
+      } catch (e) {
+        showToast('Failed to generate link: ' + e.message);
+      } finally {
+        shareGenerateBtn.disabled = false;
+        shareGenerateBtn.textContent = 'Generate';
+      }
+    });
+
+    shareCopyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(shareUrlInput.value);
+        shareCopyBtn.textContent = 'Copied!';
+        setTimeout(() => { shareCopyBtn.textContent = 'Copy Link'; }, 1800);
+      } catch {
+        shareUrlInput.select();
+        document.execCommand('copy');
+      }
+    });
+
+    shareCloseBtn.addEventListener('click', () => shareBackdrop.classList.remove('open'));
+    shareBackdrop.addEventListener('click', e => { if (e.target === shareBackdrop) shareBackdrop.classList.remove('open'); });
+
+    // Import banner (on load, detect share link in URL hash)
+    const importBanner      = document.getElementById('importBanner');
+    const importBannerMsg   = document.getElementById('importBannerMsg');
+    const importPassphrase  = document.getElementById('importPassphrase');
+    const importConfirmBtn  = document.getElementById('importConfirmBtn');
+    const importDismissBtn  = document.getElementById('importDismissBtn');
+    let _pendingSharePayload = null;   // decoded plain payload
+    let _pendingShareEncoded = null;   // raw encoded string for encrypted links
+
+    async function checkShareLink() {
+      const hash = location.hash;
+      if (!hash) return;
+      if (hash.startsWith('#lm:')) {
+        try {
+          const json = decodeURIComponent(escape(atob(hash.slice(4))));
+          _pendingSharePayload = JSON.parse(json);
+          importBannerMsg.textContent = `Shared conversation (${_pendingSharePayload.messages?.length ?? '?'} messages) — load it?`;
+          importBanner.classList.add('open');
+        } catch (e) { console.warn('Bad share link', e); }
+      } else if (hash.startsWith('#lme:')) {
+        _pendingShareEncoded = hash.slice(5);
+        importBannerMsg.textContent = 'Encrypted shared conversation — enter passphrase to load:';
+        importPassphrase.style.display = '';
+        importBanner.classList.add('open');
+      }
+    }
+
+    importConfirmBtn.addEventListener('click', async () => {
+      try {
+        let payload = _pendingSharePayload;
+        if (!payload) {
+          const pass = importPassphrase.value;
+          if (!pass) { showToast('Enter the passphrase'); importPassphrase.focus(); return; }
+          const json = await decryptPayload(_pendingShareEncoded, pass);
+          payload = JSON.parse(json);
+        }
+        if (!payload?.messages?.length) { showToast('No messages found in link'); return; }
+        // Load into current session
+        resetChatUI();
+        for (const msg of payload.messages) {
+          if (msg.role === 'user') {
+            addUserMessage(msg.content, false);
+          } else if (msg.role === 'assistant') {
+            const { bubble } = addAssistantPlaceholder();
+            updateAssistantBubble(bubble, msg.content);
+          }
+          messages.push(msg);
+        }
+        saveChat();
+        importBanner.classList.remove('open');
+        history.replaceState(null, '', location.pathname);
+        showToast(`Loaded ${payload.messages.length} messages`);
+      } catch (e) {
+        showToast('Could not load: ' + e.message);
+      }
+    });
+
+    importDismissBtn.addEventListener('click', () => {
+      importBanner.classList.remove('open');
+      history.replaceState(null, '', location.pathname);
+    });
+
+    checkShareLink();
 
     // ── Init ────────────────────────────────────────────────────
     renderRestoredMessages();

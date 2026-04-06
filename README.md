@@ -41,6 +41,7 @@ LocalMind remembers across sessions. Powered by a local RAG pipeline:
 - **MiniLM embeddings** (~23 MB, runs on CPU alongside the main model)
 - **IndexedDB vector store** with cosine similarity search
 - **Document upload** — PDF, DOCX, .txt, .md, .json, .csv — text extracted, chunked, and stored as searchable knowledge
+- **Folder ingestion** — click "Folder" to open a local directory via the File System Access API; all `.md`, `.txt`, `.pdf`, `.docx` files are recursively ingested. Re-open the same folder to sync only changed files (fingerprint-based, size + last-modified)
 - **Auto-summarize on upload** — documents are summarized on ingestion for quick retrieval
 - **Post-session summarization** — conversations are summarized and stored when you start a new chat
 - **Memory inspector** — click "Memory" to browse, search, and delete stored memories
@@ -81,9 +82,20 @@ Every response shows a transparency badge: **On-device** (pure local), **Agent**
 
 Documents are extracted, chunked, embedded, and auto-summarized on upload. Video is experimental — keyframes and audio are extracted separately.
 
+## Sharing conversations
+
+Click **Share** in the toolbar to generate a shareable link for the current conversation:
+
+- **Plain link** — conversation is base64-encoded into the URL fragment (`#lm:…`). No server involved.
+- **Encrypted link** — AES-256-GCM with PBKDF2 key derivation (200k rounds). Encoded as `#lme:<salt>.<iv>.<ciphertext>`. Only someone with the passphrase can read it.
+
+The recipient opens the URL, sees an import banner, and clicks "Load conversation" (entering the passphrase if encrypted). No account, no server, no data in transit beyond the URL itself.
+
+Image and audio attachments are stripped — text content only.
+
 ## Output artifacts
 
-- **Save as Markdown** — download any assistant response as a .md file
+- **Save as Markdown** — download any assistant response as a .md file. If a folder is open via Folder ingestion, the file is written directly into that folder instead of downloading.
 - **Code download** — hover over code blocks for a download button (saves with correct extension)
 - **Model cache management** — view cached model sizes and clear cache in Settings
 
