@@ -1028,7 +1028,7 @@
       display: none;
       padding: 12px 16px;
       border-top: 1px solid var(--gray-200);
-      max-height: 260px;
+      max-height: 400px;
       overflow-y: auto;
     }
 
@@ -1051,7 +1051,7 @@
     .memory-search-row {
       display: flex;
       gap: 6px;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }
 
     .memory-search-input {
@@ -1073,6 +1073,83 @@
       color: var(--gray-500);
     }
 
+    /* Category filter pills */
+    .memory-cat-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+
+    .memory-cat-pill {
+      padding: 2px 8px;
+      border-radius: 20px;
+      border: 1px solid var(--gray-200);
+      background: var(--white);
+      font-size: 0.7rem;
+      color: var(--gray-600);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+
+    .memory-cat-pill:hover { border-color: var(--gray-400); }
+
+    .memory-cat-pill.active {
+      background: var(--indigo-100);
+      border-color: var(--indigo-500);
+      color: var(--indigo-600);
+      font-weight: 600;
+    }
+
+    /* Source group (for document categories) */
+    .memory-source-group {
+      border: 1px solid var(--gray-200);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 6px;
+    }
+
+    .memory-source-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      background: var(--gray-100);
+      font-size: 0.75rem;
+    }
+
+    .memory-source-name {
+      flex: 1;
+      font-weight: 600;
+      color: var(--gray-700);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .memory-source-count {
+      color: var(--gray-400);
+      flex-shrink: 0;
+    }
+
+    .memory-source-del {
+      font-size: 0.68rem;
+      color: var(--gray-400);
+      background: none;
+      border: 1px solid var(--gray-200);
+      border-radius: 4px;
+      padding: 1px 6px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .memory-source-del:hover { color: #ef4444; border-color: #ef4444; }
+
+    .memory-source-group .memory-item {
+      border-radius: 0;
+      border-top: 1px solid var(--gray-200);
+    }
+
     .memory-list {
       display: flex;
       flex-direction: column;
@@ -1091,9 +1168,13 @@
       line-height: 1.45;
     }
 
-    .memory-item-text { flex: 1; }
+    .memory-item-text { flex: 1; min-width: 0; }
 
     .memory-item-meta {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px;
       font-size: 0.68rem;
       color: var(--gray-400);
       margin-top: 2px;
@@ -1107,15 +1188,70 @@
       border: none;
       background: none;
       line-height: 1;
+      flex-shrink: 0;
     }
 
     .memory-item-del:hover { color: #ef4444; }
+
+    /* Category badges */
+    .mem-cat {
+      display: inline-block;
+      padding: 0 5px;
+      border-radius: 4px;
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }
+    .mem-cat-fact         { background: #dbeafe; color: #1d4ed8; }
+    .mem-cat-preference   { background: #ede9fe; color: #6d28d9; }
+    .mem-cat-finding      { background: #d1fae5; color: #065f46; }
+    .mem-cat-document     { background: #ffedd5; color: #c2410c; }
+    .mem-cat-document_summary { background: #fef3c7; color: #92400e; }
+    .mem-cat-conversation { background: var(--gray-200); color: var(--gray-700); }
 
     .memory-empty {
       text-align: center;
       color: var(--gray-400);
       font-size: 0.78rem;
       padding: 16px 0;
+    }
+
+    /* Audit view */
+    .audit-section { margin-bottom: 10px; }
+
+    .audit-section-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 0;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--gray-700);
+      border-bottom: 1px solid var(--gray-200);
+      margin-bottom: 6px;
+    }
+
+    .audit-section-header span { flex: 1; }
+
+    .audit-clean {
+      text-align: center;
+      background: #d1fae5;
+      color: #065f46;
+      border-radius: 8px;
+      padding: 14px;
+      font-size: 0.82rem;
+      font-weight: 500;
+    }
+
+    .audit-warn {
+      font-size: 0.7rem;
+      color: var(--gray-500);
+      background: var(--loading-bg);
+      border: 1px solid var(--loading-border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      margin-bottom: 8px;
     }
 
     .history-item {
@@ -1668,10 +1804,12 @@
           <input type="text" id="memorySearch" placeholder="Search memories..." class="memory-search-input">
           <button class="btn-icon memory-clear-btn" id="memoryClearAll" title="Clear all memories">Clear All</button>
         </div>
+        <div class="memory-cat-pills" id="memoryCatPills"></div>
         <div class="memory-list" id="memoryList"></div>
         <div class="memory-search-row" style="margin-top:8px;border-top:1px solid var(--gray-200);padding-top:8px">
           <button class="btn-icon" id="memoryExport" title="Export all data">Export</button>
           <button class="btn-icon" id="memoryImport" title="Import data">Import</button>
+          <button class="btn-icon" id="memoryAuditBtn" title="Audit memory for stale, duplicate, and outlier chunks">Audit</button>
           <input type="file" id="importFileInput" accept=".json" style="display:none">
         </div>
       </div>
@@ -2844,51 +2982,157 @@ self.addEventListener('message', async (e) => {
     const memorySearch = document.getElementById('memorySearch');
     const memoryClearAll = document.getElementById('memoryClearAll');
 
+    const memoryCatPills = document.getElementById('memoryCatPills');
+    let memoryCatFilter = 'all';
+
     memoryBtn.addEventListener('click', () => {
       memoryPanel.classList.toggle('open');
       settingsPanel.classList.remove('open');
       closeHistorySidebar();
-      if (memoryPanel.classList.contains('open')) refreshMemoryPanel();
+      if (memoryPanel.classList.contains('open')) {
+        refreshMemoryPanel();
+      } else if (auditMode) {
+        // Reset audit state when panel is closed
+        auditMode = false;
+        memoryAuditBtn.textContent = 'Audit';
+        memoryCatPills.style.display = '';
+        memorySearch.closest('.memory-search-row').style.display = '';
+      }
     });
 
-    async function refreshMemoryPanel(filter) {
+    function relTime(ts) {
+      const m = Math.floor((Date.now() - ts) / 60000);
+      if (m < 1) return 'just now';
+      if (m < 60) return `${m}m ago`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h}h ago`;
+      const d = Math.floor(h / 24);
+      if (d < 30) return `${d}d ago`;
+      return new Date(ts).toLocaleDateString();
+    }
+
+    function srcBasename(src) {
+      if (!src) return 'unknown';
+      return src.includes('/') ? src.split('/').pop() : src;
+    }
+
+    function catBadgeHtml(cat) {
+      return `<span class="mem-cat mem-cat-${escapeHtml(cat)}">${escapeHtml(cat)}</span>`;
+    }
+
+    function makeChunkItem(chunk, showCat) {
+      const item = document.createElement('div');
+      item.className = 'memory-item';
+      const preview = chunk.text.length > 150 ? chunk.text.slice(0, 150) + '…' : chunk.text;
+      const src = srcBasename(chunk.source);
+      item.innerHTML = `
+        <div class="memory-item-text">
+          ${escapeHtml(preview)}
+          <div class="memory-item-meta">
+            ${showCat ? catBadgeHtml(chunk.category) : ''}
+            <span title="${escapeHtml(chunk.source || '')}">${escapeHtml(src)}</span>
+            &middot; ${relTime(chunk.timestamp)}
+          </div>
+        </div>
+        <button class="memory-item-del" title="Delete">&times;</button>
+      `;
+      item.querySelector('.memory-item-del').addEventListener('click', async () => {
+        await deleteChunk(chunk.id);
+        refreshMemoryPanel();
+      });
+      return item;
+    }
+
+    async function refreshMemoryPanel() {
+      const textQ  = memorySearch.value.trim().toLowerCase();
+      const catF   = memoryCatFilter;
+
       try {
-        const chunks = await getAllChunks();
-        memoryCount.textContent = `${chunks.length} memor${chunks.length === 1 ? 'y' : 'ies'}`;
+        const all = await getAllChunks();
+        memoryCount.textContent = `${all.length} chunk${all.length === 1 ? '' : 's'}`;
+
+        // Build category counts for pills
+        const catCounts = {};
+        for (const c of all) catCounts[c.category] = (catCounts[c.category] || 0) + 1;
+
+        // Render pills
+        const CAT_ORDER = ['all', 'fact', 'preference', 'finding', 'document', 'document_summary', 'conversation'];
+        const cats = ['all', ...CAT_ORDER.slice(1).filter(c => catCounts[c])];
+        memoryCatPills.innerHTML = '';
+        for (const cat of cats) {
+          const pill = document.createElement('button');
+          pill.className = 'memory-cat-pill' + (cat === catF ? ' active' : '');
+          const label = cat === 'document_summary' ? 'doc summary' : cat;
+          const count = cat === 'all' ? all.length : (catCounts[cat] || 0);
+          pill.textContent = `${label} (${count})`;
+          pill.addEventListener('click', () => {
+            memoryCatFilter = cat;
+            refreshMemoryPanel();
+          });
+          memoryCatPills.appendChild(pill);
+        }
+
+        // Filter
+        let display = catF === 'all' ? all : all.filter(c => c.category === catF);
+        if (textQ) {
+          display = display.filter(c =>
+            c.text.toLowerCase().includes(textQ) ||
+            c.category.includes(textQ) ||
+            (c.source && c.source.toLowerCase().includes(textQ))
+          );
+        }
+
         memoryList.innerHTML = '';
 
-        if (chunks.length === 0) {
-          memoryList.innerHTML = '<div class="memory-empty">No memories stored yet</div>';
+        if (display.length === 0) {
+          memoryList.innerHTML = '<div class="memory-empty">No memories found</div>';
           return;
         }
 
-        let display = chunks.sort((a, b) => b.timestamp - a.timestamp);
-        if (filter) {
-          const q = filter.toLowerCase();
-          display = display.filter(c => c.text.toLowerCase().includes(q) || c.category.includes(q) || (c.source && c.source.toLowerCase().includes(q)));
-        }
+        const isDocCat = catF === 'document' || catF === 'document_summary';
 
-        for (const chunk of display.slice(0, 50)) {
-          const item = document.createElement('div');
-          item.className = 'memory-item';
-          const preview = chunk.text.length > 120 ? chunk.text.slice(0, 120) + '...' : chunk.text;
-          const date = new Date(chunk.timestamp).toLocaleDateString();
-          item.innerHTML = `
-            <div class="memory-item-text">
-              ${escapeHtml(preview)}
-              <div class="memory-item-meta">${escapeHtml(chunk.category)} &middot; ${escapeHtml(chunk.source || 'unknown')} &middot; ${date}</div>
-            </div>
-            <button class="memory-item-del" title="Delete">&times;</button>
-          `;
-          item.querySelector('.memory-item-del').addEventListener('click', async () => {
-            await deleteChunk(chunk.id);
-            refreshMemoryPanel(memorySearch.value.trim());
-          });
-          memoryList.appendChild(item);
-        }
-
-        if (display.length > 50) {
-          memoryList.insertAdjacentHTML('beforeend', `<div class="memory-empty">${display.length - 50} more not shown</div>`);
+        if (isDocCat) {
+          // Group by source
+          const groups = {};
+          for (const c of display) {
+            const src = c.source || 'unknown';
+            if (!groups[src]) groups[src] = [];
+            groups[src].push(c);
+          }
+          for (const [src, items] of Object.entries(groups).sort()) {
+            const basename = srcBasename(src);
+            const group = document.createElement('div');
+            group.className = 'memory-source-group';
+            const header = document.createElement('div');
+            header.className = 'memory-source-header';
+            header.innerHTML = `
+              <span class="memory-source-name" title="${escapeHtml(src)}">${escapeHtml(basename)}</span>
+              <span class="memory-source-count">${items.length} chunk${items.length === 1 ? '' : 's'}</span>
+              <button class="memory-source-del">Delete all</button>
+            `;
+            header.querySelector('.memory-source-del').addEventListener('click', async () => {
+              if (!confirm(`Delete all ${items.length} chunk(s) from "${basename}"?`)) return;
+              for (const c of items) await deleteChunk(c.id);
+              refreshMemoryPanel();
+            });
+            group.appendChild(header);
+            for (const chunk of items.sort((a, b) => b.timestamp - a.timestamp)) {
+              group.appendChild(makeChunkItem(chunk, false));
+            }
+            memoryList.appendChild(group);
+          }
+        } else {
+          // Flat list sorted newest-first
+          const sorted = display.sort((a, b) => b.timestamp - a.timestamp);
+          const showCat = catF === 'all';
+          const LIMIT = 200;
+          for (const chunk of sorted.slice(0, LIMIT)) {
+            memoryList.appendChild(makeChunkItem(chunk, showCat));
+          }
+          if (sorted.length > LIMIT) {
+            memoryList.insertAdjacentHTML('beforeend',
+              `<div class="memory-empty">${sorted.length - LIMIT} more — use a category filter or search to narrow</div>`);
+          }
         }
       } catch (e) {
         memoryList.innerHTML = `<div class="memory-empty">Error loading memories</div>`;
@@ -2896,13 +3140,187 @@ self.addEventListener('message', async (e) => {
       }
     }
 
-    memorySearch.addEventListener('input', () => refreshMemoryPanel(memorySearch.value.trim()));
+    memorySearch.addEventListener('input', () => refreshMemoryPanel());
 
     memoryClearAll.addEventListener('click', async () => {
       if (!confirm('Delete all stored memories? This cannot be undone.')) return;
       await clearAllChunks();
       refreshMemoryPanel();
     });
+
+    // ── Memory audit ────────────────────────────────────────────
+    const memoryAuditBtn = document.getElementById('memoryAuditBtn');
+    let auditMode = false;
+
+    memoryAuditBtn.addEventListener('click', async () => {
+      if (auditMode) {
+        auditMode = false;
+        memoryAuditBtn.textContent = 'Audit';
+        memoryCatPills.style.display = '';
+        memorySearch.closest('.memory-search-row').style.display = '';
+        refreshMemoryPanel();
+        return;
+      }
+      auditMode = true;
+      memoryAuditBtn.textContent = '← Back';
+      memoryCatPills.style.display = 'none';
+      memorySearch.closest('.memory-search-row').style.display = 'none';
+      memoryList.innerHTML = '<div class="memory-empty">Running audit…</div>';
+      try {
+        const results = await runMemoryAudit();
+        renderAuditResults(results);
+      } catch (e) {
+        memoryList.innerHTML = `<div class="memory-empty">Audit failed: ${escapeHtml(e.message)}</div>`;
+        console.error('Audit error:', e);
+      }
+    });
+
+    async function runMemoryAudit() {
+      const STALE_DAYS      = 60;
+      const DUPE_THRESHOLD  = 0.92;
+      const OUTLIER_MAX_SIM = 0.20;
+      const MIN_CAT_SIZE    = 5;
+      const CAP             = 600;
+
+      const all     = await getAllChunks();
+      const withEmb = all.filter(c => c.embedding && c.embedding.length > 0);
+      const capped  = withEmb.length > CAP;
+      const work    = capped ? withEmb.slice(0, CAP) : withEmb;
+
+      // Stale
+      const stale = work.filter(c => Date.now() - c.timestamp > STALE_DAYS * 86400000);
+
+      // Group by category for pairwise ops
+      const byCat = {};
+      for (const c of work) {
+        (byCat[c.category] = byCat[c.category] || []).push(c);
+      }
+
+      const dupeIds  = new Set();
+      const dupePairs = [];   // [[kept, flagged], ...]
+      const outliers  = [];
+
+      for (const members of Object.values(byCat)) {
+        const n = members.length;
+        const avgSims = new Float32Array(n);
+
+        for (let i = 0; i < n; i++) {
+          let sum = 0;
+          for (let j = 0; j < n; j++) {
+            if (i === j) continue;
+            const sim = cosineSimilarity(members[i].embedding, members[j].embedding);
+            sum += sim;
+            if (sim >= DUPE_THRESHOLD && i < j
+                && !dupeIds.has(members[i].id)
+                && !dupeIds.has(members[j].id)) {
+              dupePairs.push([members[i], members[j]]);
+              dupeIds.add(members[j].id);
+            }
+          }
+          avgSims[i] = n > 1 ? sum / (n - 1) : 1;
+        }
+
+        if (n >= MIN_CAT_SIZE) {
+          for (let i = 0; i < n; i++) {
+            if (avgSims[i] < OUTLIER_MAX_SIM && !dupeIds.has(members[i].id)) {
+              outliers.push(members[i]);
+            }
+          }
+        }
+      }
+
+      return { total: work.length, capped, stale, dupePairs, dupeIds, outliers };
+    }
+
+    function renderAuditResults({ total, capped, stale, dupePairs, outliers }) {
+      memoryList.innerHTML = '';
+
+      if (capped) {
+        memoryList.insertAdjacentHTML('beforeend',
+          `<div class="audit-warn">Only the first 600 chunks were analysed. Use category filters to audit subsets of larger stores.</div>`);
+      }
+
+      const flagCount = stale.length + dupePairs.length + outliers.length;
+
+      if (flagCount === 0) {
+        memoryList.insertAdjacentHTML('beforeend',
+          `<div class="audit-clean">✓ Memory looks clean — no stale, duplicate, or outlier chunks found across ${total} chunk(s).</div>`);
+        return;
+      }
+
+      if (stale.length > 0) {
+        memoryList.appendChild(makeAuditSection(
+          `${stale.length} stale — older than 60 days`, stale,
+          async () => { for (const c of stale) await deleteChunk(c.id); rerunAudit(); }
+        ));
+      }
+
+      if (dupePairs.length > 0) {
+        const flagged = dupePairs.map(([, b]) => b);
+        memoryList.appendChild(makeAuditSection(
+          `${dupePairs.length} near-duplicate(s) — keeping one of each pair`, flagged,
+          async () => { for (const c of flagged) await deleteChunk(c.id); rerunAudit(); }
+        ));
+      }
+
+      if (outliers.length > 0) {
+        memoryList.appendChild(makeAuditSection(
+          `${outliers.length} outlier(s) — low similarity to their category`, outliers,
+          async () => { for (const c of outliers) await deleteChunk(c.id); rerunAudit(); }
+        ));
+      }
+    }
+
+    async function rerunAudit() {
+      memoryList.innerHTML = '<div class="memory-empty">Re-running…</div>';
+      try {
+        renderAuditResults(await runMemoryAudit());
+      } catch (e) {
+        memoryList.innerHTML = `<div class="memory-empty">Audit failed: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function makeAuditSection(label, chunks, onDeleteAll) {
+      const section = document.createElement('div');
+      section.className = 'audit-section';
+
+      const header = document.createElement('div');
+      header.className = 'audit-section-header';
+      const delBtn = document.createElement('button');
+      delBtn.className = 'memory-source-del';
+      delBtn.textContent = 'Delete all';
+      delBtn.addEventListener('click', async () => {
+        if (!confirm(`Delete ${chunks.length} item(s)?`)) return;
+        await onDeleteAll();
+      });
+      header.innerHTML = `<span>${escapeHtml(label)}</span>`;
+      header.appendChild(delBtn);
+      section.appendChild(header);
+
+      const PREVIEW = 20;
+      for (const chunk of chunks.slice(0, PREVIEW)) {
+        const item = makeChunkItem(chunk, true);
+        // Override the delete handler so it reruns audit afterward
+        item.querySelector('.memory-item-del').replaceWith((() => {
+          const btn = document.createElement('button');
+          btn.className = 'memory-item-del';
+          btn.title = 'Delete';
+          btn.textContent = '×';
+          btn.addEventListener('click', async () => {
+            await deleteChunk(chunk.id);
+            rerunAudit();
+          });
+          return btn;
+        })());
+        section.appendChild(item);
+      }
+      if (chunks.length > PREVIEW) {
+        section.insertAdjacentHTML('beforeend',
+          `<div class="memory-empty">…and ${chunks.length - PREVIEW} more</div>`);
+      }
+
+      return section;
+    }
 
     // ── Export / Import ─────────────────────────────────────────
     const memoryExport = document.getElementById('memoryExport');
