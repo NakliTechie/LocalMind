@@ -1400,6 +1400,72 @@
       color: var(--gray-800);
     }
 
+    /* Batch panel */
+    .batch-panel {
+      display: none;
+      padding: 12px 16px;
+      border-top: 1px solid var(--gray-200);
+      background: var(--gray-50);
+      flex-shrink: 0;
+    }
+    .batch-panel.open { display: block; }
+
+    .batch-textarea {
+      width: 100%;
+      min-height: 96px;
+      max-height: 200px;
+      border: 1.5px solid var(--gray-200);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.78rem;
+      font-family: inherit;
+      color: var(--gray-800);
+      background: var(--white);
+      resize: vertical;
+      outline: none;
+      line-height: 1.5;
+      margin: 8px 0;
+    }
+    .batch-textarea:focus { border-color: var(--indigo-500); }
+
+    .batch-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .batch-chain-label {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.75rem;
+      color: var(--gray-600);
+      cursor: pointer;
+      flex: 1;
+    }
+
+    .batch-progress {
+      font-size: 0.72rem;
+      color: var(--gray-500);
+      min-width: 80px;
+      text-align: right;
+    }
+
+    .btn-run {
+      padding: 4px 14px;
+      border-radius: 7px;
+      border: none;
+      background: var(--indigo-500);
+      color: white;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-run:hover:not(:disabled) { background: var(--indigo-600); }
+    .btn-run:disabled { opacity: 0.45; cursor: not-allowed; }
+
     /* Share modal */
     .share-backdrop {
       position: fixed; inset: 0;
@@ -1688,6 +1754,13 @@
                 <li><strong>Export / Import</strong> &mdash; in Memory panel, full data as JSON</li>
                 <li><strong>Auto-backup</strong> &mdash; toggle in Settings to download on New Chat</li>
               </ul>
+              <h4>Batch Prompts</h4>
+              <ul>
+                <li>Enter one prompt per line in the Batch panel &mdash; they run sequentially through the full agent loop</li>
+                <li><strong>{{previous}}</strong> &mdash; explicit placeholder substituted with the previous response text</li>
+                <li><strong>Auto-inject</strong> &mdash; checkbox (on by default) appends the previous response as context even without a placeholder; disabled for any prompt that already contains {{previous}}</li>
+                <li><strong>Stop</strong> &mdash; halts after the current generation finishes; progress shown live</li>
+              </ul>
               <h4>Other</h4>
               <ul>
                 <li><strong>Web Search</strong> &mdash; Settings &rarr; provider + API key &rarr; &#127760; button</li>
@@ -1820,6 +1893,24 @@
         </div>
       </div>
 
+      <!-- Batch panel -->
+      <div class="batch-panel" id="batchPanel">
+        <div class="memory-header">
+          <strong>Batch Prompts</strong>
+          <span class="memory-count" id="batchCount">0 prompts</span>
+        </div>
+        <textarea class="batch-textarea" id="batchTextarea" placeholder="One prompt per line.&#10;Use {{previous}} to insert the previous response into the next prompt.&#10;&#10;Example:&#10;Summarise the history of WebGPU&#10;Now translate this to French: {{previous}}"></textarea>
+        <div class="batch-controls">
+          <label class="batch-chain-label">
+            <input type="checkbox" id="batchChainToggle" checked>
+            Auto-inject {{previous}}
+          </label>
+          <span class="batch-progress" id="batchProgress"></span>
+          <button class="btn-icon" id="batchStopBtn" disabled>Stop</button>
+          <button class="btn-run" id="batchRunBtn" disabled>Run</button>
+        </div>
+      </div>
+
       <!-- Actions bar -->
       <div class="actions-bar">
         <button class="btn-icon" id="newChatBtn" disabled title="Archive and start new chat">New Chat</button>
@@ -1829,6 +1920,7 @@
         <button class="btn-icon" id="folderBtn" title="Open folder — ingest all .md/.txt/.pdf files into memory">Folder</button>
         <button class="btn-icon" id="historyBtn" title="Past conversations">History</button>
         <button class="btn-icon" id="shareBtn" title="Share conversation (encrypted link)">Share</button>
+        <button class="btn-icon" id="batchBtn" title="Batch prompts — run a list of questions sequentially">Batch</button>
         <span style="flex:1"></span>
         <select class="model-select" id="modelSelect" title="Choose model">
           <option value="gemma3-1b" selected>Gemma 3 1B &middot; Fast (~760 MB)</option>
@@ -4423,6 +4515,7 @@ self.addEventListener('message', async (e) => {
           newChatBtn.disabled = false;
           modelSelect.disabled = false;
           updateModelUI();
+          updateBatchCount();
           chatInput.focus();
         }
 
@@ -4915,6 +5008,100 @@ self.addEventListener('message', async (e) => {
       if (generating) return;
       if (messages.length > 0) showToast('Chat cleared (not saved to History)');
       resetChatUI();
+    });
+
+    // ── Batch prompts ────────────────────────────────────────────
+    const batchBtn      = document.getElementById('batchBtn');
+    const batchPanel    = document.getElementById('batchPanel');
+    const batchTextarea = document.getElementById('batchTextarea');
+    const batchCount    = document.getElementById('batchCount');
+    const batchProgress = document.getElementById('batchProgress');
+    const batchRunBtn   = document.getElementById('batchRunBtn');
+    const batchStopBtn  = document.getElementById('batchStopBtn');
+    const batchChainToggle = document.getElementById('batchChainToggle');
+
+    let batchRunning = false;
+    let batchShouldStop = false;
+
+    batchBtn.addEventListener('click', () => {
+      batchPanel.classList.toggle('open');
+      settingsPanel.classList.remove('open');
+      memoryPanel.classList.remove('open');
+      closeHistorySidebar();
+    });
+
+    function parseBatchPrompts() {
+      return batchTextarea.value.split('\n').map(l => l.trim()).filter(Boolean);
+    }
+
+    function updateBatchCount() {
+      const n = parseBatchPrompts().length;
+      batchCount.textContent = `${n} prompt${n === 1 ? '' : 's'}`;
+      batchRunBtn.disabled = n === 0 || !modelReady || batchRunning;
+    }
+
+    batchTextarea.addEventListener('input', updateBatchCount);
+
+    batchStopBtn.addEventListener('click', () => {
+      batchShouldStop = true;
+      batchStopBtn.disabled = true;
+      batchProgress.textContent = 'Stopping…';
+    });
+
+    batchRunBtn.addEventListener('click', async () => {
+      if (!modelReady) { showToast('Model not ready yet'); return; }
+      if (generating)  { showToast('Already generating — wait for current response'); return; }
+
+      const prompts = parseBatchPrompts();
+      if (!prompts.length) return;
+
+      batchRunning    = true;
+      batchShouldStop = false;
+      batchRunBtn.disabled  = true;
+      batchStopBtn.disabled = false;
+      batchTextarea.disabled = true;
+
+      let lastResponse = '';
+      let ranCount = 0;
+
+      for (let i = 0; i < prompts.length; i++) {
+        if (batchShouldStop) break;
+        ranCount = i + 1;
+
+        let prompt = prompts[i];
+
+        // {{previous}} substitution (always — user put it there explicitly)
+        if (i > 0 && lastResponse) {
+          prompt = prompt.replace(/\{\{previous\}\}/g, lastResponse);
+        }
+
+        // Auto-inject: if chain toggle is on and no explicit {{previous}}, append previous as context
+        if (batchChainToggle.checked && i > 0 && lastResponse && !prompts[i].includes('{{previous}}')) {
+          prompt = `${prompt}\n\n[Previous response for context:\n${lastResponse}\n]`;
+        }
+
+        batchProgress.textContent = `${i + 1} / ${prompts.length}`;
+
+        chatInput.value = prompt;
+        await sendMessage();
+
+        // Grab the last assistant turn
+        const last = messages[messages.length - 1];
+        if (last?.role === 'assistant') {
+          lastResponse = typeof last.content === 'string' ? last.content : '';
+        }
+      }
+
+      const wasStopped = batchShouldStop;
+      batchRunning    = false;
+      batchShouldStop = false;
+      batchRunBtn.disabled  = false;
+      batchStopBtn.disabled = true;
+      batchTextarea.disabled = false;
+
+      const ran = ranCount;
+      batchProgress.textContent = wasStopped ? `Stopped at ${ran}/${prompts.length}.` : `Done (${prompts.length} prompts)`;
+      showToast(wasStopped ? 'Batch stopped' : 'Batch complete');
     });
 
     // ── Encrypted share links ───────────────────────────────────

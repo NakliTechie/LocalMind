@@ -90,6 +90,26 @@ Every response shows a transparency badge: **On-device** (pure local), **Agent**
 
 Documents are extracted, chunked, embedded, and auto-summarized on upload. Video is experimental — keyframes and audio are extracted separately.
 
+## Batch prompts
+
+Click **Batch** in the toolbar to open the batch panel. Enter one prompt per line and click **Run** — each prompt is sent sequentially through the full agent loop (including tool calls and web search if configured), with results appearing in the main chat as normal messages.
+
+**Chaining** — two modes, combinable:
+
+| Mode | How |
+|---|---|
+| **Explicit `{{previous}}`** | Write `{{previous}}` anywhere in a prompt — it's substituted with the full text of the previous response before sending |
+| **Auto-inject** | Checkbox (on by default) — if a prompt has no `{{previous}}`, the previous response is appended as `[Previous response for context: …]` automatically |
+
+**Stop** halts the run after the current generation completes (never mid-stream). Progress is shown live (`2 / 5`).
+
+Example pipeline:
+```
+Summarise the history of the Suez Canal
+Now extract the 5 most important dates from this: {{previous}}
+Translate that list to Hindi: {{previous}}
+```
+
 ## Sharing conversations
 
 Click **Share** in the toolbar to generate a shareable link for the current conversation:
