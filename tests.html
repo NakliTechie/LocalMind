@@ -182,7 +182,7 @@
     {
       const empty = '';
       const chunks = chunkText(empty, 900, 200);
-      assert('empty string → single chunk',    chunks.length === 1);
+      assert('empty string → no chunks',       chunks.length === 0);
     }
     {
       // Build text > 900 chars across multiple sentences
