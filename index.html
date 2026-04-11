@@ -6725,14 +6725,15 @@ self.addEventListener('message', async (e) => {
     function renderSegmentationOverlay(bubble, imageBlob, masks, scores) {
       if (!masks || masks.length === 0) return;
 
-      // Pick the best-scoring mask
-      let bestIdx = 0;
-      let bestScore = -1;
-      for (let i = 0; i < masks.length; i++) {
-        const s = scores[i] != null ? scores[i] : 0;
-        if (s > bestScore) { bestScore = s; bestIdx = i; }
-      }
-      const mask = masks[bestIdx];
+      // Distinct colors for up to 6 masks
+      const COLORS = [
+        [234, 88, 12],   // orange
+        [59, 130, 246],  // blue
+        [16, 185, 129],  // emerald
+        [168, 85, 247],  // purple
+        [239, 68, 68],   // red
+        [245, 158, 11],  // amber
+      ];
 
       const container = document.createElement('div');
       container.className = 'segmentation-result';
@@ -6753,25 +6754,75 @@ self.addEventListener('message', async (e) => {
         container.appendChild(canvas);
 
         const ctx = canvas.getContext('2d');
+
+        // Sort masks by score descending, render all with distinct colors
+        const indexed = masks.map((m, i) => ({ mask: m, score: scores[i] || 0, idx: i }));
+        indexed.sort((a, b) => b.score - a.score);
+
+        // Semi-transparent fill + bounding box for each mask
         const imgData = ctx.createImageData(displayW, displayH);
 
-        // Scale mask to image dimensions if they differ
-        for (let y = 0; y < displayH; y++) {
-          for (let x = 0; x < displayW; x++) {
-            const mx = Math.floor((x / displayW) * mask.width);
-            const my = Math.floor((y / displayH) * mask.height);
-            const maskVal = mask.data[my * mask.width + mx];
-            const idx = (y * displayW + x) * 4;
-            if (maskVal > 128) {
-              // Indigo overlay at 40% opacity
-              imgData.data[idx] = 102;
-              imgData.data[idx + 1] = 126;
-              imgData.data[idx + 2] = 234;
-              imgData.data[idx + 3] = 102; // ~40%
+        for (let mi = 0; mi < indexed.length; mi++) {
+          const { mask } = indexed[mi];
+          const [r, g, b] = COLORS[mi % COLORS.length];
+
+          for (let y = 0; y < displayH; y++) {
+            for (let x = 0; x < displayW; x++) {
+              const mx = Math.floor((x / displayW) * mask.width);
+              const my = Math.floor((y / displayH) * mask.height);
+              const maskVal = mask.data[my * mask.width + mx];
+              if (maskVal > 128) {
+                const idx = (y * displayW + x) * 4;
+                imgData.data[idx] = r;
+                imgData.data[idx + 1] = g;
+                imgData.data[idx + 2] = b;
+                imgData.data[idx + 3] = 70; // ~27% opacity fill
+              }
             }
           }
         }
         ctx.putImageData(imgData, 0, 0);
+
+        // Draw bounding boxes on top of the fill
+        for (let mi = 0; mi < indexed.length; mi++) {
+          const { mask, score } = indexed[mi];
+          const [r, g, b] = COLORS[mi % COLORS.length];
+
+          // Find bounding box from mask
+          let minX = mask.width, minY = mask.height, maxX = 0, maxY = 0;
+          for (let y = 0; y < mask.height; y++) {
+            for (let x = 0; x < mask.width; x++) {
+              if (mask.data[y * mask.width + x] > 128) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+              }
+            }
+          }
+          if (maxX <= minX || maxY <= minY) continue;
+
+          // Scale to display dimensions
+          const bx = Math.round((minX / mask.width) * displayW);
+          const by = Math.round((minY / mask.height) * displayH);
+          const bw = Math.round(((maxX - minX) / mask.width) * displayW);
+          const bh = Math.round(((maxY - minY) / mask.height) * displayH);
+
+          // Draw bounding box
+          ctx.strokeStyle = `rgb(${r},${g},${b})`;
+          ctx.lineWidth = Math.max(2, Math.round(displayW / 300));
+          ctx.strokeRect(bx, by, bw, bh);
+
+          // Label with score
+          const label = `#${mi + 1} ${Math.round(score * 100)}%`;
+          ctx.font = `bold ${Math.max(12, Math.round(displayW / 40))}px sans-serif`;
+          const tm = ctx.measureText(label);
+          const labelH = Math.max(16, Math.round(displayW / 30));
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
+          ctx.fillRect(bx, by - labelH - 2, tm.width + 8, labelH + 2);
+          ctx.fillStyle = '#fff';
+          ctx.fillText(label, bx + 4, by - 4);
+        }
 
         // Download button
         const dlBtn = document.createElement('button');
@@ -6980,6 +7031,7 @@ self.addEventListener('message', async (e) => {
       let loopMessages = [...chatMessages];
       const allSources = [...searchSources];
       let toolsUsedInLoop = false;
+      let pendingSegOverlay = null;
       const tools = buildToolsForRuntime();
 
       // After iter 0, strip the `data` field from media blocks in any
@@ -7047,20 +7099,28 @@ self.addEventListener('message', async (e) => {
         // forward without re-decoding the same audio/video.
         if (iter === 0) loopMessages = scrubMediaForFollowup(loopMessages);
 
+        function finishWithOverlay(text, srcs, tools) {
+          const bubble = currentAssistantEl ? currentAssistantEl.bubble : null;
+          finishGeneration(text, srcs, tools);
+          if (pendingSegOverlay && bubble) {
+            renderSegmentationOverlay(bubble, pendingSegOverlay.imageBlob, pendingSegOverlay.masks, pendingSegOverlay.scores);
+          }
+        }
+
         // User clicked stop while we were generating
         if (!generating) {
-          finishGeneration(turn.fullText || null, allSources, toolsUsedInLoop);
+          finishWithOverlay(turn.fullText || null, allSources, toolsUsedInLoop);
           return;
         }
 
         if (turn.error) {
-          finishGeneration((turn.fullText || '') + `\n\n*Error: ${turn.error.message || turn.error}*`, allSources, toolsUsedInLoop);
+          finishWithOverlay((turn.fullText || '') + `\n\n*Error: ${turn.error.message || turn.error}*`, allSources, toolsUsedInLoop);
           return;
         }
 
         if (turn.toolCalls.length === 0) {
           // No tool calls — we're done
-          finishGeneration(turn.fullText, allSources, toolsUsedInLoop);
+          finishWithOverlay(turn.fullText, allSources, toolsUsedInLoop);
           return;
         }
 
@@ -7091,9 +7151,9 @@ self.addEventListener('message', async (e) => {
         currentAssistantEl.bubble.appendChild(stepLabel);
         renderToolCallBlock(currentAssistantEl.bubble, tc.name, tc.arguments, toolResult);
 
-        // Render segmentation overlay if this was a segment_image call
+        // Stash segmentation data for rendering after final response
         if (tc.name === 'segment_image' && toolResult._rawMasks) {
-          renderSegmentationOverlay(currentAssistantEl.bubble, toolResult._imageBlob, toolResult._rawMasks, toolResult._scores);
+          pendingSegOverlay = { imageBlob: toolResult._imageBlob, masks: toolResult._rawMasks, scores: toolResult._scores };
           delete toolResult._rawMasks;
           delete toolResult._imageBlob;
           delete toolResult._scores;
@@ -7112,7 +7172,7 @@ self.addEventListener('message', async (e) => {
         if (iter === MAX_TOOL_ITERATIONS - 1) {
           loopMessages.push({ role: 'user', content: '[System: Tool call limit reached. Please provide your final answer now.]' });
           const finalTurn = await runOneAgentTurn(loopMessages, enableThinking);
-          finishGeneration(finalTurn.fullText, allSources, toolsUsedInLoop);
+          finishWithOverlay(finalTurn.fullText, allSources, toolsUsedInLoop);
           return;
         }
       }
