@@ -2038,6 +2038,14 @@
         <div class="progress-text" id="progressText">Preparing to download model...</div>
       </div>
 
+      <!-- Progress bar (SAM loading) -->
+      <div class="progress-section" id="samProgressSection">
+        <div class="progress-bar">
+          <div class="progress-fill" id="samProgressFill" style="background:linear-gradient(90deg,#059669,#10b981)"></div>
+        </div>
+        <div class="progress-text" id="samProgressText">Loading SAM model...</div>
+      </div>
+
       <!-- Settings (system prompt + thinking toggle) -->
       <div class="settings-panel" id="settingsPanel">
         <label for="systemPrompt">System prompt (optional)</label>
@@ -5884,6 +5892,9 @@ ${JSON.stringify({ name, result })}
       _ensureSAMWorker(modelId) {
         const self = this;
         const chip = document.getElementById('samChip');
+        const samSection = document.getElementById('samProgressSection');
+        const samFill = document.getElementById('samProgressFill');
+        const samText = document.getElementById('samProgressText');
         function showChip(text, state) {
           if (!chip) return;
           chip.textContent = text;
@@ -5893,6 +5904,14 @@ ${JSON.stringify({ name, result })}
           if (!chip) return;
           setTimeout(() => { chip.className = 'sam-chip'; }, 2000);
         }
+        function showBar(text, pct) {
+          if (samSection) samSection.classList.add('visible');
+          if (samText) samText.textContent = text;
+          if (samFill && pct != null) samFill.style.width = pct + '%';
+        }
+        function hideBar() {
+          if (samSection) setTimeout(() => samSection.classList.remove('visible'), 1200);
+        }
         // Model changed — tear down old worker
         if (this._samWorker && this._samModelId !== modelId) {
           try { this._samWorker.terminate(); } catch {}
@@ -5901,61 +5920,56 @@ ${JSON.stringify({ name, result })}
           this._samModelId = null;
         }
         if (this._samReady && this._samModelId === modelId) return Promise.resolve();
+        function handleProgress(e, resolve, reject) {
+          if (e.data.type === 'progress' && e.data.data) {
+            const p = e.data.data;
+            if (p.status === 'downloading' && p.total) {
+              const pct = Math.round((p.loaded / p.total) * 100);
+              const loadedMB = (p.loaded / 1e6).toFixed(1);
+              const totalMB = (p.total / 1e6).toFixed(1);
+              showChip('SAM ' + pct + '%', 'active');
+              showBar('Downloading SAM — ' + loadedMB + ' / ' + totalMB + ' MB (' + pct + '%)', pct);
+            } else if (p.status === 'loading') {
+              showChip('SAM initializing\u2026', 'active');
+              showBar('Loading SAM model\u2026', 100);
+            } else if (p.status === 'initiate') {
+              showBar('Fetching SAM ' + (p.file || '') + '\u2026', null);
+            }
+          } else if (e.data.type === 'ready') {
+            self._samReady = true;
+            self._samWorker.removeEventListener('message', handleProgress._bound);
+            showChip('SAM ready', 'ready');
+            showBar('SAM model ready', 100);
+            hideChip();
+            hideBar();
+            resolve();
+          } else if (e.data.type === 'error') {
+            self._samWorker.removeEventListener('message', handleProgress._bound);
+            self._samReady = false;
+            showChip('SAM error', 'active');
+            showBar('SAM load failed: ' + (e.data.message || 'unknown error'), 0);
+            hideChip();
+            reject(new Error(e.data.message));
+          }
+        }
         if (this._samWorker) {
           // Worker exists but not ready yet — wait for it
           showChip('SAM loading\u2026', 'active');
+          showBar('Loading SAM model\u2026', null);
           return new Promise((resolve, reject) => {
-            const handler = (e) => {
-              if (e.data.type === 'progress' && e.data.data) {
-                const p = e.data.data;
-                if (p.status === 'downloading' && p.total) {
-                  const pct = Math.round((p.loaded / p.total) * 100);
-                  showChip('SAM ' + pct + '%', 'active');
-                }
-              } else if (e.data.type === 'ready') {
-                self._samReady = true;
-                self._samWorker.removeEventListener('message', handler);
-                showChip('SAM ready', 'ready');
-                hideChip();
-                resolve();
-              } else if (e.data.type === 'error') {
-                self._samWorker.removeEventListener('message', handler);
-                showChip('SAM error', 'active');
-                hideChip();
-                reject(new Error(e.data.message));
-              }
-            };
-            self._samWorker.addEventListener('message', handler);
+            const bound = (e) => handleProgress(e, resolve, reject);
+            handleProgress._bound = bound;
+            self._samWorker.addEventListener('message', bound);
           });
         }
         showChip('SAM loading\u2026', 'active');
+        showBar('Preparing to download SAM model\u2026', 0);
         this._samWorker = createSAMWorker();
         this._samModelId = modelId;
         return new Promise((resolve, reject) => {
-          const handler = (e) => {
-            if (e.data.type === 'progress' && e.data.data) {
-              const p = e.data.data;
-              if (p.status === 'downloading' && p.total) {
-                const pct = Math.round((p.loaded / p.total) * 100);
-                showChip('SAM ' + pct + '%', 'active');
-              } else if (p.status === 'loading') {
-                showChip('SAM initializing\u2026', 'active');
-              }
-            } else if (e.data.type === 'ready') {
-              self._samReady = true;
-              self._samWorker.removeEventListener('message', handler);
-              showChip('SAM ready', 'ready');
-              hideChip();
-              resolve();
-            } else if (e.data.type === 'error') {
-              self._samWorker.removeEventListener('message', handler);
-              self._samReady = false;
-              showChip('SAM error', 'active');
-              hideChip();
-              reject(new Error(e.data.message));
-            }
-          };
-          self._samWorker.addEventListener('message', handler);
+          const bound = (e) => handleProgress(e, resolve, reject);
+          handleProgress._bound = bound;
+          self._samWorker.addEventListener('message', bound);
           self._samWorker.postMessage({ type: 'load', modelId });
         });
       },
@@ -5964,8 +5978,12 @@ ${JSON.stringify({ name, result })}
         const self = this;
         const modelId = localStorage.getItem('lm_sam_model') || 'Xenova/slimsam-77-uniform';
         const chip = document.getElementById('samChip');
+        const samSection = document.getElementById('samProgressSection');
+        const samText = document.getElementById('samProgressText');
         this._samQueue = this._samQueue.then(() => self._ensureSAMWorker(modelId).then(async () => {
           if (chip) { chip.textContent = 'SAM segmenting\u2026'; chip.className = 'sam-chip active'; }
+          if (samSection) { samSection.classList.add('visible'); }
+          if (samText) { samText.textContent = 'Segmenting image\u2026'; }
           const arrayBuf = await imageBlob.arrayBuffer();
           return new Promise((resolve, reject) => {
             const id = Math.random().toString(36).slice(2);
@@ -5974,9 +5992,12 @@ ${JSON.stringify({ name, result })}
                 self._samWorker.removeEventListener('message', handler);
                 if (e.data.type === 'masks') {
                   if (chip) { chip.textContent = 'SAM ready'; chip.className = 'sam-chip ready'; setTimeout(() => { chip.className = 'sam-chip'; }, 2000); }
+                  if (samText) { samText.textContent = 'Segmentation complete'; }
+                  if (samSection) { setTimeout(() => samSection.classList.remove('visible'), 1200); }
                   resolve({ masks: e.data.masks, scores: e.data.scores });
                 } else {
                   if (chip) { chip.className = 'sam-chip'; }
+                  if (samSection) { samSection.classList.remove('visible'); }
                   reject(new Error(e.data.message || 'Segmentation failed'));
                 }
               }
