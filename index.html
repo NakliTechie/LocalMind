@@ -6698,73 +6698,60 @@ self.addEventListener('message', async (e) => {
 
         const ctx = canvas.getContext('2d');
 
-        // Sort masks by score descending, render all with distinct colors
-        const indexed = masks.map((m, i) => ({ mask: m, score: scores[i] || 0, idx: i }));
-        indexed.sort((a, b) => b.score - a.score);
+        // SAM returns 3 alternative masks per prompt (small/medium/large).
+        // Pick the best-scoring one for display.
+        let bestIdx = 0;
+        let bestScore = -1;
+        for (let i = 0; i < masks.length; i++) {
+          const s = scores[i] != null ? scores[i] : 0;
+          if (s > bestScore) { bestScore = s; bestIdx = i; }
+        }
+        const bestMask = masks[bestIdx];
+        const [cr, cg, cb] = COLORS[0];
 
-        // Semi-transparent fill + bounding box for each mask
+        // Semi-transparent fill for the best mask
         const imgData = ctx.createImageData(displayW, displayH);
+        let minX = displayW, minY = displayH, maxX = 0, maxY = 0;
 
-        for (let mi = 0; mi < indexed.length; mi++) {
-          const { mask } = indexed[mi];
-          const [r, g, b] = COLORS[mi % COLORS.length];
-
-          for (let y = 0; y < displayH; y++) {
-            for (let x = 0; x < displayW; x++) {
-              const mx = Math.floor((x / displayW) * mask.width);
-              const my = Math.floor((y / displayH) * mask.height);
-              const maskVal = mask.data[my * mask.width + mx];
-              if (maskVal > 128) {
-                const idx = (y * displayW + x) * 4;
-                imgData.data[idx] = r;
-                imgData.data[idx + 1] = g;
-                imgData.data[idx + 2] = b;
-                imgData.data[idx + 3] = 70; // ~27% opacity fill
-              }
+        for (let y = 0; y < displayH; y++) {
+          for (let x = 0; x < displayW; x++) {
+            const mx = Math.floor((x / displayW) * bestMask.width);
+            const my = Math.floor((y / displayH) * bestMask.height);
+            const maskVal = bestMask.data[my * bestMask.width + mx];
+            if (maskVal > 128) {
+              const idx = (y * displayW + x) * 4;
+              imgData.data[idx] = cr;
+              imgData.data[idx + 1] = cg;
+              imgData.data[idx + 2] = cb;
+              imgData.data[idx + 3] = 80; // ~31% opacity fill
+              // Track bounding box in display coords
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
             }
           }
         }
         ctx.putImageData(imgData, 0, 0);
 
-        // Draw bounding boxes on top of the fill
-        for (let mi = 0; mi < indexed.length; mi++) {
-          const { mask, score } = indexed[mi];
-          const [r, g, b] = COLORS[mi % COLORS.length];
+        // Draw bounding box (computed directly in display coords from the fill pass)
+        if (maxX > minX && maxY > minY) {
+          const lw = Math.max(3, Math.round(displayW / 200));
+          ctx.strokeStyle = `rgb(${cr},${cg},${cb})`;
+          ctx.lineWidth = lw;
+          ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
 
-          // Find bounding box from mask
-          let minX = mask.width, minY = mask.height, maxX = 0, maxY = 0;
-          for (let y = 0; y < mask.height; y++) {
-            for (let x = 0; x < mask.width; x++) {
-              if (mask.data[y * mask.width + x] > 128) {
-                if (x < minX) minX = x;
-                if (x > maxX) maxX = x;
-                if (y < minY) minY = y;
-                if (y > maxY) maxY = y;
-              }
-            }
-          }
-          if (maxX <= minX || maxY <= minY) continue;
-
-          // Scale to display dimensions
-          const bx = Math.round((minX / mask.width) * displayW);
-          const by = Math.round((minY / mask.height) * displayH);
-          const bw = Math.round(((maxX - minX) / mask.width) * displayW);
-          const bh = Math.round(((maxY - minY) / mask.height) * displayH);
-
-          // Draw bounding box
-          ctx.strokeStyle = `rgb(${r},${g},${b})`;
-          ctx.lineWidth = Math.max(2, Math.round(displayW / 300));
-          ctx.strokeRect(bx, by, bw, bh);
-
-          // Label with score
-          const label = `#${mi + 1} ${Math.round(score * 100)}%`;
-          ctx.font = `bold ${Math.max(12, Math.round(displayW / 40))}px sans-serif`;
+          // Label
+          const label = `${Math.round(bestScore * 100)}% confidence`;
+          const fontSize = Math.max(14, Math.round(displayW / 35));
+          ctx.font = `bold ${fontSize}px sans-serif`;
           const tm = ctx.measureText(label);
-          const labelH = Math.max(16, Math.round(displayW / 30));
-          ctx.fillStyle = `rgb(${r},${g},${b})`;
-          ctx.fillRect(bx, by - labelH - 2, tm.width + 8, labelH + 2);
+          const labelH = fontSize + 6;
+          const labelY = minY > labelH + 4 ? minY - labelH - 2 : minY + 2;
+          ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
+          ctx.fillRect(minX, labelY, tm.width + 12, labelH);
           ctx.fillStyle = '#fff';
-          ctx.fillText(label, bx + 4, by - 4);
+          ctx.fillText(label, minX + 6, labelY + fontSize - 2);
         }
 
         // Download button
