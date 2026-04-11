@@ -6131,9 +6131,14 @@ self.addEventListener('message', async (e) => {
       const blob = new Blob([imageBuffer], { type: mimeType || 'image/jpeg' });
       const raw_image = await RawImage.fromBlob(blob);
 
-      // Wrap in batch dimension: [[[x,y], ...]] and [[label, ...]]
-      const input_points = [points.map(p => [p[0], p[1]])];
-      const input_labels = [labels.map(l => l)];
+      // Point format differs by model:
+      // SAM 1 (SamModel): input_points [[[x,y]]], input_labels [[1]]
+      // SAM 3 (Sam3TrackerModel): input_points [[[[x,y]]]], input_labels [[[1]]]
+      const isSam3 = loadedModelId && loadedModelId.toLowerCase().includes('sam3');
+      const ptsList = points.map(p => [p[0], p[1]]);
+      const lblList = labels.map(l => l);
+      const input_points = isSam3 ? [[ptsList]] : [ptsList];
+      const input_labels = isSam3 ? [[lblList]] : [lblList];
 
       const inputs = await processor(raw_image, { input_points, input_labels });
       const outputs = await model(inputs);
@@ -6144,26 +6149,44 @@ self.addEventListener('message', async (e) => {
         inputs.reshaped_input_sizes,
       );
 
-      // masks shape: [batch][num_masks] each is a Tensor of booleans
-      // Extract the first batch, convert each mask to {width, height, data}
-      const batchMasks = masks[0]; // first (only) batch
+      // masks from post_process_masks: masks[0] is a Tensor.
+      // Shape varies: could be [num_masks, H, W] or [1, num_masks, H, W].
+      // Normalize to always work with [num_masks, H, W].
+      let maskTensor = masks[0];
+      const dims = maskTensor.dims;
+
+      // If 4D [1, num_masks, H, W], squeeze the batch dim
+      let numMasks, maskH, maskW, dataOffset;
+      if (dims.length === 4) {
+        numMasks = dims[1];
+        maskH = dims[2];
+        maskW = dims[3];
+        dataOffset = dims[0] > 1 ? 0 : 0; // always first batch
+      } else {
+        numMasks = dims[0];
+        maskH = dims[1];
+        maskW = dims[2];
+      }
+
       const iou_scores = outputs.iou_scores?.data
         ? Array.from(outputs.iou_scores.data)
         : [];
 
       const result = [];
       const transferables = [];
+      const stridePerMask = maskH * maskW;
 
-      // batchMasks is a Tensor of shape [num_masks, H, W]
-      const numMasks = batchMasks.dims[0];
-      const maskH = batchMasks.dims[1];
-      const maskW = batchMasks.dims[2];
+      // For 4D tensor, skip the batch dimension in the flat data array
+      const batchStart = dims.length === 4 ? 0 : 0; // batch 0
 
       for (let i = 0; i < numMasks; i++) {
-        const maskData = new Uint8Array(maskH * maskW);
-        const offset = i * maskH * maskW;
-        for (let j = 0; j < maskH * maskW; j++) {
-          maskData[j] = batchMasks.data[offset + j] ? 255 : 0;
+        const maskData = new Uint8Array(stridePerMask);
+        const offset = batchStart + i * stridePerMask;
+        for (let j = 0; j < stridePerMask; j++) {
+          // Data can be booleans (true/false) or logits (floats).
+          // Booleans: true → 255. Logits: > 0 → foreground.
+          const val = maskTensor.data[offset + j];
+          maskData[j] = (val === true || val > 0) ? 255 : 0;
         }
         result.push({ width: maskW, height: maskH, data: maskData });
         transferables.push(maskData.buffer);
