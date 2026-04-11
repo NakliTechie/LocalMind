@@ -5283,15 +5283,16 @@ Rules:
       let match;
       while ((match = tagRegex.exec(text)) !== null) {
         const parsed = _adapterRepairJSON(match[1].trim());
-        if (parsed && parsed.name) {
-          toolCalls.push({ name: parsed.name, arguments: parsed.arguments || {} });
+        const tcName = parsed && (parsed.name || parsed.function);
+        if (tcName) {
+          toolCalls.push({ name: tcName, arguments: parsed.arguments || {} });
         }
         cleanText = cleanText.replace(match[0], '');
       }
 
       // 2. Bare JSON without tags
       if (toolCalls.length === 0) {
-        const bareRegex = /\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[\s\S]*?\})\s*\}/g;
+        const bareRegex = /\{\s*"(?:name|function)"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[\s\S]*?\})\s*\}/g;
         while ((match = bareRegex.exec(text)) !== null) {
           const args = _adapterRepairJSON(match[2]);
           if (args) {
