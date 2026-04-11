@@ -2498,21 +2498,37 @@
             const imgH = bmp.height;
             bmp.close();
 
-            const pixelPoints = points.map(([x, y]) => [
-              Math.round(Math.max(0, Math.min(1, x)) * imgW),
-              Math.round(Math.max(0, Math.min(1, y)) * imgH),
-            ]);
-
             showToast('Loading SAM model...');
-            const { masks, scores } = await LocalMind.runtime.segmentImage(context.imageBlob, pixelPoints, labels);
+
+            // Run SAM once per foreground point to get separate masks per object.
+            // SAM returns 3 alternative masks per prompt — we pick the best one each time.
+            const objectMasks = [];
+            const objectScores = [];
+            for (let i = 0; i < points.length; i++) {
+              if (labels[i] !== 1) continue; // skip background points
+              const px = Math.round(Math.max(0, Math.min(1, points[i][0])) * imgW);
+              const py = Math.round(Math.max(0, Math.min(1, points[i][1])) * imgH);
+              const { masks, scores: sc } = await LocalMind.runtime.segmentImage(context.imageBlob, [[px, py]], [1]);
+              // Pick best-scoring mask from the 3 alternatives
+              let bestIdx = 0, bestScore = -1;
+              for (let j = 0; j < masks.length; j++) {
+                if ((sc[j] || 0) > bestScore) { bestScore = sc[j] || 0; bestIdx = j; }
+              }
+              objectMasks.push(masks[bestIdx]);
+              objectScores.push(bestScore);
+            }
+
+            if (objectMasks.length === 0) {
+              return { error: 'No foreground points provided (all labels were 0).' };
+            }
 
             // Build JSON-safe result for the model
-            const maskSummaries = masks.map((m, i) => {
+            const maskSummaries = objectMasks.map((m, i) => {
               const totalPixels = m.width * m.height;
               const fgPixels = m.data.reduce((sum, v) => sum + (v > 128 ? 1 : 0), 0);
               return {
-                index: i,
-                score: scores[i] != null ? Math.round(scores[i] * 1000) / 1000 : null,
+                object: i + 1,
+                score: Math.round(objectScores[i] * 1000) / 1000,
                 area_percent: Math.round((fgPixels / totalPixels) * 10000) / 100,
               };
             });
@@ -2521,11 +2537,11 @@
               success: true,
               image_width: imgW,
               image_height: imgH,
-              mask_count: masks.length,
-              masks: maskSummaries,
-              _rawMasks: masks,
+              objects_found: objectMasks.length,
+              objects: maskSummaries,
+              _rawMasks: objectMasks,
               _imageBlob: context.imageBlob,
-              _scores: scores,
+              _scores: objectScores,
             };
             return result;
           } catch (e) {
@@ -6698,60 +6714,58 @@ self.addEventListener('message', async (e) => {
 
         const ctx = canvas.getContext('2d');
 
-        // SAM returns 3 alternative masks per prompt (small/medium/large).
-        // Pick the best-scoring one for display.
-        let bestIdx = 0;
-        let bestScore = -1;
-        for (let i = 0; i < masks.length; i++) {
-          const s = scores[i] != null ? scores[i] : 0;
-          if (s > bestScore) { bestScore = s; bestIdx = i; }
-        }
-        const bestMask = masks[bestIdx];
-        const [cr, cg, cb] = COLORS[0];
-
-        // Semi-transparent fill for the best mask
+        // Each mask = one object (best-of-3 already selected in execute).
+        // Draw fill + bounding box per object in distinct colors.
         const imgData = ctx.createImageData(displayW, displayH);
-        let minX = displayW, minY = displayH, maxX = 0, maxY = 0;
+        const boxes = []; // collect {minX, minY, maxX, maxY, colorIdx, score} per mask
 
-        for (let y = 0; y < displayH; y++) {
-          for (let x = 0; x < displayW; x++) {
-            const mx = Math.floor((x / displayW) * bestMask.width);
-            const my = Math.floor((y / displayH) * bestMask.height);
-            const maskVal = bestMask.data[my * bestMask.width + mx];
-            if (maskVal > 128) {
-              const idx = (y * displayW + x) * 4;
-              imgData.data[idx] = cr;
-              imgData.data[idx + 1] = cg;
-              imgData.data[idx + 2] = cb;
-              imgData.data[idx + 3] = 80; // ~31% opacity fill
-              // Track bounding box in display coords
-              if (x < minX) minX = x;
-              if (x > maxX) maxX = x;
-              if (y < minY) minY = y;
-              if (y > maxY) maxY = y;
+        for (let mi = 0; mi < masks.length; mi++) {
+          const mask = masks[mi];
+          const [r, g, b] = COLORS[mi % COLORS.length];
+          let bMinX = displayW, bMinY = displayH, bMaxX = 0, bMaxY = 0;
+
+          for (let y = 0; y < displayH; y++) {
+            for (let x = 0; x < displayW; x++) {
+              const mx = Math.floor((x / displayW) * mask.width);
+              const my = Math.floor((y / displayH) * mask.height);
+              if (mask.data[my * mask.width + mx] > 128) {
+                const idx = (y * displayW + x) * 4;
+                imgData.data[idx] = r;
+                imgData.data[idx + 1] = g;
+                imgData.data[idx + 2] = b;
+                imgData.data[idx + 3] = 80;
+                if (x < bMinX) bMinX = x;
+                if (x > bMaxX) bMaxX = x;
+                if (y < bMinY) bMinY = y;
+                if (y > bMaxY) bMaxY = y;
+              }
             }
+          }
+          if (bMaxX > bMinX && bMaxY > bMinY) {
+            boxes.push({ minX: bMinX, minY: bMinY, maxX: bMaxX, maxY: bMaxY, ci: mi, score: scores[mi] || 0 });
           }
         }
         ctx.putImageData(imgData, 0, 0);
 
-        // Draw bounding box (computed directly in display coords from the fill pass)
-        if (maxX > minX && maxY > minY) {
-          const lw = Math.max(3, Math.round(displayW / 200));
-          ctx.strokeStyle = `rgb(${cr},${cg},${cb})`;
-          ctx.lineWidth = lw;
-          ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+        // Draw bounding boxes and labels on top
+        const lw = Math.max(3, Math.round(displayW / 200));
+        const fontSize = Math.max(14, Math.round(displayW / 35));
+        ctx.font = `bold ${fontSize}px sans-serif`;
 
-          // Label
-          const label = `${Math.round(bestScore * 100)}% confidence`;
-          const fontSize = Math.max(14, Math.round(displayW / 35));
-          ctx.font = `bold ${fontSize}px sans-serif`;
+        for (const box of boxes) {
+          const [r, g, b] = COLORS[box.ci % COLORS.length];
+          ctx.strokeStyle = `rgb(${r},${g},${b})`;
+          ctx.lineWidth = lw;
+          ctx.strokeRect(box.minX, box.minY, box.maxX - box.minX, box.maxY - box.minY);
+
+          const label = `#${box.ci + 1}  ${Math.round(box.score * 100)}%`;
           const tm = ctx.measureText(label);
           const labelH = fontSize + 6;
-          const labelY = minY > labelH + 4 ? minY - labelH - 2 : minY + 2;
-          ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
-          ctx.fillRect(minX, labelY, tm.width + 12, labelH);
+          const labelY = box.minY > labelH + 4 ? box.minY - labelH - 2 : box.minY + 2;
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
+          ctx.fillRect(box.minX, labelY, tm.width + 12, labelH);
           ctx.fillStyle = '#fff';
-          ctx.fillText(label, minX + 6, labelY + fontSize - 2);
+          ctx.fillText(label, box.minX + 6, labelY + fontSize - 2);
         }
 
         // Download button
