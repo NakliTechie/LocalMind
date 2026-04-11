@@ -913,7 +913,9 @@
       padding: 12px 16px;
       border-top: 1px solid var(--gray-200);
       background: var(--gray-50);
-      flex-shrink: 0;
+      flex-shrink: 1;
+      max-height: 50vh;
+      overflow-y: auto;
     }
 
     .settings-panel.open { display: block; }
@@ -1836,6 +1838,21 @@
                 <li><strong>list_memories</strong> &mdash; show what&rsquo;s stored in memory</li>
                 <li><strong>delete_memory</strong> &mdash; forget specific memories</li>
                 <li><strong>segment_image</strong> &mdash; segment objects in attached images (SAM)</li>
+              </ul>
+              <h4>Image Segmentation (SAM)</h4>
+              <p>Gemma 4 can call SAM (Segment Anything Model) to segment objects in attached images. Choose your SAM model in Settings &mdash; loaded on first use.</p>
+              <ul>
+                <li><strong>SlimSAM 50</strong> (~10 MB) &mdash; fastest, good enough for most tasks</li>
+                <li><strong>SlimSAM 77</strong> (~14 MB) &mdash; default, better accuracy</li>
+                <li><strong>SAM ViT-Base</strong> (~350 MB) &mdash; full quality, slower download</li>
+                <li><strong>SAM 3</strong> (latest) &mdash; newest architecture</li>
+              </ul>
+              <h4>Things to try</h4>
+              <ul>
+                <li>&ldquo;Segment the main object in this image&rdquo;</li>
+                <li>&ldquo;Outline the person on the left&rdquo;</li>
+                <li>&ldquo;Isolate the background&rdquo;</li>
+                <li>&ldquo;How many distinct objects are in this image?&rdquo;</li>
               </ul>
               <p>Translation works directly &mdash; Gemma 4 speaks 140+ languages natively, no tool needed.</p>
               <p>Gemma 3 1B works as a simple chatbot &mdash; no agent tools.</p>
