@@ -7043,10 +7043,17 @@ self.addEventListener('message', async (e) => {
         if (iter === 0) loopMessages = scrubMediaForFollowup(loopMessages);
 
         function finishWithOverlay(text, srcs, tools) {
-          const bubble = currentAssistantEl ? currentAssistantEl.bubble : null;
+          // Capture the message container (parent of bubble) before finishGeneration nulls currentAssistantEl.next
+          // Append overlay to the msg container, NOT inside the bubble — innerHTML updates during
+          // streaming destroy bubble children, but the msg container is stable.
+          const msgEl = currentAssistantEl ? currentAssistantEl.bubble.parentElement : null;
           finishGeneration(text, srcs, tools);
-          if (pendingSegOverlay && bubble) {
-            renderSegmentationOverlay(bubble, pendingSegOverlay.imageBlob, pendingSegOverlay.masks, pendingSegOverlay.scores);
+          if (pendingSegOverlay && msgEl) {
+            // Short delay to ensure all pending DOM updates (streaming, badges) have completed
+            setTimeout(() => {
+              renderSegmentationOverlay(msgEl, pendingSegOverlay.imageBlob, pendingSegOverlay.masks, pendingSegOverlay.scores);
+              chatArea.scrollTop = chatArea.scrollHeight;
+            }, 50);
           }
         }
 
