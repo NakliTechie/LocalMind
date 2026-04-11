@@ -514,6 +514,41 @@
       overflow-x: auto;
     }
 
+    /* Segmentation overlay */
+    .segmentation-result {
+      position: relative;
+      display: inline-block;
+      margin: 8px 0;
+      max-width: 100%;
+    }
+    .segmentation-result img {
+      max-width: 100%;
+      border-radius: 8px;
+      display: block;
+    }
+    .segmentation-result canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      border-radius: 8px;
+      pointer-events: none;
+    }
+    .segmentation-download {
+      display: inline-block;
+      margin-top: 4px;
+      font-size: 0.72rem;
+      color: var(--indigo-500);
+      cursor: pointer;
+      border: none;
+      background: none;
+      padding: 2px 0;
+    }
+    .segmentation-download:hover {
+      text-decoration: underline;
+    }
+
     /* Typing indicator */
     .typing-dot {
       display: inline-block;
@@ -882,6 +917,95 @@
     }
 
     .settings-panel.open { display: block; }
+
+    /* API chip next to the model selector — only visible when the
+       window.localmind API is enabled in Settings. Flashes on each call. */
+    .api-chip {
+      display: none;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      margin-right: 6px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: var(--indigo-600);
+      background: var(--indigo-100);
+      border: 1px solid var(--indigo-500);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background-color 0.2s, color 0.2s;
+    }
+    .api-chip.on { display: inline-flex; }
+    .api-chip.flash {
+      background: var(--indigo-500);
+      color: var(--white);
+    }
+    .api-chip::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--indigo-500);
+    }
+    .api-chip.flash::before { background: var(--white); }
+
+    /* Activity log modal — reuses the share-modal backdrop pattern */
+    .api-log-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: rgba(26, 32, 44, 0.55);
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .api-log-modal.open { display: flex; }
+    .api-log-modal-content {
+      background: var(--white);
+      border-radius: 12px;
+      max-width: 720px;
+      width: 100%;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+    }
+    .api-log-header {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--gray-200);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .api-log-header strong { font-size: 0.95rem; }
+    .api-log-list {
+      overflow-y: auto;
+      padding: 8px 0;
+      font-size: 0.75rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .api-log-empty {
+      padding: 30px 18px;
+      text-align: center;
+      color: var(--gray-500);
+    }
+    .api-log-row {
+      display: grid;
+      grid-template-columns: 90px 1fr 80px 70px 70px;
+      gap: 12px;
+      padding: 6px 18px;
+      border-bottom: 1px solid var(--gray-100);
+    }
+    .api-log-row:hover { background: var(--gray-50); }
+    .api-log-row .t { color: var(--gray-500); }
+    .api-log-row .m { color: var(--gray-800); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .api-log-row .dur { color: var(--gray-600); text-align: right; }
+    .api-log-row .ok { color: #2f855a; }
+    .api-log-row .err { color: var(--error-text); }
+    .api-log-row .busy { color: #975a16; }
 
     .settings-panel label {
       display: block;
@@ -1683,6 +1807,7 @@
               <button class="help-tab active" data-tab="about">About</button>
               <button class="help-tab" data-tab="models">Models</button>
               <button class="help-tab" data-tab="features">Features</button>
+              <button class="help-tab" data-tab="api">JS API</button>
               <button class="help-tab" data-tab="try">Things to Try</button>
             </div>
             <div class="help-tab-content active" data-tab="about">
@@ -1710,6 +1835,7 @@
                 <li><strong>set_reminder</strong> &mdash; browser notification after N minutes</li>
                 <li><strong>list_memories</strong> &mdash; show what&rsquo;s stored in memory</li>
                 <li><strong>delete_memory</strong> &mdash; forget specific memories</li>
+                <li><strong>segment_image</strong> &mdash; segment objects in attached images (SAM)</li>
               </ul>
               <p>Translation works directly &mdash; Gemma 4 speaks 140+ languages natively, no tool needed.</p>
               <p>Gemma 3 1B works as a simple chatbot &mdash; no agent tools.</p>
@@ -1766,8 +1892,33 @@
                 <li><strong>Web Search</strong> &mdash; Settings &rarr; provider + API key &rarr; &#127760; button</li>
                 <li><strong>Thinking Mode</strong> &mdash; see chain-of-thought (collapses when done)</li>
                 <li><strong>Cache management</strong> &mdash; view/clear cached models in Settings</li>
+                <li><strong>Custom models</strong> &mdash; Settings &rarr; paste a Hugging Face ONNX repo id (causal LMs only). The validator probes the HF API, picks the best available quantisation, estimates real load size, and hard-blocks anything that exceeds the device&rsquo;s WebGPU buffer limit or the 6 GB ceiling.</li>
                 <li><strong>Response badges</strong> &mdash; On-device / Agent / Web-enriched</li>
               </ul>
+            </div>
+            <div class="help-tab-content" data-tab="api">
+              <h4>JavaScript API <span style="font-weight:400;color:var(--gray-500)">(experimental)</span></h4>
+              <p>Settings &rarr; tick <strong>Expose <code>window.localmind</code></strong>. Same-tab only &mdash; cross-origin scripts cannot reach it. The object is frozen and non-writable; disable the toggle to detach.</p>
+              <h4>Surface (v1.0)</h4>
+              <ul>
+                <li><strong>version</strong> &middot; <strong>ready</strong> &middot; <strong>model</strong> &mdash; live state getters</li>
+                <li><strong>listModels()</strong> &mdash; full registry incl. custom models with <code>loaded</code> flag</li>
+                <li><strong>load(idOrKey)</strong> &mdash; loads a model (short key or HF id); resolves when ready</li>
+                <li><strong>chat.completions.create({ messages, max_tokens, temperature, top_p, model })</strong> &mdash; non-streaming, returns OpenAI-shaped <code>chat.completion</code></li>
+                <li><strong>chat.completions.create({ &hellip;, stream: true })</strong> &mdash; async iterator yielding <code>chat.completion.chunk</code> objects</li>
+              </ul>
+              <h4>Not exposed</h4>
+              <ul>
+                <li>Tools / tool calling</li>
+                <li>Memory read/write</li>
+                <li>File system, web search, search API keys, user profile</li>
+                <li>Multimodal input</li>
+              </ul>
+              <h4>Activity log</h4>
+              <p>Every API call is logged in-memory (last 50). Click the <code>&bull; API</code> chip in the toolbar or <strong>Settings &rarr; View activity log</strong>. Each call shows method, prompt length, tokens generated, duration, and outcome (ok / err / busy).</p>
+              <h4>Demo</h4>
+              <p>Open <code>demo.html</code> in the same folder. It iframes LocalMind, auto-flips the toggle, waits for the model, and runs both a non-streaming and a streaming completion against <code>iframe.contentWindow.localmind</code>.</p>
+              <div class="help-note">Experimental &mdash; the shape may change before a stable v1.1.</div>
             </div>
             <div class="help-tab-content" data-tab="try">
               <h4>Math &amp; Conversions</h4>
@@ -1860,6 +2011,18 @@
             <input type="text" id="searxngUrl" class="settings-input" placeholder="https://searx.example.com">
           </div>
         </div>
+        <div class="settings-divider" id="samSettingsSection" style="display:none">
+          <label for="samModelSelect">Segmentation model (SAM)</label>
+          <select id="samModelSelect" class="settings-select">
+            <option value="Xenova/slimsam-50-uniform">SlimSAM 50 &middot; ~10 MB (fastest)</option>
+            <option value="Xenova/slimsam-77-uniform" selected>SlimSAM 77 &middot; ~14 MB (default)</option>
+            <option value="Xenova/sam-vit-base">SAM ViT-Base &middot; ~350 MB</option>
+            <option value="onnx-community/sam3-tracker-ONNX">SAM 3 &middot; Latest</option>
+          </select>
+          <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
+            Loaded on first use. Gemma calls this when you ask it to segment, outline, or identify objects in attached images.
+          </div>
+        </div>
         <label class="toggle-row" style="border-top:1px solid var(--gray-200);padding-top:10px;margin-top:10px">
           <input type="checkbox" id="autoBackupToggle">
           Auto-download backup on New Chat
@@ -1867,6 +2030,32 @@
         <div class="settings-divider">
           <label>Model cache</label>
           <div id="cacheInfo" style="font-size:0.75rem;color:var(--gray-500);margin-top:4px">Loading...</div>
+        </div>
+        <div class="settings-divider">
+          <label>Custom models <span style="font-weight:400;color:var(--gray-500)">(causal LMs with ONNX exports on Hugging Face)</span></label>
+          <div style="display:flex;gap:6px;margin-top:4px">
+            <input type="text" id="customModelInput" class="settings-input" placeholder="owner/repo e.g. onnx-community/Llama-3.2-1B-Instruct" style="flex:1">
+            <button class="btn-icon" id="customModelAddBtn">Add</button>
+          </div>
+          <div id="customModelStatus" style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5;min-height:1em"></div>
+          <div id="customModelList" style="margin-top:6px"></div>
+          <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
+            Must be a Hugging Face repo with ONNX files under <code>onnx/</code>. Multimodal
+            custom models are not yet supported. Added models appear in the model selector.
+          </div>
+        </div>
+        <div class="settings-divider">
+          <label>JavaScript API <span style="font-weight:400;color:var(--gray-500)">(experimental)</span></label>
+          <label class="toggle-row" style="padding-top:4px">
+            <input type="checkbox" id="apiEnabledToggle">
+            Expose <code>window.localmind</code> to scripts in this page
+          </label>
+          <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
+            Lets other JavaScript on this page call the loaded model via an OpenAI-shaped
+            method. Same-tab only — cross-origin scripts cannot reach it. No tool calling,
+            memory access, or web search is exposed.
+          </div>
+          <button class="btn-icon" id="apiLogBtn" style="margin-top:8px">View activity log</button>
         </div>
       </div>
 
@@ -1922,6 +2111,7 @@
         <button class="btn-icon" id="shareBtn" title="Share conversation (encrypted link)">Share</button>
         <button class="btn-icon" id="batchBtn" title="Batch prompts — run a list of questions sequentially">Batch</button>
         <span style="flex:1"></span>
+        <span class="api-chip" id="apiChip" title="window.localmind API is enabled — click to view activity log">API</span>
         <select class="model-select" id="modelSelect" title="Choose model">
           <option value="gemma3-1b" selected>Gemma 3 1B &middot; Fast (~760 MB)</option>
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
@@ -1961,6 +2151,22 @@
     <input type="password" id="importPassphrase" placeholder="Passphrase" style="display:none">
     <button id="importConfirmBtn">Load conversation</button>
     <button class="dismiss-btn" id="importDismissBtn">Dismiss</button>
+  </div>
+
+  <!-- API activity log modal -->
+  <div class="api-log-modal" id="apiLogModal">
+    <div class="api-log-modal-content">
+      <div class="api-log-header">
+        <strong>API activity log</strong>
+        <div>
+          <button class="btn-icon" id="apiLogClearBtn">Clear</button>
+          <button class="btn-icon" id="apiLogCloseBtn">Close</button>
+        </div>
+      </div>
+      <div class="api-log-list" id="apiLogList">
+        <div class="api-log-empty">No API calls yet.</div>
+      </div>
+    </div>
   </div>
 
   <!-- Share modal -->
@@ -2026,7 +2232,7 @@
         label: 'Gemma 3 1B',
         dtype: 'q4f16',
         size: '~760 MB',
-        type: 'causal',       // uses AutoModelForCausalLM
+        type: 'causal',       // runtime loads this as a text-only causal model
         multimodal: false,
         agentCapable: false,
         contextSize: 4096,
@@ -2037,7 +2243,7 @@
         label: 'Gemma 4 E2B',
         dtype: 'q4f16',
         size: '~1.5 GB',
-        type: 'multimodal',   // uses Gemma4ForConditionalGeneration
+        type: 'multimodal',   // runtime loads this via the multimodal processor path
         multimodal: true,
         agentCapable: true,
         contextSize: 8192,
@@ -2048,7 +2254,7 @@
         label: 'Gemma 4 E4B',
         dtype: 'q4f16',
         size: '~4.9 GB',
-        type: 'multimodal',   // uses Gemma4ForConditionalGeneration
+        type: 'multimodal',   // runtime loads this via the multimodal processor path
         multimodal: true,
         agentCapable: true,
         contextSize: 12288,
@@ -2070,6 +2276,17 @@
     let cameraStream = null;
     let generateResolve = null; // Promise resolve for agentic loop
     let dirHandle = null;       // FileSystemDirectoryHandle for open folder
+    let loadResolvers = null;   // { resolve, reject } for window.localmind.load() awaiters
+    let currentInferenceContext = null; // { onToken } when a streaming API caller wants per-token notifications
+
+    // ── JavaScript API state ────────────────────────────────────
+    // Feature-flag persisted in localStorage. The real window.localmind
+    // object is attached in a later step; this step only builds the
+    // toggle, chip, and activity log infrastructure.
+    let apiEnabled = false;
+    try { apiEnabled = localStorage.getItem('lm_api_enabled') === '1'; } catch {}
+    const API_LOG_MAX = 50;
+    const apiLog = []; // newest first: [{ ts, method, promptLen, tokens, durationMs, outcome }]
 
     // Restore from sessionStorage
     try {
@@ -2218,6 +2435,78 @@
           } catch (e) { return { error: e.message }; }
         },
       },
+      segment_image: {
+        description: 'Segment objects in the user\'s attached image using SAM (Segment Anything Model). Provide point coordinates as [x, y] in normalized [0,1] range where (0,0) is top-left and (1,1) is bottom-right. Pick the center of the object you want to segment. labels: 1 means foreground (the object), 0 means background (exclude this area). Use when the user asks to segment, outline, isolate, find, count, or identify specific objects in their image.',
+        parameters: {
+          type: 'object',
+          properties: {
+            points: {
+              type: 'array',
+              description: 'Array of [x, y] coordinate pairs in normalized [0,1] range. Each point marks a location on the image. Place points at the center of objects to segment.',
+              items: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2 },
+            },
+            labels: {
+              type: 'array',
+              description: 'Array of integers, same length as points. 1 = foreground (include), 0 = background (exclude).',
+              items: { type: 'integer', enum: [0, 1] },
+            },
+          },
+          required: ['points', 'labels'],
+        },
+        requiresImage: true,
+        async execute(args, context) {
+          if (!context || !context.imageBlob) {
+            return { error: 'No image attached. Ask the user to attach an image first.' };
+          }
+          const { points, labels } = args;
+          if (!Array.isArray(points) || !Array.isArray(labels) || points.length === 0) {
+            return { error: 'points and labels must be non-empty arrays of equal length.' };
+          }
+          if (points.length !== labels.length) {
+            return { error: `points (${points.length}) and labels (${labels.length}) must have the same length.` };
+          }
+          try {
+            // Get image dimensions to scale normalized coords to pixels
+            const bmp = await createImageBitmap(context.imageBlob);
+            const imgW = bmp.width;
+            const imgH = bmp.height;
+            bmp.close();
+
+            const pixelPoints = points.map(([x, y]) => [
+              Math.round(Math.max(0, Math.min(1, x)) * imgW),
+              Math.round(Math.max(0, Math.min(1, y)) * imgH),
+            ]);
+
+            showToast('Loading SAM model...');
+            const { masks, scores } = await LocalMind.runtime.segmentImage(context.imageBlob, pixelPoints, labels);
+
+            // Build JSON-safe result for the model
+            const maskSummaries = masks.map((m, i) => {
+              const totalPixels = m.width * m.height;
+              const fgPixels = m.data.reduce((sum, v) => sum + (v > 128 ? 1 : 0), 0);
+              return {
+                index: i,
+                score: scores[i] != null ? Math.round(scores[i] * 1000) / 1000 : null,
+                area_percent: Math.round((fgPixels / totalPixels) * 10000) / 100,
+              };
+            });
+
+            const result = {
+              success: true,
+              image_width: imgW,
+              image_height: imgH,
+              mask_count: masks.length,
+              masks: maskSummaries,
+              _rawMasks: masks,
+              _imageBlob: context.imageBlob,
+              _scores: scores,
+            };
+            return result;
+          } catch (e) {
+            return { error: 'Segmentation failed: ' + e.message };
+          }
+        },
+      },
     };
 
     // ── Web: Search Provider Adapters ─────────────────────────
@@ -2304,8 +2593,12 @@
       return new Promise((resolve, reject) => {
         const script = document.createElement('script');
         script.src = 'https://cdn.jsdelivr.net/npm/@mozilla/readability@0.5.0/Readability.min.js';
+        // SRI: if the CDN is compromised or the file is tampered with, the
+        // browser will refuse to execute the script and fire onerror.
+        script.integrity = 'sha384-DHTbAPJmhf9shXtIK080V86CoLVziMLp/Gdn1EVZCKVyvIMiENtuUVSfckMLbkYO';
+        script.crossOrigin = 'anonymous';
         script.onload = () => { readabilityLoaded = true; resolve(); };
-        script.onerror = () => reject(new Error('Failed to load Readability.js'));
+        script.onerror = () => reject(new Error('Failed to load or verify Readability.js'));
         document.head.appendChild(script);
       });
     }
@@ -2335,11 +2628,11 @@
         text = text.replace(/\s+/g, ' ').trim();
 
         // Semantic pre-filter if embedding is ready
-        if (embeddingReady && userQuery && text.length > 1500) {
+        if (LocalMind.runtime.embeddingsReady && userQuery && text.length > 1500) {
           try {
             const paragraphs = text.match(/.{200,1000}[.!?\n]|.{200,1000}$/g) || [text.slice(0, 3000)];
-            const paraVecs = await embedTexts(paragraphs);
-            const queryVec = (await embedTexts([userQuery]))[0];
+            const paraVecs = await LocalMind.runtime.embed(paragraphs);
+            const queryVec = await LocalMind.runtime.embed(userQuery);
             const scored = paragraphs.map((p, i) => ({ text: p, score: cosineSimilarity(queryVec, paraVecs[i]) }));
             scored.sort((a, b) => b.score - a.score);
             text = scored.slice(0, 5).map(s => s.text).join('\n\n');
@@ -2370,7 +2663,7 @@
         try {
           const results = await executeWebSearch(args.query);
           // Cache results in RAG for future offline use
-          if (embeddingReady && results.length > 0) {
+          if (LocalMind.runtime.embeddingsReady && results.length > 0) {
             const snippetText = results.map(r => `${r.title}: ${r.snippet}`).join('\n');
             embedAndStore(snippetText, 'finding', 'web-search').catch(() => {});
           }
@@ -2391,7 +2684,7 @@
         try {
           const result = await fetchAndExtract(args.url, context?.userQuery || '');
           // Cache fetched content in RAG
-          if (embeddingReady && result.content) {
+          if (LocalMind.runtime.embeddingsReady && result.content) {
             embedAndStore(result.content, 'finding', args.url).catch(() => {});
           }
           return result;
@@ -2399,120 +2692,30 @@
       },
     };
 
-    // ── Agent: System Prompt Builder ────────────────────────────
-    function buildAgentSystemPrompt(userPrompt) {
+    // ── Agent: tool-call helpers ─────────────────────────────────
+    // The system-prompt scaffolding, output parser, and tool-result
+    // formatting now live inside the runtime adapter (search for
+    // _adapterBuildToolPrompt / _adapterParseToolCalls /
+    // _adapterFormatToolResultMessage). The agent loop in
+    // sendMessage() consumes tool_call events from runtime.chat()
+    // instead of parsing model output itself.
+
+    // Helper used only by the agent loop to build the OpenAI-shaped
+    // tools array from TOOL_REGISTRY. Stays outside the adapter — the
+    // adapter receives an explicit tools[] array per call and never
+    // sees TOOL_REGISTRY directly.
+    function buildToolsForRuntime() {
       const webConfigured = isSearchConfigured();
-      const toolDefs = Object.entries(TOOL_REGISTRY)
+      const caps = LocalMind.runtime.capabilities();
+      const hasImage = !!(caps && caps.image);
+      return Object.entries(TOOL_REGISTRY)
         .filter(([_, t]) => !t.requiresWeb || webConfigured)
+        .filter(([_, t]) => !t.requiresImage || hasImage)
         .map(([name, t]) => ({
-          type: 'function',
-          function: { name, description: t.description, parameters: t.parameters },
+          name,
+          description: t.description,
+          parameters: t.parameters,
         }));
-
-      let prompt = `You are a helpful AI assistant with access to tools. Use them when they would help answer the user's question. If tools aren't needed, respond directly.
-
-<tools>
-${JSON.stringify(toolDefs, null, 2)}
-</tools>
-
-To call a function, output EXACTLY this format (not inside thinking):
-<tool_call>
-{"name": "function_name", "arguments": {"arg1": "value1"}}
-</tool_call>
-
-CRITICAL: The <tool_call> block must appear in your main response, NEVER inside your thinking/reasoning. Think first, then output the <tool_call> block as your response.
-
-Rules:
-- Call one tool at a time. Wait for the result before calling another.
-- When citing sources, mention where the information came from.
-- If you don't need tools, just answer directly.
-- Never fabricate tool results.
-- Always use the exact <tool_call> XML format shown above. Do not invent other formats like "tool.call:" or function-call syntax.
-- You can translate text between 140+ languages directly in your response — no tool needed for translation.`;
-
-      if (userPrompt) prompt += '\n\n' + userPrompt;
-      return prompt;
-    }
-
-    // ── Agent: Tool Call Parser ─────────────────────────────────
-    function parseToolCalls(text) {
-      const toolCalls = [];
-      // Match <tool_call>...</tool_call> blocks
-      const tagRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
-      let match;
-      let cleanText = text;
-
-      while ((match = tagRegex.exec(text)) !== null) {
-        const jsonStr = match[1].trim();
-        const parsed = repairAndParseJSON(jsonStr);
-        if (parsed && parsed.name) {
-          toolCalls.push({ name: parsed.name, arguments: parsed.arguments || {} });
-        }
-        cleanText = cleanText.replace(match[0], '');
-      }
-
-      // Fallback: bare JSON without tags (model sometimes omits tags)
-      if (toolCalls.length === 0) {
-        const bareRegex = /\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[\s\S]*?\})\s*\}/g;
-        while ((match = bareRegex.exec(text)) !== null) {
-          try {
-            const args = repairAndParseJSON(match[2]);
-            if (args) {
-              toolCalls.push({ name: match[1], arguments: args });
-              cleanText = cleanText.replace(match[0], '');
-            }
-          } catch {}
-        }
-      }
-
-      // Fallback: tool call buried inside thinking block (model puts intent in thinking
-      // but emits nothing in main output — e.g. "tool.call:get_current_time{timezone:Europe/Paris}")
-      if (toolCalls.length === 0) {
-        // Strip thinking content to check if main output is empty
-        let mainContent = text
-          .replace(/<\|think\|>[\s\S]*?(<\|\/think\|>|$)/, '')
-          .replace(/<\|channel>thought\n?[\s\S]*?(<channel\|>|$)/, '')
-          .trim();
-
-        if (!mainContent) {
-          // Main output is empty — scan full text for tool call intent
-          const toolNames = Object.keys(TOOL_REGISTRY).join('|');
-          // Match patterns like: tool.call:name{args} or tool_call:name{args}
-          const intentRegex = new RegExp(`tool[._]?call\\s*[:.]\\s*(${toolNames})\\s*[{(]([^})]*)`, 'i');
-          const intentMatch = text.match(intentRegex);
-          if (intentMatch) {
-            const name = intentMatch[1];
-            // Try to parse the args as key:value pairs
-            const argsStr = intentMatch[2];
-            const args = {};
-            argsStr.split(/[,;]/).forEach(pair => {
-              const [k, ...rest] = pair.split(':');
-              if (k && rest.length) args[k.trim()] = rest.join(':').trim().replace(/["']/g, '');
-            });
-            toolCalls.push({ name, arguments: args });
-          }
-        }
-      }
-
-      return { toolCalls, cleanText: cleanText.trim() };
-    }
-
-    function repairAndParseJSON(str) {
-      // Try direct parse first
-      try { return JSON.parse(str); } catch {}
-      // Repair: trailing commas, single quotes, unquoted keys
-      let fixed = str
-        .replace(/,\s*([}\]])/g, '$1')           // trailing commas
-        .replace(/'/g, '"')                        // single → double quotes
-        .replace(/(\w+)\s*:/g, '"$1":');           // unquoted keys
-      try { return JSON.parse(fixed); } catch {}
-      return null;
-    }
-
-    function formatToolResponse(name, result) {
-      return `<tool_response>
-${JSON.stringify({ name, result })}
-</tool_response>`;
     }
 
     // ── Agent: Context Budget Helper ────────────────────────────
@@ -2586,99 +2789,11 @@ ${JSON.stringify({ name, result })}
     }
 
     // ── RAG: Embedding Worker (MiniLM, WASM/CPU) ─────────────
-    let embeddingWorker = null;
-    let embeddingReady = false;
-    let embeddingQueue = Promise.resolve(); // serialize embedding calls
-
-    function createEmbeddingWorker() {
-      const code = `
-import {
-  env,
-  pipeline,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
-
-env.allowLocalModels  = true;
-env.localModelPath    = '/models/';
-env.allowRemoteModels = true;
-
-let embedder = null;
-
-self.addEventListener('message', async (e) => {
-  const { type, texts, id } = e.data;
-  if (type === 'load') {
-    try {
-      embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-        device: 'wasm',
-        progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
-      });
-      self.postMessage({ type: 'ready' });
-    } catch (err) {
-      self.postMessage({ type: 'error', message: err.message || String(err) });
-    }
-  } else if (type === 'embed') {
-    try {
-      const results = [];
-      for (const text of texts) {
-        const output = await embedder(text, { pooling: 'mean', normalize: true });
-        results.push(Array.from(output.data));
-      }
-      self.postMessage({ type: 'embeddings', vectors: results, id });
-    } catch (err) {
-      self.postMessage({ type: 'error', message: err.message || String(err), id });
-    }
-  }
-});
-`;
-      const blob = new Blob([code], { type: 'application/javascript' });
-      const url = URL.createObjectURL(blob);
-      const w = new Worker(url, { type: 'module' });
-      w.addEventListener('error', (e) => {
-        console.error('Embedding worker error:', e.message);
-      });
-      return w;
-    }
-
-    function ensureEmbeddingWorker() {
-      if (embeddingReady) return Promise.resolve();
-      if (embeddingWorker) {
-        // Already loading, wait for ready
-        return new Promise((resolve, reject) => {
-          const handler = (e) => {
-            if (e.data.type === 'ready') { embeddingReady = true; embeddingWorker.removeEventListener('message', handler); resolve(); }
-            else if (e.data.type === 'error') { embeddingWorker.removeEventListener('message', handler); reject(new Error(e.data.message)); }
-          };
-          embeddingWorker.addEventListener('message', handler);
-        });
-      }
-      embeddingWorker = createEmbeddingWorker();
-      return new Promise((resolve, reject) => {
-        const handler = (e) => {
-          if (e.data.type === 'ready') { embeddingReady = true; embeddingWorker.removeEventListener('message', handler); resolve(); }
-          else if (e.data.type === 'error') { embeddingWorker.removeEventListener('message', handler); reject(new Error(e.data.message)); }
-        };
-        embeddingWorker.addEventListener('message', handler);
-        embeddingWorker.postMessage({ type: 'load' });
-      });
-    }
-
-    function embedTexts(texts) {
-      // Serialize embedding calls to avoid race conditions
-      embeddingQueue = embeddingQueue.then(() => ensureEmbeddingWorker().then(() => {
-        return new Promise((resolve, reject) => {
-          const id = Math.random().toString(36).slice(2);
-          const handler = (e) => {
-            if (e.data.id === id) {
-              embeddingWorker.removeEventListener('message', handler);
-              if (e.data.type === 'embeddings') resolve(e.data.vectors);
-              else reject(new Error(e.data.message || 'Embedding failed'));
-            }
-          };
-          embeddingWorker.addEventListener('message', handler);
-          embeddingWorker.postMessage({ type: 'embed', texts, id });
-        });
-      }));
-      return embeddingQueue;
-    }
+    // Lives entirely inside LocalMind.runtime now. Use:
+    //   await LocalMind.runtime.embed(text)        -> Float32Array
+    //   await LocalMind.runtime.embed(textArray)   -> Float32Array[]
+    //   LocalMind.runtime.embeddingsReady          -> boolean (gate)
+    // The worker is loaded lazily on the first embed() call.
 
     // ── RAG: IndexedDB Vector Store ─────────────────────────────
     const DB_NAME = 'localmind_rag';
@@ -2897,7 +3012,7 @@ self.addEventListener('message', async (e) => {
 
     async function embedAndStore(text, category, source) {
       const textChunks = chunkText(text);
-      const vectors = await embedTexts(textChunks);
+      const vectors = await LocalMind.runtime.embed(textChunks);
       const now = Date.now();
       const chunks = textChunks.map((t, i) => ({
         id: `${now}-${i}-${Math.random().toString(36).slice(2, 6)}`,
@@ -2912,8 +3027,8 @@ self.addEventListener('message', async (e) => {
     }
 
     async function searchMemory(query, topK = 5) {
-      const vectors = await embedTexts([query]);
-      return searchByVector(vectors[0], topK);
+      const vec = await LocalMind.runtime.embed(query);
+      return searchByVector(vec, topK);
     }
 
     // ── DOM refs ────────────────────────────────────────────────
@@ -3031,6 +3146,727 @@ self.addEventListener('message', async (e) => {
     settingsBtn.addEventListener('click', () => { if (settingsPanel.classList.contains('open')) refreshCacheInfo(); });
     refreshCacheInfo();
 
+    // ── JavaScript API: chip, toggle, activity log ──────────────
+    const apiChip = document.getElementById('apiChip');
+    const apiEnabledToggle = document.getElementById('apiEnabledToggle');
+    const apiLogBtn = document.getElementById('apiLogBtn');
+    const apiLogModal = document.getElementById('apiLogModal');
+    const apiLogList = document.getElementById('apiLogList');
+    const apiLogCloseBtn = document.getElementById('apiLogCloseBtn');
+    const apiLogClearBtn = document.getElementById('apiLogClearBtn');
+
+    function setApiEnabled(on) {
+      apiEnabled = !!on;
+      try { localStorage.setItem('lm_api_enabled', apiEnabled ? '1' : '0'); } catch {}
+      apiChip.classList.toggle('on', apiEnabled);
+      apiEnabledToggle.checked = apiEnabled;
+      if (apiEnabled) {
+        attachLocalmindAPI();
+        // One-time console notice the first time it's enabled in a session
+        if (!window.__lm_api_notice_shown) {
+          window.__lm_api_notice_shown = true;
+          console.info('%cLocalMind API enabled', 'color:#5a67d8;font-weight:600', '— window.localmind is experimental and unstable. Activity is logged and visible via Settings → View activity log.');
+        }
+      } else {
+        detachLocalmindAPI();
+      }
+    }
+
+    function logApiCall(entry) {
+      // Entry shape: { method, promptLen, tokens, durationMs, outcome, error }
+      apiLog.unshift({ ts: Date.now(), ...entry });
+      if (apiLog.length > API_LOG_MAX) apiLog.length = API_LOG_MAX;
+      flashApiChip();
+      // If the modal is open, refresh it live
+      if (apiLogModal.classList.contains('open')) renderApiLog();
+    }
+
+    function flashApiChip() {
+      if (!apiEnabled) return;
+      apiChip.classList.add('flash');
+      setTimeout(() => apiChip.classList.remove('flash'), 400);
+    }
+
+    function renderApiLog() {
+      if (apiLog.length === 0) {
+        apiLogList.innerHTML = '<div class="api-log-empty">No API calls yet.</div>';
+        return;
+      }
+      const frag = document.createDocumentFragment();
+      for (const e of apiLog) {
+        const row = document.createElement('div');
+        row.className = 'api-log-row';
+        const time = new Date(e.ts).toLocaleTimeString();
+        const outcomeClass = e.outcome === 'ok' ? 'ok' : (e.outcome === 'busy' ? 'busy' : 'err');
+        // All user-facing fields are escaped before being written as text.
+        row.innerHTML =
+          '<span class="t"></span>' +
+          '<span class="m"></span>' +
+          '<span class="dur"></span>' +
+          '<span class="dur"></span>' +
+          '<span class="' + outcomeClass + '"></span>';
+        row.children[0].textContent = time;
+        row.children[1].textContent = e.method + (e.promptLen != null ? ' (' + e.promptLen + ' ch)' : '');
+        row.children[2].textContent = e.tokens != null ? e.tokens + ' tok' : '';
+        row.children[3].textContent = e.durationMs != null ? e.durationMs + ' ms' : '';
+        row.children[4].textContent = e.outcome + (e.error ? ': ' + e.error.slice(0, 40) : '');
+        frag.appendChild(row);
+      }
+      apiLogList.innerHTML = '';
+      apiLogList.appendChild(frag);
+    }
+
+    // Resolve a user-supplied model identifier to a short MODELS key.
+    // Accepts either the short key ("gemma3-1b") or the full HF id
+    // ("onnx-community/gemma-3-1b-it-ONNX-GQA"). Returns null if unknown.
+    function resolveModelKey(idOrKey) {
+      if (MODELS[idOrKey]) return idOrKey;
+      for (const [k, m] of Object.entries(MODELS)) {
+        if (m.id === idOrKey) return k;
+      }
+      return null;
+    }
+
+    // Promise wrapper around loadModel(). loadModel itself is fire-and-forget
+    // (success/failure is signalled later via worker messages); we install
+    // resolvers right after calling it. The order matters: loadModel() is
+    // synchronous, so no worker message can arrive between the two lines.
+    function loadModelViaApi(idOrKey) {
+      const key = resolveModelKey(idOrKey);
+      if (!key) return Promise.reject(new Error('Unknown model: ' + idOrKey));
+      // Already loaded — fast path, no worker churn
+      if (key === activeModelKey && modelReady) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        loadModel(key);
+        loadResolvers = { resolve, reject };
+      });
+    }
+
+    // Tiny push/pull async iterator for streaming responses. Producers call
+    // push() with each chunk and finish() when done (optionally with an
+    // error). Consumers iterate via `for await`. Pulls outpace pushes by
+    // queueing pending promises; pushes outpace pulls by buffering.
+    function makeAsyncIterator() {
+      const buffer = [];
+      const pending = [];
+      let done = false;
+      let error = null;
+      const it = {
+        push(item) {
+          if (done) return;
+          if (pending.length) pending.shift().resolve({ value: item, done: false });
+          else buffer.push(item);
+        },
+        finish(err) {
+          if (done) return;
+          done = true;
+          error = err || null;
+          while (pending.length) {
+            const p = pending.shift();
+            if (error) p.reject(error);
+            else p.resolve({ value: undefined, done: true });
+          }
+        },
+        next() {
+          if (buffer.length) return Promise.resolve({ value: buffer.shift(), done: false });
+          if (done) return error ? Promise.reject(error) : Promise.resolve({ value: undefined, done: true });
+          return new Promise((resolve, reject) => pending.push({ resolve, reject }));
+        },
+        return() {
+          // Consumer broke out of the loop early
+          this.finish();
+          return Promise.resolve({ value: undefined, done: true });
+        },
+        [Symbol.asyncIterator]() { return this; },
+      };
+      return it;
+    }
+
+    // Validate and normalise the messages array passed to chat.completions.create.
+    // Accepts the OpenAI shape: [{ role, content }]. Roles limited to
+    // system/user/assistant. Content must be a string in v1 (no multimodal).
+    function validateChatMessages(messages) {
+      if (!Array.isArray(messages) || messages.length === 0) {
+        throw new Error('messages must be a non-empty array');
+      }
+      const VALID_ROLES = new Set(['system', 'user', 'assistant']);
+      const out = [];
+      for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        if (!m || typeof m !== 'object') throw new Error('messages[' + i + '] must be an object');
+        if (!VALID_ROLES.has(m.role)) throw new Error('messages[' + i + '].role must be one of system|user|assistant');
+        if (typeof m.content !== 'string') throw new Error('messages[' + i + '].content must be a string (multimodal not supported in v1)');
+        out.push({ role: m.role, content: m.content });
+      }
+      return out;
+    }
+
+    // Build an OpenAI-shaped chat.completion.chunk
+    function makeStreamChunk(id, created, modelId, delta, finishReason) {
+      return {
+        id,
+        object: 'chat.completion.chunk',
+        created,
+        model: modelId,
+        choices: [
+          { index: 0, delta, finish_reason: finishReason },
+        ],
+      };
+    }
+
+    // Streaming variant of chat.completions.create. Returns an async iterator
+    // immediately (well, the create() function awaits this and returns it),
+    // and pushes chunks as the worker emits tokens. The runInference call is
+    // fired without await — completion is signalled by its .then. Errors are
+    // propagated to the iterator's next() call.
+    function makeStreamingCompletion(chatMessages, genConfig, modelEntry, startTs) {
+      const id = 'lmcc-' + Math.random().toString(36).slice(2, 12);
+      const created = Math.floor(Date.now() / 1000);
+      const modelId = modelEntry.id;
+      const promptChars = chatMessages.reduce((s, m) => s + m.content.length, 0);
+
+      const iter = makeAsyncIterator();
+      let tokenCount = 0;
+
+      runInference({
+        chatMessages,
+        attData: null,
+        enableThinking: false,
+        genConfig,
+        setup: () => {
+          // Detach the chat-UI bindings — same as the non-streaming path
+          currentAssistantEl = null;
+          currentAssistantText = '';
+          // First chunk is role-only, matching OpenAI's convention
+          iter.push(makeStreamChunk(id, created, modelId, { role: 'assistant' }, null));
+          // Wire each subsequent token to a content delta
+          currentInferenceContext = {
+            onToken: (token) => {
+              tokenCount++;
+              iter.push(makeStreamChunk(id, created, modelId, { content: token }, null));
+            },
+          };
+        },
+      }).then(
+        () => {
+          // Final chunk: empty delta + stop
+          iter.push(makeStreamChunk(id, created, modelId, {}, 'stop'));
+          iter.finish();
+          logApiCall({
+            method: 'chat.completions.create (stream)',
+            promptLen: promptChars,
+            tokens: tokenCount,
+            outcome: 'ok',
+            durationMs: Date.now() - startTs,
+          });
+        },
+        (err) => {
+          iter.finish(err);
+          logApiCall({
+            method: 'chat.completions.create (stream)',
+            promptLen: promptChars,
+            outcome: 'err',
+            error: err.message,
+            durationMs: Date.now() - startTs,
+          });
+        }
+      );
+
+      return iter;
+    }
+
+    // chat.completions.create — non-streaming or streaming depending on
+    // params.stream. Mirrors the OpenAI SDK shape closely enough that
+    // simple clients can drop us in by swapping the base.
+    // Tools, multimodal, and response_format are intentionally rejected
+    // in v1 — see ROADMAP.md and the SECURITY notes in the README.
+    async function chatCompletionsCreate(params) {
+      const start = Date.now();
+      params = params || {};
+
+      // Hard-rejects (logged as err)
+      const reject = (msg) => {
+        const e = new Error(msg);
+        logApiCall({ method: 'chat.completions.create', outcome: 'err', error: msg, durationMs: Date.now() - start });
+        throw e;
+      };
+
+      if (!modelReady || !activeModelKey) reject('no model loaded — call window.localmind.load() first');
+      if (params.tools) reject('tools not supported in v1');
+      if (params.tool_choice) reject('tool_choice not supported in v1');
+      if (params.response_format) reject('response_format not supported in v1');
+      if (params.n != null && params.n !== 1) reject('only n=1 is supported');
+
+      // Optional model param: if present, must match loaded model (by id or key)
+      if (params.model) {
+        const requested = resolveModelKey(params.model);
+        if (!requested) reject('unknown model: ' + params.model);
+        if (requested !== activeModelKey) reject('model mismatch: requested ' + params.model + ' but ' + MODELS[activeModelKey].id + ' is loaded — call load() first');
+      }
+
+      let chatMessages;
+      try { chatMessages = validateChatMessages(params.messages); }
+      catch (e) { reject(e.message); }
+
+      const m = MODELS[activeModelKey];
+      const baseGen = m.genConfig;
+      // Clamp/sanitise generation parameters
+      const temperature = (typeof params.temperature === 'number') ? Math.max(0, Math.min(2, params.temperature)) : baseGen.temperature;
+      const top_p = (typeof params.top_p === 'number') ? Math.max(0, Math.min(1, params.top_p)) : baseGen.top_p;
+      const reqMaxTokens = (typeof params.max_tokens === 'number' && params.max_tokens > 0) ? Math.floor(params.max_tokens) : baseGen.max_new_tokens;
+      // Hard cap: never let a caller exceed the model's default ceiling
+      const max_new_tokens = Math.min(reqMaxTokens, baseGen.max_new_tokens);
+
+      const genConfig = {
+        ...baseGen,
+        temperature,
+        top_p,
+        max_new_tokens,
+      };
+
+      // Streaming branch: return an async iterator that yields OpenAI-shaped
+      // chat.completion.chunk objects as tokens arrive.
+      if (params.stream) {
+        return makeStreamingCompletion(chatMessages, genConfig, m, start);
+      }
+
+      // Run through the queue with a setup callback that detaches the chat
+      // UI bindings inside the critical section, so concurrent chat sends
+      // can't trample our generation.
+      let responseText;
+      try {
+        responseText = await runInference({
+          chatMessages,
+          attData: null,
+          enableThinking: false,
+          genConfig,
+          setup: () => {
+            currentAssistantEl = null;
+            currentAssistantText = '';
+          },
+        });
+      } catch (e) {
+        reject(e.message);
+      }
+
+      // Approximate token counts: prompt by char/4 heuristic, completion by
+      // tokenizer streaming events isn't surfaced to main thread, so use the
+      // same heuristic. Marked as approximate in the README.
+      const promptChars = chatMessages.reduce((s, m) => s + m.content.length, 0);
+      const promptTokensApprox = Math.max(1, Math.round(promptChars / 4));
+      const completionTokensApprox = Math.max(1, Math.round((responseText || '').length / 4));
+
+      const id = 'lmcc-' + Math.random().toString(36).slice(2, 12);
+      const created = Math.floor(Date.now() / 1000);
+      const out = {
+        id,
+        object: 'chat.completion',
+        created,
+        model: m.id,
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: responseText || '' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: promptTokensApprox,
+          completion_tokens: completionTokensApprox,
+          total_tokens: promptTokensApprox + completionTokensApprox,
+          // Marker so callers can tell these aren't exact
+          _approximate: true,
+        },
+      };
+
+      logApiCall({
+        method: 'chat.completions.create',
+        promptLen: promptChars,
+        tokens: completionTokensApprox,
+        outcome: 'ok',
+        durationMs: Date.now() - start,
+      });
+      return out;
+    }
+
+    // window.localmind v1 — read-only inference surface.
+    // Live properties (`ready`, `model`) use getters so they reflect current
+    // state without needing a re-attach on every model change.
+    const localmindAPI = Object.freeze({
+      version: '1.0',
+      get ready() { return modelReady; },
+      get model() { return (activeModelKey && modelReady) ? MODELS[activeModelKey].id : null; },
+      listModels() {
+        return Object.entries(MODELS).map(([key, m]) => ({
+          id: m.id,
+          key,
+          label: m.label,
+          size: m.size,
+          multimodal: !!m.multimodal,
+          contextSize: m.contextSize,
+          loaded: key === activeModelKey && modelReady,
+        }));
+      },
+      load(idOrKey) {
+        const start = Date.now();
+        return loadModelViaApi(idOrKey).then(
+          () => {
+            logApiCall({ method: 'load', outcome: 'ok', durationMs: Date.now() - start });
+          },
+          (err) => {
+            logApiCall({ method: 'load', outcome: 'err', error: err.message, durationMs: Date.now() - start });
+            throw err;
+          }
+        );
+      },
+      chat: Object.freeze({
+        completions: Object.freeze({
+          create: chatCompletionsCreate,
+        }),
+      }),
+    });
+
+    function attachLocalmindAPI() {
+      try {
+        Object.defineProperty(window, 'localmind', {
+          value: localmindAPI,
+          writable: false,
+          configurable: true,
+          enumerable: false,
+        });
+      } catch (e) {
+        console.error('Could not attach window.localmind:', e);
+      }
+    }
+
+    function detachLocalmindAPI() {
+      try { delete window.localmind; } catch {}
+    }
+
+    apiEnabledToggle.addEventListener('change', (e) => setApiEnabled(e.target.checked));
+    apiLogBtn.addEventListener('click', () => {
+      renderApiLog();
+      apiLogModal.classList.add('open');
+    });
+    apiChip.addEventListener('click', () => {
+      renderApiLog();
+      apiLogModal.classList.add('open');
+    });
+    apiLogCloseBtn.addEventListener('click', () => apiLogModal.classList.remove('open'));
+    apiLogModal.addEventListener('click', (e) => { if (e.target === apiLogModal) apiLogModal.classList.remove('open'); });
+    apiLogClearBtn.addEventListener('click', () => { apiLog.length = 0; renderApiLog(); });
+
+    // Apply the persisted flag on load
+    setApiEnabled(apiEnabled);
+
+    // ── Custom models (paste a HF ONNX model id) ────────────────
+    const customModelInput = document.getElementById('customModelInput');
+    const customModelAddBtn = document.getElementById('customModelAddBtn');
+    const customModelStatus = document.getElementById('customModelStatus');
+    const customModelList = document.getElementById('customModelList');
+
+    function setCustomStatus(msg, kind) {
+      customModelStatus.textContent = msg || '';
+      customModelStatus.style.color = kind === 'err' ? 'var(--error-text)' : (kind === 'ok' ? '#2f855a' : 'var(--gray-500)');
+    }
+
+    // Query the WebGPU adapter once for its hard buffer limits. Cached so
+    // we don't pay the cost on every validation.
+    let __webgpuLimits = null;
+    async function getWebGPULimits() {
+      if (__webgpuLimits) return __webgpuLimits;
+      try {
+        if (!navigator.gpu) return (__webgpuLimits = { maxBufferSize: null, ok: false });
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) return (__webgpuLimits = { maxBufferSize: null, ok: false });
+        __webgpuLimits = {
+          maxBufferSize: adapter.limits.maxBufferSize || null,
+          maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize || null,
+          ok: true,
+        };
+      } catch {
+        __webgpuLimits = { maxBufferSize: null, ok: false };
+      }
+      return __webgpuLimits;
+    }
+
+    function formatBytes(n) {
+      if (!n || n <= 0) return 'unknown';
+      if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(1) + ' GB';
+      if (n >= 1024 * 1024) return Math.round(n / 1024 / 1024) + ' MB';
+      return Math.round(n / 1024) + ' KB';
+    }
+
+    // Inspect a list of HF siblings and group ONNX files by quantization.
+    // Returns { quants: { q4f16: {files, bytes}, q4: {...}, ... }, all: [...] }.
+    function classifyOnnxFiles(siblings) {
+      const out = { quants: {}, all: [] };
+      // Detect dtype suffix from filename. Map several common conventions to
+      // the dtype string Transformers.js expects.
+      const detectDtype = (name) => {
+        const f = name.toLowerCase();
+        if (/_q4f16(\.onnx|_data\b)/.test(f)) return 'q4f16';
+        if (/_q4(\.onnx|_data\b)/.test(f) && !/q4f16/.test(f)) return 'q4';
+        if (/_int8(\.onnx|_data\b)/.test(f)) return 'int8';
+        if (/_uint8(\.onnx|_data\b)/.test(f)) return 'uint8';
+        if (/_fp16(\.onnx|_data\b)/.test(f)) return 'fp16';
+        if (/_quantized(\.onnx|_data\b)/.test(f)) return 'quantized';
+        if (/_bnb4(\.onnx|_data\b)/.test(f)) return 'bnb4';
+        if (/_q8(\.onnx|_data\b)/.test(f)) return 'q8';
+        if (/_q4f8(\.onnx|_data\b)/.test(f)) return 'q4f8';
+        // Bare model.onnx (no suffix) → fp32
+        if (/(^|\/)model\.onnx(_data)?$/.test(f)) return 'fp32';
+        return null;
+      };
+
+      for (const s of siblings) {
+        if (!s || typeof s.rfilename !== 'string') continue;
+        if (!/\.onnx(_data)?$/.test(s.rfilename)) continue;
+        out.all.push(s);
+        const dtype = detectDtype(s.rfilename);
+        if (!dtype) continue;
+        if (!out.quants[dtype]) out.quants[dtype] = { files: [], bytes: 0 };
+        out.quants[dtype].files.push(s);
+        if (typeof s.size === 'number') out.quants[dtype].bytes += s.size;
+      }
+      return out;
+    }
+
+    // Validate a user-supplied HF repo id and probe the HF API to confirm
+    // it exists, has usable ONNX files, picks a workable quantization, and
+    // checks the chosen size against the device's WebGPU buffer limits.
+    // Returns { entry, warnings: [] } on success, throws on hard failure.
+    async function probeHuggingFaceModel(id) {
+      if (!/^[\w.-]+\/[\w.-]+$/.test(id)) {
+        throw new Error('invalid id — use owner/repo');
+      }
+
+      // 1. HF model info. ?blobs=true populates each sibling's .size.
+      let info;
+      try {
+        const res = await fetch('https://huggingface.co/api/models/' + id + '?blobs=true', { signal: AbortSignal.timeout(10000) });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        info = await res.json();
+      } catch (e) {
+        throw new Error('model not found or network error: ' + e.message);
+      }
+
+      // 2. Find ONNX files anywhere in the repo (not just under onnx/).
+      const siblings = Array.isArray(info.siblings) ? info.siblings : [];
+      const classified = classifyOnnxFiles(siblings);
+      if (classified.all.length === 0) {
+        throw new Error('no ONNX files found in this repo. Hugging Face has many ONNX exports under the onnx-community/ org and from Xenova — try one of those.');
+      }
+
+      // 3. Pick a quantization. Order = preference for in-browser inference:
+      //    smallest-and-fastest first, largest last.
+      const PREFERENCE = ['q4f16', 'q4', 'int8', 'q8', 'uint8', 'bnb4', 'q4f8', 'fp16', 'quantized', 'fp32'];
+      let chosenDtype = null;
+      for (const dt of PREFERENCE) {
+        if (classified.quants[dt] && classified.quants[dt].files.length > 0) { chosenDtype = dt; break; }
+      }
+      if (!chosenDtype) {
+        // ONNX files exist but none match a known dtype convention. Let the
+        // user know exactly what we found so they can investigate.
+        const sample = classified.all.slice(0, 4).map(s => s.rfilename).join(', ');
+        throw new Error('ONNX files found but none match a known quantization (looked for q4f16/q4/int8/fp16/quantized/fp32). Files: ' + sample);
+      }
+
+      // Estimate size as MAX(.onnx) + MAX(.onnx_data) across files in the
+      // chosen dtype group. Many repos publish multiple variants of the
+      // same model (model_, decoder_model_, decoder_model_merged_, ...) and
+      // Transformers.js loads exactly ONE — summing them all overcounts by
+      // 3-4×. The largest single .onnx is the actual loaded weights file;
+      // .onnx_data (if any) is its companion external-weights file.
+      let chosenBytes = 0;
+      {
+        let maxOnnx = 0, maxData = 0;
+        for (const f of classified.quants[chosenDtype].files) {
+          if (typeof f.size !== 'number') continue;
+          if (/\.onnx_data$/.test(f.rfilename)) {
+            if (f.size > maxData) maxData = f.size;
+          } else if (/\.onnx$/.test(f.rfilename)) {
+            if (f.size > maxOnnx) maxOnnx = f.size;
+          }
+        }
+        chosenBytes = maxOnnx + maxData;
+      }
+      const warnings = [];
+
+      // 4. Size check vs WebGPU limits.
+      const limits = await getWebGPULimits();
+      if (limits.ok && limits.maxBufferSize && chosenBytes > 0) {
+        // The single biggest weight tensor must fit in maxBufferSize. We
+        // approximate by assuming the largest file is one buffer's worth.
+        // If even the smallest quant exceeds the limit, hard-block.
+        const largestFile = Math.max(0, ...classified.quants[chosenDtype].files.map(f => f.size || 0));
+        if (largestFile > limits.maxBufferSize) {
+          throw new Error('largest weight file (' + formatBytes(largestFile) + ') exceeds this device\'s WebGPU buffer limit (' + formatBytes(limits.maxBufferSize) + '). Try a smaller model or a device with more GPU memory.');
+        }
+        // If the total exceeds 4× the buffer limit, it almost certainly
+        // won't fit overall — block it. (Models are usually split across
+        // many buffers, so 4× headroom is generous.)
+        if (chosenBytes > limits.maxBufferSize * 4) {
+          throw new Error('model is ' + formatBytes(chosenBytes) + ' but this device\'s WebGPU buffer limit is ' + formatBytes(limits.maxBufferSize) + ' — too large to load.');
+        }
+        // Warn if chosen size is over half the buffer limit — likely tight
+        if (chosenBytes > limits.maxBufferSize) {
+          warnings.push('size (' + formatBytes(chosenBytes) + ') exceeds the per-buffer WebGPU limit (' + formatBytes(limits.maxBufferSize) + '); load may fail');
+        }
+      } else if (!limits.ok) {
+        warnings.push('could not query WebGPU limits — load may fail if model exceeds device memory');
+      }
+
+      // 5. Absolute soft cap: anything bigger than 6 GB is impractical in
+      //    a browser tab regardless of GPU.
+      if (chosenBytes > 6 * 1024 * 1024 * 1024) {
+        throw new Error('model is ' + formatBytes(chosenBytes) + ' — too large for in-browser inference. The hard ceiling for LocalMind is 6 GB.');
+      }
+      if (chosenBytes > 2 * 1024 * 1024 * 1024) {
+        warnings.push('large model (' + formatBytes(chosenBytes) + ') — first download will take a while and may not fit on lower-end GPUs');
+      }
+
+      // 6. config.json — architecture hint + context size
+      let config = null;
+      try {
+        const res = await fetch('https://huggingface.co/' + id + '/resolve/main/config.json', { signal: AbortSignal.timeout(10000) });
+        if (res.ok) config = await res.json();
+      } catch {}
+
+      // 7. Reject multimodal in v1 (the runtime adapter currently
+      //    only knows how to load the multimodal class for Gemma 4)
+      const modelType = config && config.model_type ? String(config.model_type) : '';
+      if (config && (config.vision_config || config.audio_config)) {
+        throw new Error('multimodal custom models are not supported in v1 (model_type=' + modelType + ')');
+      }
+
+      // 8. Build the MODELS entry
+      const repoShort = id.split('/').pop();
+      const sizeLabel = chosenBytes ? '~' + formatBytes(chosenBytes) : 'size unknown';
+      const entry = {
+        id,
+        label: repoShort + ' (custom)',
+        dtype: chosenDtype,
+        size: sizeLabel,
+        type: 'causal',
+        multimodal: false,
+        agentCapable: false,
+        contextSize: (config && (config.max_position_embeddings || config.max_seq_len)) || 4096,
+        genConfig: { temperature: 0.7, top_k: 50, top_p: 0.95, max_new_tokens: 1024 },
+        custom: true,
+      };
+      return { entry, warnings };
+    }
+
+    function loadCustomModelsFromStorage() {
+      try {
+        const raw = localStorage.getItem('lm_custom_models');
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return [];
+        return arr.filter(m => m && typeof m.id === 'string');
+      } catch { return []; }
+    }
+
+    function saveCustomModelsToStorage() {
+      const custom = Object.values(MODELS).filter(m => m.custom);
+      try { localStorage.setItem('lm_custom_models', JSON.stringify(custom)); } catch {}
+    }
+
+    function addCustomModelToRegistry(entry) {
+      // The HF id is the registry key for custom models — it's unique, stable,
+      // and matches what the worker will pass to from_pretrained.
+      MODELS[entry.id] = entry;
+      // Append to the model selector if not already there
+      if (!Array.from(modelSelect.options).some(o => o.value === entry.id)) {
+        const opt = document.createElement('option');
+        opt.value = entry.id;
+        opt.textContent = entry.label + ' · ' + entry.size;
+        modelSelect.appendChild(opt);
+      }
+    }
+
+    function removeCustomModelFromRegistry(id) {
+      if (!MODELS[id] || !MODELS[id].custom) return;
+      // If this is the active model, we can't remove it — the worker is tied to it
+      if (id === activeModelKey) {
+        setCustomStatus('cannot remove — this model is currently loaded. Switch to another first.', 'err');
+        return;
+      }
+      delete MODELS[id];
+      const opt = Array.from(modelSelect.options).find(o => o.value === id);
+      if (opt) opt.remove();
+      saveCustomModelsToStorage();
+      renderCustomModelList();
+    }
+
+    function renderCustomModelList() {
+      customModelList.innerHTML = '';
+      const custom = Object.values(MODELS).filter(m => m.custom);
+      if (custom.length === 0) {
+        customModelList.textContent = '';
+        return;
+      }
+      for (const m of custom) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 6px;margin-top:4px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:4px;font-size:0.72rem';
+        const left = document.createElement('div');
+        left.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        left.textContent = m.id + ' · ' + m.size;
+        const del = document.createElement('button');
+        del.className = 'btn-icon';
+        del.textContent = 'Remove';
+        del.style.cssText = 'flex-shrink:0;padding:2px 8px;font-size:0.7rem';
+        del.addEventListener('click', () => removeCustomModelFromRegistry(m.id));
+        row.appendChild(left);
+        row.appendChild(del);
+        customModelList.appendChild(row);
+      }
+    }
+
+    async function handleAddCustomModel() {
+      const id = customModelInput.value.trim();
+      if (!id) { setCustomStatus('enter a model id', 'err'); return; }
+      if (MODELS[id]) { setCustomStatus('already added', 'err'); return; }
+      customModelAddBtn.disabled = true;
+      setCustomStatus('Probing Hugging Face…');
+      try {
+        const { entry, warnings } = await probeHuggingFaceModel(id);
+        addCustomModelToRegistry(entry);
+        saveCustomModelsToStorage();
+        renderCustomModelList();
+        customModelInput.value = '';
+        let msg = 'Added (' + entry.dtype + ', ' + entry.size + '). Select it from the model dropdown to load.';
+        if (warnings && warnings.length) {
+          msg += '\nWarning: ' + warnings.join('; ');
+          // Use a softer colour so the user notices but knows it's not a fatal error
+          customModelStatus.textContent = msg;
+          customModelStatus.style.color = '#975a16';
+          customModelStatus.style.whiteSpace = 'pre-wrap';
+        } else {
+          setCustomStatus(msg, 'ok');
+        }
+      } catch (e) {
+        setCustomStatus('Failed: ' + e.message, 'err');
+        customModelStatus.style.whiteSpace = 'pre-wrap';
+      } finally {
+        customModelAddBtn.disabled = false;
+      }
+    }
+
+    customModelAddBtn.addEventListener('click', handleAddCustomModel);
+    customModelInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); handleAddCustomModel(); }
+    });
+
+    // Restore any previously added custom models BEFORE the initial loadModel
+    // runs — otherwise a saved active selection pointing at a custom model
+    // would silently fall back to the default.
+    for (const m of loadCustomModelsFromStorage()) {
+      try { addCustomModelToRegistry(m); } catch {}
+    }
+    renderCustomModelList();
+
     // ── Web search settings ───────────────────────────────────
     const searchProvider = document.getElementById('searchProvider');
     const searchApiKey = document.getElementById('searchApiKey');
@@ -3062,6 +3898,15 @@ self.addEventListener('message', async (e) => {
     });
     searchApiKey.addEventListener('input', () => localStorage.setItem('lm_search_key', searchApiKey.value));
     searxngUrl.addEventListener('input', () => localStorage.setItem('lm_searxng_url', searxngUrl.value));
+
+    // SAM model selector
+    const samModelSelect = document.getElementById('samModelSelect');
+    const samSettingsSection = document.getElementById('samSettingsSection');
+    const savedSamModel = localStorage.getItem('lm_sam_model');
+    if (savedSamModel) samModelSelect.value = savedSamModel;
+    samModelSelect.addEventListener('change', () => {
+      localStorage.setItem('lm_sam_model', samModelSelect.value);
+    });
 
     // Search+Send button
     searchSendBtn.addEventListener('click', () => {
@@ -3553,7 +4398,7 @@ self.addEventListener('message', async (e) => {
       if (messages.length >= 2) {
         try { await saveConversation(messages, activeConversationId); } catch (e) { console.warn('Failed to archive:', e); }
         // Post-session summarization
-        if (embeddingReady) {
+        if (LocalMind.runtime.embeddingsReady) {
           try {
             const textParts = messages.map(m => {
               const role = m.role === 'user' ? 'User' : 'Assistant';
@@ -3587,13 +4432,18 @@ self.addEventListener('message', async (e) => {
     });
 
     // ── Model UI visibility ───────────────────────────────────
+    // Capability gates read from LocalMind.runtime.capabilities() so
+    // that any future runtime adapter (WebLLM/wllama) can advertise
+    // its own caps without the UI needing to know which backend is
+    // active. The runtime returns a snapshot — re-read on every call.
     function updateModelUI() {
-      const m = MODELS[activeModelKey];
-      const isMultimodal = m && m.multimodal;
-      const isAgent = m && m.agentCapable;
+      const caps = LocalMind.runtime.capabilities();
+      const isMultimodal = !!(caps && (caps.image || caps.audio || caps.video));
+      const isAgent = !!(caps && caps.toolCalling);
       inputAffordances.classList.toggle('visible', isMultimodal && modelReady);
       thinkingRow.classList.toggle('hidden', !isMultimodal);
       searchSettingsSection.style.display = isAgent ? '' : 'none';
+      samSettingsSection.style.display = isAgent ? '' : 'none';
       updateSearchUI();
     }
 
@@ -3836,12 +4686,30 @@ self.addEventListener('message', async (e) => {
         const script = document.createElement('script');
         script.src = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs';
         script.type = 'module';
-        script.onload = () => {
-          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
-          pdfjsLoaded = true;
-          resolve();
+        // SRI on the main module. Chrome 89+ / Firefox 113+ enforce this for
+        // module scripts the same as classic scripts.
+        script.integrity = 'sha384-fzqD3KLclV6zyTSuToNuSG370CipiqN572vfT2zti7ORKnQPaJrvsz8deY+/Tgwe';
+        script.crossOrigin = 'anonymous';
+        script.onload = async () => {
+          try {
+            // The PDF.js worker is loaded by pdf.js via `new Worker(src)`, which
+            // does not accept an SRI attribute. Fetch it with Fetch-API SRI
+            // instead, turn it into a blob URL, and hand that to workerSrc.
+            // Fetch will throw if the hash doesn't match.
+            const workerUrl = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
+            const res = await fetch(workerUrl, {
+              integrity: 'sha384-RTiLhGDoA0SEd0K0E9qrg2HwSEEnAo91MwUh79PteR4v01eEByhHOdEkFKxeaeqw',
+            });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const blob = await res.blob();
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+            pdfjsLoaded = true;
+            resolve();
+          } catch (e) {
+            reject(new Error('Failed to load or verify PDF.js worker: ' + e.message));
+          }
         };
-        script.onerror = () => reject(new Error('Failed to load PDF.js'));
+        script.onerror = () => reject(new Error('Failed to load or verify PDF.js'));
         document.head.appendChild(script);
       });
     }
@@ -3853,8 +4721,10 @@ self.addEventListener('message', async (e) => {
       return new Promise((resolve, reject) => {
         const script = document.createElement('script');
         script.src = 'https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js';
+        script.integrity = 'sha384-/cXAMbzovUIKbBERjPmR3SnPTh8siWr5lsvFYj1Uq4XP0yaJUZJmsh0YXyGv5P0y';
+        script.crossOrigin = 'anonymous';
         script.onload = () => { mammothLoaded = true; resolve(); };
-        script.onerror = () => reject(new Error('Failed to load mammoth.js'));
+        script.onerror = () => reject(new Error('Failed to load or verify mammoth.js'));
         document.head.appendChild(script);
       });
     }
@@ -4100,15 +4970,29 @@ self.addEventListener('message', async (e) => {
 
       if (!mainContent) return html || '<span style="color:var(--gray-400)">...</span>';
 
+      const cbNonce = Math.random().toString(36).slice(2, 12);
       mainContent = mainContent.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-        const ext = lang || 'txt';
+        // SAFETY: sanitise `lang` to [a-zA-Z0-9] so it can't break out of
+        // the onclick handler's single-quoted string argument.
+        const ext = (lang || 'txt').replace(/[^a-zA-Z0-9]/g, '') || 'txt';
         const codeId = 'code-' + Math.random().toString(36).slice(2, 8);
-        return `<pre><code id="${codeId}">${escapeHtml(code.trim())}</code><button class="code-download-btn" onclick="downloadCodeBlock('${codeId}','${ext}')" title="Download">&#8595;</button></pre>`;
+        return `<pre class="cb-${cbNonce}"><code id="${codeId}">${escapeHtml(code.trim())}</code><button class="code-download-btn" onclick="downloadCodeBlock('${codeId}','${ext}')" title="Download">&#8595;</button></pre>`;
       });
 
-      const parts = mainContent.split(/(<pre><code>[\s\S]*?<\/code><\/pre>)/g);
+      // Split on our nonce-stamped code-block wrapper. The nonce ensures the
+      // split matches only code blocks WE emitted in this call, not any
+      // <pre>-looking HTML the model may have produced verbatim via prompt
+      // injection.
+      const splitRe = new RegExp('(<pre class="cb-' + cbNonce + '">[\\s\\S]*?<\\/pre>)', 'g');
+      const parts = mainContent.split(splitRe);
+      const preTag = '<pre class="cb-' + cbNonce + '">';
       html += parts.map(part => {
-        if (part.startsWith('<pre>')) return part;
+        if (part.startsWith(preTag)) return part;
+        // SAFETY: escape untrusted text before running markdown regexes.
+        // Model output can contain raw HTML via prompt injection from fetched
+        // pages, search results, or ingested documents. Inline markdown
+        // regexes match literal * ` - digits \n which all survive escape.
+        part = escapeHtml(part);
         part = part.replace(/`([^`]+)`/g, '<code>$1</code>');
         part = part.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
         part = part.replace(/\*(.+?)\*/g, '<em>$1</em>');
@@ -4242,7 +5126,957 @@ self.addEventListener('message', async (e) => {
       } catch {}
     }
 
-    // ── Worker factory ──────────────────────────────────────────
+    // ===========================================================
+    // === RUNTIME ADAPTER: Transformers.js ======================
+    // ===========================================================
+    // This section is the ONLY place in the file that may reference
+    // Transformers.js. Everything else — agent loop, chat UI, JS API,
+    // RAG ingestion, document upload — must go through
+    // `LocalMind.runtime.*`. The rule exists so a second backend
+    // (WebLLM, wllama, …) can be slotted in by adding another adapter
+    // section without touching anything above. If you need to add new
+    // model-side functionality, the API surface below is the contract;
+    // bend the adapter to fit it, not the other way around.
+    //
+    // Public surface:
+    //   runtime.loadModel(modelId, options) -> Promise<{ modelId, capabilities }>
+    //   runtime.unload()
+    //   runtime.chat(request) -> async iterator of events
+    //     events: { type: 'token', text }
+    //           | { type: 'tool_call', id, name, arguments }
+    //           | { type: 'done', reason, usage }
+    //           | { type: 'error', error }
+    //   runtime.embed(string)   -> Promise<Float32Array>
+    //   runtime.embed(string[]) -> Promise<Float32Array[]>
+    //   runtime.embeddingsReady -> boolean (gate; embed is lazy-loaded)
+    //   runtime.capabilities()  -> { text, image, audio, video, toolCalling, maxContextTokens }
+    //
+    // Tool calling is faked via prompt injection + parse-after-completion
+    // (Transformers.js has no native tool API). The scaffolding and the
+    // parser both live in this file as `_adapter*` helpers — the agent
+    // loop above sees only the {type:'tool_call'} events.
+    //
+    // Multimodal preprocessing (audio decode, video frame extraction)
+    // also lives here. The chat UI passes content blocks containing raw
+    // Blobs; the adapter translates them to whatever the worker expects.
+    // -----------------------------------------------------------
+
+    const LocalMind = (typeof window !== 'undefined' && window.LocalMind) || {};
+    if (typeof window !== 'undefined') window.LocalMind = LocalMind;
+
+    // ── Tool-calling helpers (adapter-internal) ─────────────────
+    // Transformers.js has no native tool-calling API. The strategy is
+    // prompt-injection: we describe the available tools and the
+    // expected <tool_call> XML format in the system prompt, generate,
+    // then scan the model's output for tool-call blocks. Both the
+    // scaffolding and the parser live here so the agent loop above
+    // never has to know how a particular runtime fakes tool calling.
+    // A WebLLM/wllama adapter would replace these with whatever
+    // native shape that runtime exposes.
+
+    function _adapterRepairJSON(str) {
+      try { return JSON.parse(str); } catch {}
+      const fixed = String(str)
+        .replace(/,\s*([}\]])/g, '$1')   // trailing commas
+        .replace(/'/g, '"')              // single → double quotes
+        .replace(/(\w+)\s*:/g, '"$1":'); // unquoted keys
+      try { return JSON.parse(fixed); } catch {}
+      return null;
+    }
+
+    function _adapterBuildToolPrompt(tools, userPrompt) {
+      // tools: [{ name, description, parameters }]
+      const toolDefs = (tools || []).map(t => ({
+        type: 'function',
+        function: { name: t.name, description: t.description, parameters: t.parameters },
+      }));
+      let prompt = `You are a helpful AI assistant with access to tools. Use them when they would help answer the user's question. If tools aren't needed, respond directly.
+
+<tools>
+${JSON.stringify(toolDefs, null, 2)}
+</tools>
+
+To call a function, output EXACTLY this format (not inside thinking):
+<tool_call>
+{"name": "function_name", "arguments": {"arg1": "value1"}}
+</tool_call>
+
+CRITICAL: The <tool_call> block must appear in your main response, NEVER inside your thinking/reasoning. Think first, then output the <tool_call> block as your response.
+
+Rules:
+- Call one tool at a time. Wait for the result before calling another.
+- When citing sources, mention where the information came from.
+- If you don't need tools, just answer directly.
+- Never fabricate tool results.
+- Always use the exact <tool_call> XML format shown above. Do not invent other formats like "tool.call:" or function-call syntax.
+- You can translate text between 140+ languages directly in your response — no tool needed for translation.`;
+      if (userPrompt) prompt += '\n\n' + userPrompt;
+      return prompt;
+    }
+
+    function _adapterParseToolCalls(text, knownToolNames) {
+      const toolCalls = [];
+      let cleanText = text;
+
+      // 1. Match <tool_call>…</tool_call> blocks
+      const tagRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+      let match;
+      while ((match = tagRegex.exec(text)) !== null) {
+        const parsed = _adapterRepairJSON(match[1].trim());
+        if (parsed && parsed.name) {
+          toolCalls.push({ name: parsed.name, arguments: parsed.arguments || {} });
+        }
+        cleanText = cleanText.replace(match[0], '');
+      }
+
+      // 2. Bare JSON without tags
+      if (toolCalls.length === 0) {
+        const bareRegex = /\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[\s\S]*?\})\s*\}/g;
+        while ((match = bareRegex.exec(text)) !== null) {
+          const args = _adapterRepairJSON(match[2]);
+          if (args) {
+            toolCalls.push({ name: match[1], arguments: args });
+            cleanText = cleanText.replace(match[0], '');
+          }
+        }
+      }
+
+      // 3. Inline tool.call:name{args} buried in thinking
+      if (toolCalls.length === 0 && knownToolNames && knownToolNames.length) {
+        const mainContent = text
+          .replace(/<\|think\|>[\s\S]*?(<\|\/think\|>|$)/, '')
+          .replace(/<\|channel>thought\n?[\s\S]*?(<channel\|>|$)/, '')
+          .trim();
+        if (!mainContent) {
+          const namesAlt = knownToolNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+          const intentRegex = new RegExp(`tool[._]?call\\s*[:.]\\s*(${namesAlt})\\s*[{(]([^})]*)`, 'i');
+          const intentMatch = text.match(intentRegex);
+          if (intentMatch) {
+            const args = {};
+            intentMatch[2].split(/[,;]/).forEach(pair => {
+              const [k, ...rest] = pair.split(':');
+              if (k && rest.length) args[k.trim()] = rest.join(':').trim().replace(/["']/g, '');
+            });
+            toolCalls.push({ name: intentMatch[1], arguments: args });
+          }
+        }
+      }
+
+      return { toolCalls, cleanText: cleanText.trim() };
+    }
+
+    function _adapterFormatToolResultMessage(name, result) {
+      // The string the model sees as the tool result. Wrapped as a
+      // user-role message in apply_chat_template — Gemma's convention.
+      return `<tool_response>
+${JSON.stringify({ name, result })}
+</tool_response>`;
+    }
+
+    // ── Multimodal helpers (adapter-internal) ───────────────────
+    // The Transformers.js multimodal processor expects:
+    //   - images: ArrayBuffer of an image file (jpg/png), reconstructed
+    //     in the worker via load_image() on a blob URL
+    //   - audio:  Float32Array of mono PCM at 16 kHz
+    //   - video:  decomposed into N frames (images) + 1 audio track
+    // The translation lives here so the agent loop never has to know
+    // about decode pipelines or sample rates.
+
+    async function _adapterDecodeAudioTo16k(blob) {
+      const arrayBuffer = await blob.arrayBuffer();
+      const audioCtx = new AudioContext({ sampleRate: 16000 });
+      const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+      const mono = decoded.getChannelData(0);
+      const pcm = new Float32Array(mono);
+      audioCtx.close();
+      return pcm;
+    }
+
+    async function _adapterDecomposeVideo(blob) {
+      const url = URL.createObjectURL(blob);
+      const video = document.createElement('video');
+      video.muted = true;
+      video.preload = 'auto';
+      video.src = url;
+
+      await new Promise((resolve, reject) => {
+        video.addEventListener('loadedmetadata', resolve);
+        video.addEventListener('error', reject);
+      });
+
+      const results = { images: [], audio: null };
+      const duration = video.duration;
+      const numFrames = Math.min(4, Math.max(1, Math.floor(duration / 2)));
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      for (let i = 0; i < numFrames; i++) {
+        const t = (duration / (numFrames + 1)) * (i + 1);
+        video.currentTime = t;
+        await new Promise(r => video.addEventListener('seeked', r, { once: true }));
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        const frameBlob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
+        if (frameBlob) {
+          results.images.push(await frameBlob.arrayBuffer());
+        }
+      }
+
+      try {
+        const arrayBuffer = await blob.arrayBuffer();
+        const audioCtx = new AudioContext({ sampleRate: 16000 });
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        results.audio = new Float32Array(audioBuffer.getChannelData(0));
+        audioCtx.close();
+      } catch {}
+
+      URL.revokeObjectURL(url);
+      return results;
+    }
+
+    // Walk a messages array. For any content array containing media
+    // blocks (image/audio/video) with `data` set, process the data and
+    // build a parallel attData list. The returned chatMessages have
+    // the same structure but with media blocks stripped of their data
+    // field — that's what the chat template needs to emit positional
+    // tokens. Stale placeholder media blocks (no data) are preserved
+    // in chatMessages but contribute nothing to attData; this matches
+    // the agent-loop behaviour where iteration > 0 carries position
+    // tokens forward but skips re-processing.
+    async function _adapterProcessContentBlocks(messages) {
+      const attData = [];
+      let hasMedia = false;
+      const out = [];
+      for (const m of messages) {
+        if (Array.isArray(m.content)) {
+          const cleanBlocks = [];
+          for (const block of m.content) {
+            if (!block || typeof block !== 'object') continue;
+            if (block.type === 'text') {
+              cleanBlocks.push({ type: 'text', text: block.text || '' });
+              continue;
+            }
+            if (block.type !== 'image' && block.type !== 'audio' && block.type !== 'video') {
+              continue;
+            }
+            hasMedia = true;
+            if (!block.data) {
+              // Stale placeholder from a prior agent-loop iteration —
+              // keep the chat-template position, no attData entry.
+              if (block.type === 'video') {
+                // Videos were already expanded on first pass, so they
+                // shouldn't appear as stale; treat defensively as one
+                // image position.
+                cleanBlocks.push({ type: 'image' });
+              } else {
+                cleanBlocks.push({ type: block.type });
+              }
+              continue;
+            }
+            const blob = block.data instanceof Blob
+              ? block.data
+              : new Blob([block.data], block.mimeType ? { type: block.mimeType } : undefined);
+            if (block.type === 'image') {
+              const buf = await blob.arrayBuffer();
+              attData.push({ type: 'image', data: buf, mimeType: blob.type || 'image/jpeg' });
+              cleanBlocks.push({ type: 'image' });
+            } else if (block.type === 'audio') {
+              const pcm = await _adapterDecodeAudioTo16k(blob);
+              attData.push({ type: 'audio', pcmData: pcm });
+              cleanBlocks.push({ type: 'audio' });
+            } else if (block.type === 'video') {
+              const decomp = await _adapterDecomposeVideo(blob);
+              for (const imgBuf of decomp.images) {
+                attData.push({ type: 'image', data: imgBuf, mimeType: 'image/jpeg' });
+                cleanBlocks.push({ type: 'image' });
+              }
+              if (decomp.audio) {
+                attData.push({ type: 'audio', pcmData: decomp.audio });
+                cleanBlocks.push({ type: 'audio' });
+              }
+            }
+          }
+          out.push({ role: m.role, content: cleanBlocks });
+        } else {
+          out.push(m);
+        }
+      }
+      return { chatMessages: out, attData, hasMedia };
+    }
+
+
+    LocalMind.runtime = {
+      // --- internal state -----------------------------------------
+      _worker: null,
+      _activeModelId: null,
+      _activeCaps: {
+        text: true, image: false, audio: false, video: false,
+        toolCalling: false, maxContextTokens: 0,
+      },
+
+      // --- loadModel ----------------------------------------------
+      // Synchronous up to the first await: terminates any previous
+      // worker, creates a fresh one, posts the load message, and stores
+      // the worker on `_worker` BEFORE returning the promise. This lets
+      // legacy callers grab the worker via `_getWorker()` synchronously
+      // after invoking loadModel and attach their own message handlers
+      // before any worker message is dispatched (postMessage and
+      // addEventListener inside the executor both run in the current
+      // microtask, so handlers attached by the caller in the same tick
+      // are guaranteed to receive every event).
+      loadModel(modelId, options) {
+        options = options || {};
+        const dtype = options.dtype || 'q4f16';
+        const modelType = options.modelType || 'causal';
+        const onProgress = options.onProgress;
+        const caps = options.capabilities || {
+          text: true, image: false, audio: false, video: false,
+          toolCalling: false, maxContextTokens: 0,
+        };
+
+        // Terminate previous worker if any
+        if (this._worker) {
+          try { this._worker.terminate(); } catch {}
+          this._worker = null;
+        }
+
+        const w = createWorker();
+        this._worker = w;
+        this._activeModelId = modelId;
+        this._activeCaps = caps;
+
+        const promise = new Promise((resolve, reject) => {
+          let settled = false;
+          const cleanup = () => {
+            settled = true;
+            w.removeEventListener('message', onMsg);
+          };
+          const onMsg = (e) => {
+            const d = e.data;
+            if (settled) return;
+            if (d.type === 'progress' && typeof onProgress === 'function') {
+              try { onProgress(d.data); } catch {}
+            } else if (d.type === 'ready') {
+              cleanup();
+              resolve({ modelId, capabilities: caps });
+            } else if (d.type === 'error') {
+              cleanup();
+              reject(new Error(d.message || 'Model load failed'));
+            }
+          };
+          w.addEventListener('message', onMsg);
+          w.addEventListener('error', (ev) => {
+            if (settled) return;
+            cleanup();
+            reject(new Error(ev.message || 'Worker startup failed'));
+          });
+          w.postMessage({ type: 'load', modelId, dtype, modelType });
+        });
+
+        return promise;
+      },
+
+      // --- unload -------------------------------------------------
+      // Frees the chat worker. Embedding worker is independent and
+      // unaffected. Idempotent.
+      unload() {
+        if (this._worker) {
+          try { this._worker.terminate(); } catch {}
+          this._worker = null;
+        }
+        this._activeModelId = null;
+        this._activeCaps = {
+          text: true, image: false, audio: false, video: false,
+          toolCalling: false, maxContextTokens: 0,
+        };
+      },
+
+      // --- chat ---------------------------------------------------
+      // Returns an async iterator that yields:
+      //   { type: 'token', text }
+      //   { type: 'tool_call', id, name, arguments }
+      //   { type: 'done',  reason: 'stop'|'length'|'tool_calls'|'abort',
+      //                    usage: { promptTokens, completionTokens } }
+      //   { type: 'error', error }
+      //
+      // Tool calling: parse-after-completion. We accumulate the text
+      // stream, then run _adapterParseToolCalls on the full text once
+      // generation finishes. If any calls are detected we emit them
+      // as tool_call events BEFORE the done event, and set the done
+      // reason to 'tool_calls'. Tokens still stream live to consumers
+      // — the chat-UI bubble keeps painting tool-call XML in real
+      // time, exactly as it does today.
+      //
+      // Multimodal: messages may carry content arrays with image/audio/
+      // video blocks (each with `data` set to a Blob or ArrayBuffer).
+      // The adapter walks them via _adapterProcessContentBlocks before
+      // posting to the worker. Stale placeholder blocks (no data field)
+      // are kept in the chat-template message but contribute nothing
+      // to attData — that's how follow-up agent iterations carry the
+      // image position tokens forward without re-decoding.
+      chat(request) {
+        request = request || {};
+        const messages = Array.isArray(request.messages) ? request.messages : [];
+        const enableThinking = !!request.enableThinking;
+        const signal = request.signal;
+        const tools = Array.isArray(request.tools) ? request.tools : null;
+        const toolsEnabled = tools && tools.length > 0;
+        const knownToolNames = toolsEnabled ? tools.map(t => t.name) : [];
+
+        // Detect whether ANY message has a media block. If yes, the
+        // multimodal processing path runs (asynchronously) before we
+        // post to the worker; otherwise we take the fast text-only
+        // path. The multimodal pre-processing (audio decode, video
+        // frame extraction) requires await, so we wrap the rest of
+        // setup in an async IIFE — the iterator is still returned
+        // synchronously and will start emitting events as soon as the
+        // worker begins streaming.
+        let hasMediaInput = false;
+        for (const m of messages) {
+          if (Array.isArray(m.content)) {
+            for (const b of m.content) {
+              if (b && (b.type === 'image' || b.type === 'audio' || b.type === 'video')) {
+                hasMediaInput = true;
+                break;
+              }
+            }
+          }
+          if (hasMediaInput) break;
+        }
+
+        // Build genConfig: start from the active model's defaults so
+        // model-specific tuning (top_k, repetition_penalty, etc) is
+        // preserved, then layer request-level overrides.
+        const activeModel = (typeof MODELS !== 'undefined' && typeof activeModelKey === 'string') ? MODELS[activeModelKey] : null;
+        const baseGen = activeModel && activeModel.genConfig ? activeModel.genConfig : {};
+        const genConfig = Object.assign({}, baseGen);
+        if (typeof request.maxTokens === 'number' && request.maxTokens > 0) {
+          genConfig.max_new_tokens = Math.floor(request.maxTokens);
+        }
+        if (typeof request.temperature === 'number') {
+          genConfig.temperature = request.temperature;
+        }
+
+        const iter = makeAsyncIterator();
+        let completionTokens = 0;
+        // Approximate prompt tokens from the raw input — exact count
+        // would require tokenising on the worker, which we don't
+        // surface to the main thread.
+        const promptTokens = messages.reduce((s, x) => {
+          let txt = '';
+          if (typeof x.content === 'string') txt = x.content;
+          else if (Array.isArray(x.content)) txt = x.content.filter(c => c && c.type === 'text').map(c => c.text || '').join(' ');
+          return s + Math.max(1, Math.round(txt.length / 4));
+        }, 0);
+
+        // Wire up cancellation: an aborted signal posts {type:'stop'}
+        // to the worker. The legacy 'complete' handler still fires
+        // afterwards (with whatever was generated so far), which lets
+        // runInference resolve and the iterator finish cleanly.
+        let aborted = false;
+        const onAbort = () => {
+          aborted = true;
+          try {
+            const w = LocalMind.runtime._worker;
+            if (w) w.postMessage({ type: 'stop' });
+          } catch {}
+        };
+        if (signal) {
+          if (signal.aborted) onAbort();
+          else signal.addEventListener('abort', onAbort, { once: true });
+        }
+
+        // Async IIFE: do (optional) multimodal preprocessing, then
+        // build the final chatMessages, inject tools if needed, fire
+        // runInference. The iterator was created above and is returned
+        // synchronously below — events stream into it as the worker
+        // produces tokens.
+        (async () => {
+          let chatMessages;
+          let attDataForWorker = null;
+          try {
+            if (hasMediaInput) {
+              // Multimodal path: keep content arrays as positional
+              // placeholder blocks, extract binary data into attData.
+              const processed = await _adapterProcessContentBlocks(messages);
+              chatMessages = processed.chatMessages.map(m => {
+                if (m.role === 'tool') {
+                  // Tool-role messages don't carry media; collapse via
+                  // the same translation as the text path.
+                  const content = typeof m.content === 'string' ? m.content : '';
+                  const toolPayload = (() => {
+                    try { return JSON.parse(content); } catch { return content; }
+                  })();
+                  return {
+                    role: 'user',
+                    content: _adapterFormatToolResultMessage(m.name || 'tool', toolPayload),
+                  };
+                }
+                return m;
+              });
+              attDataForWorker = processed.attData;
+            } else {
+              // Text-only path: collapse content arrays to strings,
+              // translate tool-role messages.
+              chatMessages = messages.map(m => {
+                let content = m.content;
+                if (Array.isArray(content)) {
+                  content = content
+                    .filter(c => c && c.type === 'text')
+                    .map(c => c.text || '')
+                    .join(' ');
+                } else if (typeof content !== 'string') {
+                  content = String(content == null ? '' : content);
+                }
+                if (m.role === 'tool') {
+                  const toolPayload = (() => {
+                    try { return JSON.parse(content); } catch { return content; }
+                  })();
+                  return {
+                    role: 'user',
+                    content: _adapterFormatToolResultMessage(m.name || 'tool', toolPayload),
+                  };
+                }
+                return { role: m.role, content };
+              });
+            }
+
+            // Tool prompt injection. Replaces (or inserts) the system
+            // message at index 0 with the tool-scaffolded version. The
+            // original system content (if any) becomes the suffix.
+            if (toolsEnabled) {
+              let userSysContent = '';
+              if (chatMessages.length && chatMessages[0].role === 'system') {
+                const c = chatMessages[0].content;
+                userSysContent = typeof c === 'string' ? c : '';
+                chatMessages = chatMessages.slice(1);
+              }
+              const toolSys = _adapterBuildToolPrompt(tools, userSysContent);
+              chatMessages = [{ role: 'system', content: toolSys }].concat(chatMessages);
+            }
+          } catch (e) {
+            const err = e instanceof Error ? e : new Error(String(e));
+            iter.push({ type: 'error', error: err });
+            iter.finish(err);
+            return;
+          }
+
+          const inferencePromise = runInference({
+            chatMessages,
+            attData: attDataForWorker,
+            enableThinking,
+            genConfig,
+            setup: () => {
+              // Reset the legacy accumulator so `currentAssistantText`
+              // (which the 'complete' handler resolves runInference
+              // with) starts this call from empty. Without this,
+              // direct programmatic callers of runtime.chat would see
+              // the text of the previous call prepended to theirs and
+              // the tool-call parser could double-match. The chat UI
+              // and JS API paths also reset this themselves — doing
+              // it again here is harmless and makes the adapter
+              // self-contained.
+              currentAssistantText = '';
+
+              // Install the per-token sink. We deliberately do NOT
+              // touch currentAssistantEl here — the legacy chat-UI
+              // bubble keeps updating for callers that placed a bubble
+              // before invoking us. Callers that don't want a bubble
+              // (the JS API, sub-agents) null currentAssistantEl
+              // themselves before the call.
+              currentInferenceContext = {
+                onToken: (token) => {
+                  completionTokens++;
+                  iter.push({ type: 'token', text: token });
+                },
+              };
+            },
+          });
+
+          inferencePromise.then(
+            (fullText) => {
+              if (signal) signal.removeEventListener && signal.removeEventListener('abort', onAbort);
+
+              // Tool-call detection (parse-after-completion). Only emit
+              // tool_call events when the caller actually asked for
+              // tools — otherwise the same model output is just plain
+              // text and we don't want phantom calls from regex hits.
+              let reason = aborted ? 'abort' : 'stop';
+              if (toolsEnabled && !aborted && typeof fullText === 'string' && fullText.length) {
+                const { toolCalls } = _adapterParseToolCalls(fullText, knownToolNames);
+                if (toolCalls.length > 0) {
+                  reason = 'tool_calls';
+                  for (const tc of toolCalls) {
+                    iter.push({
+                      type: 'tool_call',
+                      id: 'tc-' + Math.random().toString(36).slice(2, 10),
+                      name: tc.name,
+                      arguments: tc.arguments || {},
+                    });
+                  }
+                }
+              }
+
+              iter.push({
+                type: 'done',
+                reason,
+                usage: { promptTokens, completionTokens },
+              });
+              iter.finish();
+            },
+            (err) => {
+              if (signal) signal.removeEventListener && signal.removeEventListener('abort', onAbort);
+              const e = err instanceof Error ? err : new Error(String(err));
+              iter.push({ type: 'error', error: e });
+              iter.finish(e);
+            }
+          );
+        })();
+
+        return iter;
+      },
+
+      // --- embed --------------------------------------------------
+      // Lazy: the embedding worker is created on first call, kept
+      // alive for the lifetime of the page, and serialised internally
+      // so concurrent callers can't race the underlying postMessage
+      // request/response pairing. The chat worker is independent —
+      // unload() does NOT touch this one.
+      //
+      // Spec contract:
+      //   embed(string)        -> Promise<Float32Array>
+      //   embed(string[])      -> Promise<Float32Array[]>
+      _embWorker: null,
+      _embReady: false,
+      _embQueue: Promise.resolve(),
+
+      get embeddingsReady() { return this._embReady; },
+
+      _ensureEmbWorker() {
+        if (this._embReady) return Promise.resolve();
+        const self = this;
+        if (this._embWorker) {
+          return new Promise((resolve, reject) => {
+            const handler = (e) => {
+              if (e.data.type === 'ready') {
+                self._embReady = true;
+                self._embWorker.removeEventListener('message', handler);
+                resolve();
+              } else if (e.data.type === 'error') {
+                self._embWorker.removeEventListener('message', handler);
+                reject(new Error(e.data.message));
+              }
+            };
+            self._embWorker.addEventListener('message', handler);
+          });
+        }
+        this._embWorker = createEmbeddingWorker();
+        return new Promise((resolve, reject) => {
+          const handler = (e) => {
+            if (e.data.type === 'ready') {
+              self._embReady = true;
+              self._embWorker.removeEventListener('message', handler);
+              resolve();
+            } else if (e.data.type === 'error') {
+              self._embWorker.removeEventListener('message', handler);
+              reject(new Error(e.data.message));
+            }
+          };
+          self._embWorker.addEventListener('message', handler);
+          self._embWorker.postMessage({ type: 'load' });
+        });
+      },
+
+      embed(texts /*, options */) {
+        const self = this;
+        const wasString = typeof texts === 'string';
+        const arr = wasString ? [texts] : texts;
+        if (!Array.isArray(arr) || arr.length === 0) {
+          return Promise.resolve(wasString ? new Float32Array(0) : []);
+        }
+        // Serialise: each call chains onto the previous so worker
+        // request IDs cannot collide across concurrent callers.
+        this._embQueue = this._embQueue.then(() => self._ensureEmbWorker().then(() => {
+          return new Promise((resolve, reject) => {
+            const id = Math.random().toString(36).slice(2);
+            const handler = (e) => {
+              if (e.data.id === id) {
+                self._embWorker.removeEventListener('message', handler);
+                if (e.data.type === 'embeddings') {
+                  // Worker returns Array<Array<number>>; cast each to
+                  // Float32Array per the runtime contract. cosineSimilarity
+                  // and IndexedDB both handle typed arrays transparently.
+                  resolve(e.data.vectors.map(v => new Float32Array(v)));
+                } else {
+                  reject(new Error(e.data.message || 'Embedding failed'));
+                }
+              }
+            };
+            self._embWorker.addEventListener('message', handler);
+            self._embWorker.postMessage({ type: 'embed', texts: arr, id });
+          });
+        }));
+        return this._embQueue.then(vectors => wasString ? vectors[0] : vectors);
+      },
+
+      // --- SAM segmentation ----------------------------------------
+      // Lazy: the SAM worker is created on first segmentImage() call.
+      // Independent of the chat and embedding workers. Auto-switches
+      // if the user picks a different SAM model in settings.
+      _samWorker: null,
+      _samReady: false,
+      _samQueue: Promise.resolve(),
+      _samModelId: null,
+
+      _ensureSAMWorker(modelId) {
+        const self = this;
+        // Model changed — tear down old worker
+        if (this._samWorker && this._samModelId !== modelId) {
+          try { this._samWorker.terminate(); } catch {}
+          this._samWorker = null;
+          this._samReady = false;
+          this._samModelId = null;
+        }
+        if (this._samReady && this._samModelId === modelId) return Promise.resolve();
+        if (this._samWorker) {
+          // Worker exists but not ready yet — wait for it
+          return new Promise((resolve, reject) => {
+            const handler = (e) => {
+              if (e.data.type === 'ready') {
+                self._samReady = true;
+                self._samWorker.removeEventListener('message', handler);
+                resolve();
+              } else if (e.data.type === 'error') {
+                self._samWorker.removeEventListener('message', handler);
+                reject(new Error(e.data.message));
+              }
+            };
+            self._samWorker.addEventListener('message', handler);
+          });
+        }
+        this._samWorker = createSAMWorker();
+        this._samModelId = modelId;
+        return new Promise((resolve, reject) => {
+          const handler = (e) => {
+            if (e.data.type === 'ready') {
+              self._samReady = true;
+              self._samWorker.removeEventListener('message', handler);
+              resolve();
+            } else if (e.data.type === 'error') {
+              self._samWorker.removeEventListener('message', handler);
+              self._samReady = false;
+              reject(new Error(e.data.message));
+            }
+          };
+          self._samWorker.addEventListener('message', handler);
+          self._samWorker.postMessage({ type: 'load', modelId });
+        });
+      },
+
+      segmentImage(imageBlob, points, labels) {
+        const self = this;
+        const modelId = localStorage.getItem('lm_sam_model') || 'Xenova/slimsam-77-uniform';
+        this._samQueue = this._samQueue.then(() => self._ensureSAMWorker(modelId).then(async () => {
+          const arrayBuf = await imageBlob.arrayBuffer();
+          return new Promise((resolve, reject) => {
+            const id = Math.random().toString(36).slice(2);
+            const handler = (e) => {
+              if (e.data.id === id) {
+                self._samWorker.removeEventListener('message', handler);
+                if (e.data.type === 'masks') {
+                  resolve({ masks: e.data.masks, scores: e.data.scores });
+                } else {
+                  reject(new Error(e.data.message || 'Segmentation failed'));
+                }
+              }
+            };
+            self._samWorker.addEventListener('message', handler);
+            self._samWorker.postMessage(
+              { type: 'segment', imageBuffer: arrayBuf, mimeType: imageBlob.type, points, labels, id },
+              [arrayBuf]
+            );
+          });
+        }));
+        return this._samQueue;
+      },
+
+      // --- capabilities -------------------------------------------
+      capabilities() {
+        return Object.assign({}, this._activeCaps);
+      },
+
+      // --- transitional helpers (removed in later steps) ----------
+      // These exist only so the legacy code that still pokes the
+      // worker directly (attachWorkerHandlers, generateOnce, the stop
+      // button) can keep working until Step 5 routes everything
+      // through chat(). They are NOT part of the public surface.
+      _getWorker() { return this._worker; },
+    };
+
+    // ── Embedding worker factory (MiniLM via @huggingface/transformers) ──
+    // Called once, lazily, by runtime.embed() on the first embed request.
+    // Lives inside the adapter because its blob source code imports from
+    // the Transformers.js CDN.
+    function createEmbeddingWorker() {
+      const code = `
+import {
+  env,
+  pipeline,
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+
+env.allowLocalModels  = true;
+env.localModelPath    = '/models/';
+env.allowRemoteModels = true;
+
+let embedder = null;
+
+self.addEventListener('message', async (e) => {
+  const { type, texts, id } = e.data;
+  if (type === 'load') {
+    try {
+      embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+        device: 'wasm',
+        progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
+      });
+      self.postMessage({ type: 'ready' });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: err.message || String(err) });
+    }
+  } else if (type === 'embed') {
+    try {
+      const results = [];
+      for (const text of texts) {
+        const output = await embedder(text, { pooling: 'mean', normalize: true });
+        results.push(Array.from(output.data));
+      }
+      self.postMessage({ type: 'embeddings', vectors: results, id });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: err.message || String(err), id });
+    }
+  }
+});
+`;
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url, { type: 'module' });
+      w.addEventListener('error', (e) => {
+        console.error('Embedding worker error:', e.message);
+      });
+      return w;
+    }
+
+    // ── SAM segmentation worker factory ────────────────────────
+    // Lazy-loaded on first segment_image tool call. Runs on WASM
+    // (WebGPU is occupied by Gemma). Handles both SAM 1 (SamModel)
+    // and SAM 3 (Sam3TrackerModel) via a modelId check.
+    function createSAMWorker() {
+      const code = `
+import {
+  env,
+  SamModel,
+  Sam3TrackerModel,
+  AutoProcessor,
+  RawImage,
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+
+env.allowLocalModels  = true;
+env.localModelPath    = '/models/';
+env.allowRemoteModels = true;
+
+let model = null;
+let processor = null;
+let loadedModelId = null;
+
+self.addEventListener('message', async (e) => {
+  const { type } = e.data;
+
+  if (type === 'load') {
+    const { modelId } = e.data;
+    try {
+      const isSam3 = modelId.toLowerCase().includes('sam3');
+      const ModelClass = isSam3 ? Sam3TrackerModel : SamModel;
+      const opts = {
+        device: 'wasm',
+        progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
+      };
+      processor = await AutoProcessor.from_pretrained(modelId);
+      model = await ModelClass.from_pretrained(modelId, opts);
+      loadedModelId = modelId;
+      self.postMessage({ type: 'ready' });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: 'SAM load failed: ' + (err.message || String(err)) });
+    }
+  }
+
+  else if (type === 'segment') {
+    const { imageBuffer, mimeType, points, labels, id } = e.data;
+    if (!model || !processor) {
+      self.postMessage({ type: 'error', message: 'SAM model not loaded', id });
+      return;
+    }
+    try {
+      const blob = new Blob([imageBuffer], { type: mimeType || 'image/jpeg' });
+      const raw_image = await RawImage.fromBlob(blob);
+
+      // Wrap in batch dimension: [[[x,y], ...]] and [[label, ...]]
+      const input_points = [points.map(p => [p[0], p[1]])];
+      const input_labels = [labels.map(l => l)];
+
+      const inputs = await processor(raw_image, { input_points, input_labels });
+      const outputs = await model(inputs);
+
+      const masks = await processor.post_process_masks(
+        outputs.pred_masks,
+        inputs.original_sizes,
+        inputs.reshaped_input_sizes,
+      );
+
+      // masks shape: [batch][num_masks] each is a Tensor of booleans
+      // Extract the first batch, convert each mask to {width, height, data}
+      const batchMasks = masks[0]; // first (only) batch
+      const iou_scores = outputs.iou_scores?.data
+        ? Array.from(outputs.iou_scores.data)
+        : [];
+
+      const result = [];
+      const transferables = [];
+
+      // batchMasks is a Tensor of shape [num_masks, H, W]
+      const numMasks = batchMasks.dims[0];
+      const maskH = batchMasks.dims[1];
+      const maskW = batchMasks.dims[2];
+
+      for (let i = 0; i < numMasks; i++) {
+        const maskData = new Uint8Array(maskH * maskW);
+        const offset = i * maskH * maskW;
+        for (let j = 0; j < maskH * maskW; j++) {
+          maskData[j] = batchMasks.data[offset + j] ? 255 : 0;
+        }
+        result.push({ width: maskW, height: maskH, data: maskData });
+        transferables.push(maskData.buffer);
+      }
+
+      self.postMessage(
+        { type: 'masks', masks: result, scores: iou_scores, id },
+        transferables
+      );
+    } catch (err) {
+      self.postMessage({ type: 'error', message: 'Segmentation failed: ' + (err.message || String(err)), id });
+    }
+  }
+});
+`;
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url, { type: 'module' });
+      w.addEventListener('error', (e) => {
+        console.error('SAM worker error:', e.message);
+      });
+      return w;
+    }
+
+    // ── Generation worker factory ───────────────────────────────
     // Pattern from huggingface/transformers.js-examples (Llama 3.2 WebGPU).
     // Uses AutoModelForCausalLM + AutoTokenizer (not pipeline) for causal models.
     // Uses Gemma4ForConditionalGeneration + AutoProcessor for multimodal models.
@@ -4458,6 +6292,10 @@ self.addEventListener('message', async (e) => {
       return new Worker(url, { type: 'module' });
     }
 
+    // ===========================================================
+    // === END RUNTIME ADAPTER ===================================
+    // ===========================================================
+
     // ── Worker message handling ─────────────────────────────────
     function attachWorkerHandlers(w) {
       // Catch silent worker failures (e.g. bad import, missing export)
@@ -4509,7 +6347,9 @@ self.addEventListener('message', async (e) => {
           const m = MODELS[activeModelKey];
           statusText.textContent = m.label;
           chatInput.disabled = false;
-          chatInput.placeholder = m.multimodal ? 'Type a message, or attach images/audio...' : 'Type a message...';
+          const readyCaps = LocalMind.runtime.capabilities();
+          const supportsMedia = !!(readyCaps && (readyCaps.image || readyCaps.audio || readyCaps.video));
+          chatInput.placeholder = supportsMedia ? 'Type a message, or attach images/audio...' : 'Type a message...';
           sendBtn.disabled = false; searchSendBtn.disabled = false;
           clearBtn.disabled = false;
           newChatBtn.disabled = false;
@@ -4517,12 +6357,24 @@ self.addEventListener('message', async (e) => {
           updateModelUI();
           updateBatchCount();
           chatInput.focus();
+          // Resolve any pending window.localmind.load() promise
+          if (loadResolvers) {
+            const r = loadResolvers; loadResolvers = null;
+            r.resolve();
+          }
         }
 
         else if (data.type === 'token') {
+          // Always accumulate so non-streaming callers (chat UI, non-streaming
+          // API) still receive the full text via the 'complete' handler.
+          currentAssistantText += data.token;
           if (currentAssistantEl) {
-            currentAssistantText += data.token;
             updateAssistantBubble(currentAssistantEl.bubble, currentAssistantText);
+          }
+          // Streaming consumer (window.localmind.chat.completions.create with
+          // stream: true) — route this token to its async iterator.
+          if (currentInferenceContext && typeof currentInferenceContext.onToken === 'function') {
+            try { currentInferenceContext.onToken(data.token); } catch (e) { console.error('streaming onToken threw:', e); }
           }
         }
 
@@ -4563,19 +6415,32 @@ self.addEventListener('message', async (e) => {
             currentAssistantText += `\n\n*Error: ${data.message}*`;
             updateAssistantBubble(currentAssistantEl.bubble, currentAssistantText);
           }
+          // Reject any pending window.localmind.load() promise
+          if (loadResolvers) {
+            const r = loadResolvers; loadResolvers = null;
+            r.reject(new Error(data.message || 'Model load failed'));
+          }
         }
       });
     }
 
     // ── Load model ──────────────────────────────────────────────
+    // Thin shell over LocalMind.runtime.loadModel that drives the
+    // existing UI state machine. The runtime owns worker lifecycle;
+    // we still attach the legacy message handlers to the freshly
+    // created worker so streaming tokens, progress, and 'ready'
+    // events update the UI exactly as before. Step 5 collapses the
+    // legacy handlers in favour of the chat() async iterator.
     function loadModel(key) {
       const m = MODELS[key];
       if (!m) return;
 
-      // Terminate previous worker if switching models
-      if (worker) {
-        worker.terminate();
-        worker = null;
+      // Any in-flight API load promise is now stale — reject it before the
+      // new load starts so the caller is notified and the new caller (if any)
+      // can attach fresh resolvers right after this returns.
+      if (loadResolvers) {
+        const r = loadResolvers; loadResolvers = null;
+        try { r.reject(new Error('Load superseded by another load')); } catch {}
       }
 
       activeModelKey = key;
@@ -4597,15 +6462,32 @@ self.addEventListener('message', async (e) => {
       modelSelect.disabled = true;
       updateModelUI();
 
-      // Create fresh worker and load
-      worker = createWorker();
-      attachWorkerHandlers(worker);
-      worker.postMessage({
-        type: 'load',
-        modelId: m.id,
+      // Delegate worker creation + load message to the runtime adapter.
+      // We deliberately do NOT await the returned promise here — the
+      // legacy attachWorkerHandlers() below already drives the UI from
+      // worker events (progress / ready / error). The .catch is purely
+      // defensive against unhandled rejections; UI error state is
+      // already handled by the legacy 'error' message handler.
+      LocalMind.runtime.loadModel(m.id, {
         dtype: m.dtype,
         modelType: m.type,
+        capabilities: {
+          text: true,
+          image: !!m.multimodal,
+          audio: !!m.multimodal,
+          video: !!m.multimodal,
+          toolCalling: !!m.agentCapable,
+          maxContextTokens: m.contextSize || 0,
+        },
+      }).catch((e) => {
+        console.warn('runtime.loadModel rejected:', e && e.message);
       });
+
+      // Pull the freshly created worker from the runtime and attach
+      // the legacy UI handlers. Synchronous after loadModel() returns,
+      // so handlers are wired before any worker message dispatches.
+      worker = LocalMind.runtime._getWorker();
+      attachWorkerHandlers(worker);
     }
 
     // ── Model selector ──────────────────────────────────────────
@@ -4616,87 +6498,11 @@ self.addEventListener('message', async (e) => {
       loadModel(key);
     });
 
-    // ── Prepare attachment data for worker transfer ─────────────
-    async function decodeAudioTo16kMono(blob) {
-      const arrayBuffer = await blob.arrayBuffer();
-      const audioCtx = new AudioContext({ sampleRate: 16000 });
-      const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-      const mono = decoded.getChannelData(0);
-      const pcm = new Float32Array(mono);
-      audioCtx.close();
-      return pcm;
-    }
-
-    async function decomposeVideoForWorker(blob) {
-      const url = URL.createObjectURL(blob);
-      const video = document.createElement('video');
-      video.muted = true;
-      video.preload = 'auto';
-      video.src = url;
-
-      await new Promise((resolve, reject) => {
-        video.addEventListener('loadedmetadata', resolve);
-        video.addEventListener('error', reject);
-      });
-
-      const results = { images: [], audio: null };
-      const duration = video.duration;
-      const numFrames = Math.min(4, Math.max(1, Math.floor(duration / 2)));
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-
-      for (let i = 0; i < numFrames; i++) {
-        const t = (duration / (numFrames + 1)) * (i + 1);
-        video.currentTime = t;
-        await new Promise(r => video.addEventListener('seeked', r, { once: true }));
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0);
-        const frameBlob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
-        if (frameBlob) {
-          results.images.push(await frameBlob.arrayBuffer());
-        }
-      }
-
-      try {
-        const arrayBuffer = await blob.arrayBuffer();
-        const audioCtx = new AudioContext({ sampleRate: 16000 });
-        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-        results.audio = new Float32Array(audioBuffer.getChannelData(0));
-        audioCtx.close();
-      } catch {}
-
-      URL.revokeObjectURL(url);
-      return results;
-    }
-
-    async function prepareAttachmentsForWorker() {
-      const attData = [];
-      for (const att of attachments) {
-        if (att.type === 'video') {
-          // Decompose video into frames + audio at send time
-          const decomposed = await decomposeVideoForWorker(att.blob);
-          for (const imgBuf of decomposed.images) {
-            attData.push({ type: 'image', data: imgBuf, mimeType: 'image/jpeg' });
-          }
-          if (decomposed.audio) {
-            attData.push({ type: 'audio', pcmData: decomposed.audio });
-          }
-        } else if (att.type === 'audio') {
-          let pcm;
-          if (att.pcmData) {
-            pcm = att.pcmData;
-          } else {
-            pcm = await decodeAudioTo16kMono(att.blob);
-          }
-          attData.push({ type: 'audio', pcmData: pcm });
-        } else {
-          const buffer = await att.blob.arrayBuffer();
-          attData.push({ type: att.type, data: buffer, mimeType: att.blob.type });
-        }
-      }
-      return attData;
-    }
+    // Attachment preprocessing (audio decode, video frame extraction,
+    // image blob reads) has moved inside the runtime adapter — see
+    // _adapterDecodeAudioTo16k / _adapterDecomposeVideo /
+    // _adapterProcessContentBlocks. The chat UI now passes raw Blobs
+    // in content-block form and the adapter handles the translation.
 
     // ── Send message ────────────────────────────────────────────
     function generateOnce(chatMessages, attData, enableThinking, genConfig) {
@@ -4712,6 +6518,57 @@ self.addEventListener('message', async (e) => {
           generationConfig: genConfig,
         });
       });
+    }
+
+    // FIFO wrapper around generateOnce. All inference callers — the chat UI,
+    // the agentic loop, and (soon) the window.localmind API — route through
+    // here so two callers can't race and clobber each other's generateResolve
+    // promise. Chat UI is already serialised by the `generating` flag; the
+    // queue adds correctness so that does not have to be the load-bearing
+    // guarantee. Bounded length keeps a misbehaving caller from piling up
+    // jobs. Items past MAX_INFER_QUEUE are rejected synchronously.
+    const inferQueue = [];
+    const MAX_INFER_QUEUE = 4;
+    let inferDraining = false;
+
+    // opts: { chatMessages, attData, enableThinking, genConfig, setup? }
+    // The optional `setup` callback runs INSIDE the queue critical section,
+    // right before the worker job posts. This is how the API path safely
+    // resets currentAssistantEl/Text without racing the chat path's own
+    // setup that lives in sendMessage().
+    function runInference(opts) {
+      return new Promise((resolve, reject) => {
+        if (inferQueue.length >= MAX_INFER_QUEUE) {
+          reject(new Error('inference queue full (max ' + MAX_INFER_QUEUE + ')'));
+          return;
+        }
+        inferQueue.push({ ...opts, resolve, reject });
+        drainInferQueue();
+      });
+    }
+
+    async function drainInferQueue() {
+      if (inferDraining) return;
+      inferDraining = true;
+      try {
+        while (inferQueue.length) {
+          const job = inferQueue.shift();
+          // Reset per-job context so an earlier streaming job's token sink
+          // can't leak into this one. The job's setup() may install a new
+          // currentInferenceContext on top.
+          currentInferenceContext = null;
+          try {
+            if (typeof job.setup === 'function') job.setup();
+            const result = await generateOnce(job.chatMessages, job.attData, job.enableThinking, job.genConfig);
+            job.resolve(result);
+          } catch (e) {
+            job.reject(e);
+          }
+        }
+        currentInferenceContext = null;
+      } finally {
+        inferDraining = false;
+      }
     }
 
     function renderToolCallBlock(bubble, toolName, args, result) {
@@ -4730,36 +6587,125 @@ self.addEventListener('message', async (e) => {
       chatArea.scrollTop = chatArea.scrollHeight;
     }
 
+    function renderSegmentationOverlay(bubble, imageBlob, masks, scores) {
+      if (!masks || masks.length === 0) return;
+
+      // Pick the best-scoring mask
+      let bestIdx = 0;
+      let bestScore = -1;
+      for (let i = 0; i < masks.length; i++) {
+        const s = scores[i] != null ? scores[i] : 0;
+        if (s > bestScore) { bestScore = s; bestIdx = i; }
+      }
+      const mask = masks[bestIdx];
+
+      const container = document.createElement('div');
+      container.className = 'segmentation-result';
+
+      const img = document.createElement('img');
+      const imgUrl = URL.createObjectURL(imageBlob);
+      img.src = imgUrl;
+      img.alt = 'Segmented image';
+      container.appendChild(img);
+
+      img.onload = () => {
+        const displayW = img.naturalWidth;
+        const displayH = img.naturalHeight;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = displayW;
+        canvas.height = displayH;
+        container.appendChild(canvas);
+
+        const ctx = canvas.getContext('2d');
+        const imgData = ctx.createImageData(displayW, displayH);
+
+        // Scale mask to image dimensions if they differ
+        for (let y = 0; y < displayH; y++) {
+          for (let x = 0; x < displayW; x++) {
+            const mx = Math.floor((x / displayW) * mask.width);
+            const my = Math.floor((y / displayH) * mask.height);
+            const maskVal = mask.data[my * mask.width + mx];
+            const idx = (y * displayW + x) * 4;
+            if (maskVal > 128) {
+              // Indigo overlay at 40% opacity
+              imgData.data[idx] = 102;
+              imgData.data[idx + 1] = 126;
+              imgData.data[idx + 2] = 234;
+              imgData.data[idx + 3] = 102; // ~40%
+            }
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+
+        // Download button
+        const dlBtn = document.createElement('button');
+        dlBtn.className = 'segmentation-download';
+        dlBtn.textContent = '\u2913 Download segmented image';
+        dlBtn.addEventListener('click', () => {
+          const exportCanvas = document.createElement('canvas');
+          exportCanvas.width = displayW;
+          exportCanvas.height = displayH;
+          const ectx = exportCanvas.getContext('2d');
+          ectx.drawImage(img, 0, 0);
+          ectx.drawImage(canvas, 0, 0);
+          exportCanvas.toBlob((blob) => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'segmented-' + new Date().toISOString().slice(0, 19).replace(/:/g, '') + '.png';
+            a.click();
+            URL.revokeObjectURL(url);
+          }, 'image/png');
+        });
+        container.appendChild(dlBtn);
+
+        chatArea.scrollTop = chatArea.scrollHeight;
+      };
+
+      bubble.appendChild(container);
+    }
+
     async function sendMessage() {
       const text = chatInput.value.trim();
       if ((!text && attachments.length === 0) || !modelReady || generating) return;
 
       const m = MODELS[activeModelKey];
-      const isMultimodal = m && m.multimodal && attachments.length > 0;
+      const caps = LocalMind.runtime.capabilities();
+      const supportsMedia = !!(caps && (caps.image || caps.audio || caps.video));
+      const isMultimodal = supportsMedia && attachments.length > 0;
       const hasAttachments = attachments.length > 0;
-      const isAgent = m && m.agentCapable;
+      const isAgent = !!(caps && caps.toolCalling);
 
-      // Prepare attachment data first (video decomposition happens here)
-      let attData = null;
+      // Snapshot the attachment Blobs into a content-block array with
+      // real data — this is what runtime.chat() will translate into
+      // worker-ready inputs. The stored chat-history message stays as
+      // text-only ('(attachments only)') because Blobs can't be
+      // serialised to sessionStorage anyway, and the chat history
+      // display only renders attachments via the input bar at send
+      // time, not from the messages array.
+      let runtimeUserContent = null;
       if (isMultimodal) {
-        attData = await prepareAttachmentsForWorker();
-      }
-
-      // Build user message content
-      let userContent;
-      if (isMultimodal) {
-        const contentBlocks = [];
-        if (attData) {
-          for (const att of attData) {
-            if (att.type === 'image') contentBlocks.push({ type: 'image' });
-            else if (att.type === 'audio') contentBlocks.push({ type: 'audio' });
+        const blocks = [];
+        for (const att of attachments) {
+          if (att.type === 'audio' && att.pcmData) {
+            // Pre-decoded mic recording — wrap as a Blob so the adapter
+            // re-decoder gets consistent input. The decoder will redo
+            // the work; we could pass pcmData directly via a custom
+            // block shape, but Blob keeps the contract simple.
+            blocks.push({ type: 'audio', data: att.blob });
+          } else if (att.type === 'image' || att.type === 'audio' || att.type === 'video') {
+            blocks.push({ type: att.type, data: att.blob });
           }
         }
-        if (text) contentBlocks.push({ type: 'text', text });
-        userContent = contentBlocks;
-      } else {
-        userContent = text || '(attachments only)';
+        if (text) blocks.push({ type: 'text', text });
+        runtimeUserContent = blocks;
       }
+
+      // Build user message content for storage / chat history. Stored
+      // shape is text-only — the data-bearing version above is used
+      // only for the runtime.chat call.
+      const userContent = text || (hasAttachments ? '(attachments only)' : '');
 
       messages.push({ role: 'user', content: userContent });
       addUserMessage(text || '(attachments)', hasAttachments);
@@ -4768,12 +6714,15 @@ self.addEventListener('message', async (e) => {
       chatInput.value = '';
       chatInput.style.height = 'auto';
 
-      // Build system prompt (with optional RAG context)
+      // Build system prompt. The tool-calling scaffolding is added
+      // by runtime.chat() when we pass it a `tools` array — we just
+      // build the user-facing portion (custom prompt + optional RAG
+      // + optional web search results) here.
       const userSysPrompt = systemPrompt.value.trim();
-      let sysPrompt = isAgent ? buildAgentSystemPrompt(userSysPrompt) : userSysPrompt;
+      let sysPrompt = userSysPrompt;
 
       // Auto-inject RAG context if embedding model is ready and agent-capable
-      if (isAgent && embeddingReady) {
+      if (isAgent && LocalMind.runtime.embeddingsReady) {
         try {
           const userText = typeof userContent === 'string' ? userContent : text;
           if (userText) {
@@ -4802,7 +6751,7 @@ self.addEventListener('message', async (e) => {
             const searchBlock = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}\nURL: ${r.url}`).join('\n\n');
             sysPrompt += `\n\n[Web search results for "${userText}" — cite sources by number]\n${searchBlock}`;
             // Cache in RAG
-            if (embeddingReady) {
+            if (LocalMind.runtime.embeddingsReady) {
               const snippetText = results.map(r => `${r.title}: ${r.snippet}`).join('\n');
               embedAndStore(snippetText, 'finding', 'web-search').catch(() => {});
             }
@@ -4816,6 +6765,22 @@ self.addEventListener('message', async (e) => {
       // Build context-windowed chat history
       const chatMessages = buildContextMessages(messages, sysPrompt, activeModelKey);
 
+      // For multimodal sends, replace the most-recent user message in
+      // chatMessages with the data-bearing content array we built
+      // above. The runtime adapter will detect the media blocks and
+      // process them. After the first agent-loop iteration, we strip
+      // the data field (see scrubMediaForFollowup below) so the chat
+      // template still emits position tokens but the adapter doesn't
+      // re-decode the same media on every pass.
+      if (runtimeUserContent) {
+        for (let i = chatMessages.length - 1; i >= 0; i--) {
+          if (chatMessages[i].role === 'user') {
+            chatMessages[i] = { role: 'user', content: runtimeUserContent };
+            break;
+          }
+        }
+      }
+
       // UI: enter generating state
       currentAssistantEl = addAssistantPlaceholder();
       currentAssistantText = '';
@@ -4828,61 +6793,158 @@ self.addEventListener('message', async (e) => {
       const genConfig = m.genConfig;
       const enableThinking = thinkingToggle.checked;
 
+      // Snapshot last image blob for segment_image tool before clearing
+      const lastImageBlob = runtimeUserContent
+        ? runtimeUserContent.filter(b => b.type === 'image').map(b => b.data).pop()
+        : null;
+
       // Clear attachments after capturing data
       clearAttachments();
 
       if (!isAgent) {
-        // Non-agent path: single generation, no tool calling
-        const response = await generateOnce(chatMessages, attData, enableThinking, genConfig);
-        finishGeneration(response, searchSources);
+        // Non-agent path: single generation, no tool calling.
+        // Routed through LocalMind.runtime.chat — the legacy bubble
+        // updater (attachWorkerHandlers token handler) still paints
+        // currentAssistantEl as tokens arrive; we consume the iterator
+        // purely to collect the final text and the done signal.
+        let fullText = '';
+        let chatErr = null;
+        try {
+          for await (const ev of LocalMind.runtime.chat({
+            messages: chatMessages,
+            enableThinking,
+            maxTokens: genConfig && genConfig.max_new_tokens,
+            temperature: genConfig && genConfig.temperature,
+          })) {
+            if (ev.type === 'token') {
+              fullText += ev.text;
+            } else if (ev.type === 'done') {
+              break;
+            } else if (ev.type === 'error') {
+              chatErr = ev.error;
+              break;
+            }
+          }
+        } catch (e) {
+          chatErr = e;
+        }
+        if (chatErr) {
+          fullText = (fullText || '') + `\n\n*Error: ${chatErr.message || chatErr}*`;
+        }
+        finishGeneration(fullText || null, searchSources);
         return;
       }
 
       // ── Agentic loop ──────────────────────────────────────────
+      // The agent loop is now runtime-agnostic: it calls
+      // LocalMind.runtime.chat() with the tool list, consumes
+      // {token, tool_call, done} events from the iterator, executes
+      // each tool through TOOL_REGISTRY, and feeds results back as
+      // tool-role messages on the next iteration.
       const MAX_TOOL_ITERATIONS = 3;
       let loopMessages = [...chatMessages];
-      let currentAttData = attData; // Only pass attachments on first iteration
-      // Collect any sources from tool-initiated web searches too
       const allSources = [...searchSources];
       let toolsUsedInLoop = false;
+      const tools = buildToolsForRuntime();
+
+      // After iter 0, strip the `data` field from media blocks in any
+      // user message — the chat template still emits position tokens
+      // for the placeholder shape, but the adapter won't re-decode the
+      // same audio/video on every iteration (and the worker receives
+      // null images/audio, matching the pre-refactor iter>0 behaviour).
+      function scrubMediaForFollowup(msgs) {
+        return msgs.map(msg => {
+          if (!Array.isArray(msg.content)) return msg;
+          return {
+            ...msg,
+            content: msg.content.map(b => {
+              if (b && (b.type === 'image' || b.type === 'audio' || b.type === 'video')) {
+                return { type: b.type };
+              }
+              return b;
+            }),
+          };
+        });
+      }
+
+      // Helper: drive one chat() call to completion, collecting text
+      // and any tool_call events from the iterator. Returns
+      // { fullText, toolCalls, doneReason, error }.
+      async function runOneAgentTurn(turnMessages, turnThinking) {
+        let fullText = '';
+        const toolCalls = [];
+        let doneReason = null;
+        let error = null;
+        try {
+          for await (const ev of LocalMind.runtime.chat({
+            messages: turnMessages,
+            tools,
+            enableThinking: turnThinking,
+            maxTokens: genConfig && genConfig.max_new_tokens,
+            temperature: genConfig && genConfig.temperature,
+          })) {
+            if (ev.type === 'token') {
+              fullText += ev.text;
+            } else if (ev.type === 'tool_call') {
+              toolCalls.push(ev);
+            } else if (ev.type === 'done') {
+              doneReason = ev.reason;
+              break;
+            } else if (ev.type === 'error') {
+              error = ev.error;
+              break;
+            }
+          }
+        } catch (e) {
+          error = e;
+        }
+        return { fullText, toolCalls, doneReason, error };
+      }
 
       for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
-        // Disable thinking on follow-up iterations to avoid tool calls inside thinking blocks
+        // Disable thinking on follow-up iterations to avoid tool
+        // calls inside thinking blocks.
         const iterThinking = iter === 0 ? enableThinking : false;
-        const response = await generateOnce(loopMessages, currentAttData, iterThinking, genConfig);
-        currentAttData = null; // Attachments only on first pass
+        const turn = await runOneAgentTurn(loopMessages, iterThinking);
+
+        // After the first iteration, scrub data from media blocks so
+        // subsequent passes carry the chat-template position tokens
+        // forward without re-decoding the same audio/video.
+        if (iter === 0) loopMessages = scrubMediaForFollowup(loopMessages);
 
         // User clicked stop while we were generating
         if (!generating) {
-          finishGeneration(response || null, allSources, toolsUsedInLoop);
+          finishGeneration(turn.fullText || null, allSources, toolsUsedInLoop);
           return;
         }
 
-        // Check for tool calls in the response
-        const { toolCalls, cleanText } = parseToolCalls(response);
+        if (turn.error) {
+          finishGeneration((turn.fullText || '') + `\n\n*Error: ${turn.error.message || turn.error}*`, allSources, toolsUsedInLoop);
+          return;
+        }
 
-        if (toolCalls.length === 0) {
+        if (turn.toolCalls.length === 0) {
           // No tool calls — we're done
-          finishGeneration(response, allSources, toolsUsedInLoop);
+          finishGeneration(turn.fullText, allSources, toolsUsedInLoop);
           return;
         }
 
-        // Execute the first tool call (one at a time per the system prompt rules)
-        const tc = toolCalls[0];
+        // Execute the first tool call (one at a time per scaffold rules)
+        const tc = turn.toolCalls[0];
         const tool = TOOL_REGISTRY[tc.name];
         let toolResult;
         if (!tool) {
           toolResult = { error: `Unknown tool: ${tc.name}` };
         } else {
           try {
-            toolResult = await tool.execute(tc.arguments, { userQuery: text });
+            toolResult = await tool.execute(tc.arguments, { userQuery: text, imageBlob: lastImageBlob });
           } catch (e) {
             toolResult = { error: e.message };
           }
         }
 
         // Collect sources from web_search results
-        if (tc.name === 'web_search' && toolResult.results) {
+        if (tc.name === 'web_search' && toolResult && toolResult.results) {
           allSources.push(...toolResult.results);
         }
 
@@ -4894,9 +6956,19 @@ self.addEventListener('message', async (e) => {
         currentAssistantEl.bubble.appendChild(stepLabel);
         renderToolCallBlock(currentAssistantEl.bubble, tc.name, tc.arguments, toolResult);
 
-        // Append assistant response + tool result to loop messages
-        loopMessages.push({ role: 'assistant', content: response });
-        loopMessages.push({ role: 'user', content: formatToolResponse(tc.name, toolResult) });
+        // Render segmentation overlay if this was a segment_image call
+        if (tc.name === 'segment_image' && toolResult._rawMasks) {
+          renderSegmentationOverlay(currentAssistantEl.bubble, toolResult._imageBlob, toolResult._rawMasks, toolResult._scores);
+          delete toolResult._rawMasks;
+          delete toolResult._imageBlob;
+          delete toolResult._scores;
+        }
+
+        // Append assistant response + tool-role result. The runtime
+        // adapter converts tool-role messages to whatever the model
+        // expects (Gemma: a user-role <tool_response> wrapper).
+        loopMessages.push({ role: 'assistant', content: turn.fullText });
+        loopMessages.push({ role: 'tool', name: tc.name, content: JSON.stringify(toolResult) });
 
         // Reset streaming state for next generation pass
         currentAssistantText = '';
@@ -4904,8 +6976,8 @@ self.addEventListener('message', async (e) => {
         // If this is the last iteration, force a final response
         if (iter === MAX_TOOL_ITERATIONS - 1) {
           loopMessages.push({ role: 'user', content: '[System: Tool call limit reached. Please provide your final answer now.]' });
-          const finalResponse = await generateOnce(loopMessages, null, enableThinking, genConfig);
-          finishGeneration(finalResponse, allSources, toolsUsedInLoop);
+          const finalTurn = await runOneAgentTurn(loopMessages, enableThinking);
+          finishGeneration(finalTurn.fullText, allSources, toolsUsedInLoop);
           return;
         }
       }

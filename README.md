@@ -127,6 +127,75 @@ Image and audio attachments are stripped — text content only.
 - **Code download** — hover over code blocks for a download button (saves with correct extension)
 - **Model cache management** — view cached model sizes and clear cache in Settings
 
+## Custom models (paste a HF ONNX repo)
+
+Settings → **Custom models** → paste a Hugging Face repo id (e.g. `HuggingFaceTB/SmolLM-135M-Instruct`, `Xenova/distilgpt2`, `onnx-community/Phi-3.5-mini-instruct-onnx-web`) → click **Add**. The validator probes the HF API and:
+
+- Confirms the repo exists and has `.onnx` files
+- Detects available quantisations from filenames (`q4f16` > `q4` > `int8` > `q8` > `uint8` > `bnb4` > `q4f8` > `fp16` > `quantized` > `fp32`) and picks the smallest workable one
+- Estimates the *real* load size — `max(.onnx) + max(.onnx_data)` across the chosen dtype, so it doesn't overcount when a repo ships multiple alternative variants (`model_*`, `decoder_model_*`, `decoder_model_merged_*`, etc.)
+- Queries the device's WebGPU adapter for `maxBufferSize` and **hard-blocks** if any single weight file exceeds it
+- **Hard-blocks** anything over 6 GB total (LocalMind's absolute ceiling for in-browser inference)
+- **Soft-warns** anything over 2 GB (download time + low-end GPU concerns)
+- Reads `config.json` for context window and architecture; rejects anything with `vision_config` or `audio_config` (multimodal custom models are deferred — see ROADMAP)
+
+Successful adds appear in the model selector dropdown immediately and persist in `localStorage` across reloads. The Remove button next to each entry strips it from both the dropdown and storage. v1 supports causal LMs only.
+
+## JavaScript API (`window.localmind`)
+
+Settings → **JavaScript API** → tick the checkbox. An OpenAI-shaped object is exposed on `window.localmind` so any script in the same tab can drive the loaded model. Disabled by default, opt-in only, and detached when the toggle goes off.
+
+```js
+const lm = window.localmind;
+await lm.load('gemma3-1b');                    // or any HF id you've added
+
+// Non-streaming
+const r = await lm.chat.completions.create({
+  messages: [
+    { role: 'system', content: 'You are concise.' },
+    { role: 'user',   content: 'What is 2 + 2?' },
+  ],
+  max_tokens: 30,
+});
+console.log(r.choices[0].message.content);
+
+// Streaming — async iterator yielding OpenAI-shaped chat.completion.chunk
+const stream = await lm.chat.completions.create({
+  messages: [{ role: 'user', content: 'Count to 10' }],
+  stream: true,
+});
+for await (const chunk of stream) {
+  const delta = chunk.choices[0].delta.content;
+  if (delta) process.stdout.write(delta);
+}
+```
+
+**What's exposed (v1.0):**
+- `version`, `ready`, `model` (live getters reflecting current state)
+- `listModels()` — full registry incl. custom models, with `loaded` flag
+- `load(idOrKey)` — accepts the short key or the full HF id
+- `chat.completions.create(params)` — non-streaming or streaming via `stream: true`
+
+**What's NOT exposed (intentional):**
+- `tools` / tool calling (would let callers spend search credits, write to memory, etc.)
+- Memory read/write
+- File system handles
+- Web search
+- Multimodal input
+- API keys or user profile
+
+The object is frozen (`Object.freeze`) and attached as a non-writable property, so scripts can't overwrite it with a malicious shim. Every call is logged to the in-memory **activity log** (last 50 entries) viewable via the `● API` chip in the toolbar or `Settings → View activity log`.
+
+**Demo:** open [`demo.html`](./demo.html) in the same folder. It iframes `index.html`, auto-flips the toggle, waits for the model, and runs both a non-streaming and a streaming completion against `iframe.contentWindow.localmind`.
+
+**Architecture / security:**
+- Same-tab only — cross-origin scripts cannot reach `window.localmind` (Same-Origin Policy)
+- Same-origin iframes *can* (used by `demo.html`)
+- All chat-UI and API calls share a single FIFO inference queue, so a misbehaving caller can't race the user
+- No tools means a stored-XSS attacker (e.g. via a compromised CDN or a poisoned web search result) can't trivially exfiltrate memory or burn search credits — they'd already need page-level XSS to read those, which the API doesn't make easier
+
+**Stability:** experimental. v1.0 is a tech demonstrator; the shape may change before a stable v1.1.
+
 ## Things to try
 
 **Math & Conversions**
@@ -203,6 +272,7 @@ No build step. No dependencies. No backend.
 - **[mammoth.js](https://github.com/mwilliamson/mammoth.js)** — DOCX text extraction (lazy-loaded on first DOCX upload)
 - Web Workers for off-main-thread inference (LLM on WebGPU, embeddings on WASM)
 - IndexedDB for persistent vector store + user profile
+- All static CDN dependencies pinned to exact versions and protected with **subresource integrity (SRI)** hashes; the PDF.js worker is fetched via the Fetch-API SRI option and handed to `workerSrc` as a verified blob URL
 - Zero build tooling. One HTML file.
 
 ## Browser support
@@ -213,6 +283,61 @@ No build step. No dependencies. No backend.
 | Edge 113+ | Supported |
 | Firefox 130+ | Supported |
 | Safari | Not yet (WebGPU incomplete) |
+
+## Compared to other in-browser chat apps
+
+There's a growing set of "run an LLM in your browser tab" projects. LocalMind overlaps with them on the core idea — WebGPU inference, no server, data stays local — but diverges on scope. Most of the others are **chat UIs for a model**; LocalMind is a **research agent with persistent memory, tools, and web enrichment**.
+
+| Feature | **LocalMind** | [WebLLM Chat](https://chat.webllm.ai) | [Chatty (ChattyUI)](https://github.com/addyosmani/chatty) | [Transformers.js WebGPU chat](https://github.com/huggingface/transformers.js/tree/v3/examples/webgpu-chat) |
+|---|---|---|---|---|
+| Runs fully in-browser (WebGPU) | ✅ | ✅ | ✅ | ✅ |
+| Works offline after download | ✅ | ✅ | ✅ | ✅ |
+| Open source | ✅ (MIT) | ✅ (Apache 2.0) | ✅ (MIT) | ✅ (Apache 2.0) |
+| **Single HTML file, zero build** | ✅ (one file, ~5.3k lines) | ❌ (Next.js app) | ❌ (Next.js app) | ❌ (Vite demo) |
+| Runtime | Transformers.js v4 | WebLLM (MLC) | WebLLM + Transformers.js | Transformers.js v3 |
+| Default models | Gemma 3 1B / Gemma 4 E2B & E4B | Llama 3, Phi-3, Mistral, Gemma, Qwen | Gemma, Llama 2/3, Mistral | Phi-3.5, Llama-3.2 |
+| **Vision input** (image → text) | ✅ (Gemma 4) | ✅ | ⚠️ (model-dependent) | ⚠️ (separate demos) |
+| **Audio input** | ✅ (Gemma 4) | ❌ | ⚠️ (voice-to-text only) | ⚠️ (separate Whisper demo) |
+| **Tool calling / agent loop** | ✅ (9 built-in tools) | ❌ | ❌ | ❌ |
+| **Persistent memory (RAG)** | ✅ (MiniLM + IndexedDB vector store) | ❌ | ⚠️ (session memory, transient embeddings) | ❌ |
+| **PDF / DOCX ingestion** | ✅ (PDF.js + mammoth.js, auto-summarized) | ❌ | ⚠️ (PDF/text only) | ❌ |
+| **Folder ingestion** (FS Access API + sync) | ✅ | ❌ | ❌ | ❌ |
+| **Web search** (BYOK Brave/Tavily/SearXNG) | ✅ | ❌ | ❌ | ❌ |
+| **Page fetch + Readability extraction** | ✅ | ❌ | ❌ | ❌ |
+| Conversation history & archive | ✅ | ✅ | ✅ | ❌ |
+| **Post-session summarization into RAG** | ✅ | ❌ | ❌ | ❌ |
+| **Memory audit** (stale / duplicate / outlier) | ✅ | ❌ | ❌ | ❌ |
+| **Batch prompts with `{{previous}}` chaining** | ✅ | ❌ | ❌ | ❌ |
+| **Encrypted shareable links** (AES-256-GCM) | ✅ | ❌ | ❌ | ❌ |
+| Export / import full data as JSON | ✅ | ⚠️ (chats only) | ❌ | ❌ |
+| Reminders / timers | ✅ | ❌ | ❌ | ❌ |
+| Transparency badges (on-device / agent / web) | ✅ | ❌ | ❌ | ❌ |
+| **OpenAI-shaped JS API** (`window.localmind`, streaming via async iterator) | ✅ (opt-in, same-tab, frozen object) | ⚠️ (in-process SDK shape only) | ❌ | ❌ |
+| **Paste a HF ONNX repo to add a model** | ✅ (validates dtype + WebGPU limits) | ⚠️ (custom MLC models) | ❌ | ❌ |
+| **CDN deps protected with SRI hashes** | ✅ | — | — | — |
+| Runs from `file://` | ❌ (needs HTTP) | ❌ | ❌ | ❌ |
+
+**Other adjacent projects worth knowing about:**
+
+- **[Chrome Built-in AI / Prompt API](https://developer.chrome.com/docs/ai/built-in)** — Gemini Nano shipped with Chrome; no model download, no UI, API-only. Text-only, Chrome-only, behind a flag today.
+- **[Ratchet](https://github.com/huggingface/ratchet)** — Rust+WebGPU inference engine (Phi-3 demo). Low-level runtime, not an end-user chat app.
+- **[MLC LLM](https://llm.mlc.ai/)** — The engine underneath WebLLM Chat. Used as a library in other projects.
+- **[window.ai](https://github.com/alexanderatallah/window.ai)** — Browser-extension bridge to remote/local models; not a chat app and not WebGPU-native.
+- **[transformers.js-examples](https://github.com/huggingface/transformers.js-examples)** — Hugging Face's 25+ demos (Phi-3.5, SmolVLM, Whisper, etc.). Each demo is single-task; none combine chat + RAG + tools + web search.
+
+**Where LocalMind is distinct**
+
+1. **Agent + RAG in one file.** WebLLM Chat and Chatty ship as Next.js apps; the HF demos are per-task. LocalMind keeps the entire agent loop, vector store, tool router, and UI in a single ~5.3k-line `index.html` — no build, no bundler, trivially auditable and trivially self-hostable.
+2. **Memory that persists and can be cleaned.** The closest peer (Chatty) has session memory; LocalMind has a full IndexedDB vector store with category filters, bulk per-source deletion, stale/duplicate/outlier audit, and export/import.
+3. **Web-enriched answers with a BYOK model.** None of the pure in-browser peers integrate live web search. LocalMind lets you bring a Brave/Tavily/SearXNG key; fetched pages are chunked, embedded, and fed back into RAG.
+4. **Batch pipelines with `{{previous}}` chaining.** A multi-step research pipeline (summarize → extract → translate) runs without leaving the tab or writing code.
+5. **Multimodal *and* agentic.** Gemma 4 on Transformers.js v4 gives image + audio + tool calling in one model, which most of the peer demos don't expose together.
+
+**Where the peers are ahead**
+
+- **WebLLM Chat** — much larger model catalog (Llama 3, Qwen, Mistral, bigger Gemma variants) and an OpenAI-compatible API surface for integration. If you mainly want raw chat with a big model, it's the fastest path.
+- **Chatty** — polished Next.js UX, voice input, and a friendlier onboarding flow.
+- **HF demos** — always first to ship the newest architectures (SmolVLM, Phi-3.5, Whisper, etc.) as minimal reference implementations.
 
 ---
 

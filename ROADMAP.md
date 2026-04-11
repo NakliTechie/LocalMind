@@ -1,58 +1,88 @@
 # LocalMind — Roadmap
 
-**Last updated:** April 4, 2026
+**Last updated:** April 7, 2026
 
 ## Current state
 
-Single-file (4,220 lines) private AI research agent running entirely in-browser. Zero backend.
+Single-file (~5.8k lines) private AI research agent running entirely in-browser. Zero backend.
 
-**Shipped:**
+**Tier 1 — shipped:**
 - 9 agent tools (calculate, time, memory CRUD, reminder, web_search, fetch_page)
 - RAG pipeline (MiniLM embeddings on WASM, IndexedDB vector store, semantic search, auto-injection)
-- Document ingestion: PDF (via PDF.js), DOCX (via mammoth.js), .txt, .md, .json, .csv
-- Auto-summarize on document upload (extractive, stored as document_summary)
+- Document ingestion: PDF (PDF.js), DOCX (mammoth.js), .txt, .md, .json, .csv
+- Folder ingestion via File System Access API with incremental sync
+- Auto-summarize on document upload
 - Web search (BYOK: Brave, Tavily, SearXNG) with Readability.js extraction + semantic pre-filtering
 - Multimodal input (image, audio, video via Gemma 4)
 - Context engineering (sliding window, rolling summary, 12K budget)
 - Conversation history (sidebar, archive/resume, post-session summarization)
+- Memory browser with category filters, source grouping, audit (stale/duplicate/outlier)
 - Export/import (full data portability as JSON)
 - Auto-backup toggle (download on New Chat)
 - Output artifacts (Save as MD, code block download)
 - Model cache management (view size, clear cache)
-- Task progress counter (Step 1/3 labels in agentic loop)
+- Encrypted shareable links (AES-256-GCM with passphrase)
+- Batch prompts with `{{previous}}` chaining and auto-inject
 - Transparency badges (On-device / Agent / Web-enriched) + source links
 - Thinking mode with auto-collapse on completion
+
+**Tier 2 — shipped:**
+- **XSS hardening** of model output rendering (per-call nonce, escape-before-markdown, lang sanitisation)
+- **SRI on CDN dependencies** (Readability, mammoth, PDF.js module + worker via Fetch-API SRI)
+- **Inference FIFO queue** (`runInference`) — chat UI and JS API both serialise through it; bounded queue with synchronous overflow rejection
+- **`window.localmind` JavaScript API** (v1.0) — opt-in via Settings, same-tab only
+  - Properties: `version`, `ready`, `model`, `listModels()`, `load(idOrKey)`
+  - `chat.completions.create({ messages, max_tokens, temperature, top_p, model })` — non-streaming
+  - `chat.completions.create({ ..., stream: true })` — async iterator yielding OpenAI-shaped `chat.completion.chunk` objects
+  - Tools, multimodal, response_format intentionally not exposed
+  - Activity log (last 50 calls) with chip indicator and modal viewer
+  - Frozen + non-writable object; clean detach on disable
+- **Custom model loading** — paste a Hugging Face ONNX repo id in Settings
+  - Validates against HF API: format check, ONNX-files-exist check, dtype detection from filenames (`q4f16` > `q4` > `int8` > `q8` > `uint8` > `bnb4` > `q4f8` > `fp16` > `quantized` > `fp32`)
+  - Picks best available quantisation automatically
+  - Estimates real load size (max .onnx + max .onnx_data, not naive sum across variants)
+  - WebGPU adapter limits queried for hard-block on per-buffer size + absolute 6 GB ceiling
+  - Soft warning above 2 GB
+  - Persisted in localStorage; restored on reload; remove button per entry
+- **`demo.html`** — standalone same-origin iframe page demonstrating the JS API end-to-end (non-streaming + streaming)
+- **README benchmark** — comparison table vs WebLLM Chat, Chatty, Transformers.js demos
 
 ## Status
 
 | Capability | Status |
 |-----------|--------|
 | Chat UI | Strong |
-| Model management | Strong (cache view/clear shipped) |
-| Multi-model | Strong (3 Gemma + MiniLM sidecar) |
-| RAG | Strong (PDF/DOCX/text, auto-summarize) |
+| Model management | Strong (cache view/clear, custom HF ONNX loading) |
+| Multi-model | Strong (3 Gemma + custom HF ONNX + MiniLM sidecar) |
+| RAG | Strong (PDF/DOCX/text, auto-summarize, audit) |
 | Tools | Strong (9 tools, hardcoded) |
 | Agents | Partial (single-agent loop, no planning) |
+| JavaScript API | Strong (v1.0 — chat completions with streaming) |
 | Plugins | Not started |
 
 ---
 
-## Next — Tier 2
+## Next — Tier 3
 
-### 1. Multi-step planner agent
+### 1. Worker cancellation on stream consumer early-break
+When a `for await` loop breaks out of a streaming chat completion, the iterator finishes but the worker keeps generating until natural completion or `max_tokens`. The next API call waits behind the abandoned job. Fix: have `iter.return()` post `{type:'stop'}` to the worker.
+
+**~20 lines.**
+
+### 2. Multi-step planner agent
 - First pass: "Break this into steps" → parse plan → execute each step with tools → synthesize
 - Same model, different system prompts per phase
 - Reliability depends on model quality at 4.5B
 
 **~80 lines.**
 
-### 2. Conversation branching
+### 3. Conversation branching
 - Right-click or long-press a user message → "Branch from here"
 - Creates new conversation in history with messages up to that point
 
 **~40 lines.**
 
-### 3. Plugin / custom tool API
+### 4. Plugin / custom tool API
 - Settings: "Custom Tools" section
 - User defines tools as JSON: `{ name, description, parameters, endpoint }`
 - On tool call: `fetch(endpoint, { method: 'POST', body: JSON.stringify(args) })`
@@ -61,16 +91,6 @@ Single-file (4,220 lines) private AI research agent running entirely in-browser.
 
 **~100 lines.**
 
-### 4. Custom model loading
-- User pastes a Hugging Face model ID in Settings
-- Validate before loading: check ONNX format available, check quantized size, check architecture compatibility (causal or multimodal)
-- Use `fetch()` to probe `config.json` from the HF hub for model type and size
-- If valid, add to model selector dropdown and load via existing `AutoModelForCausalLM` or `Gemma4ForConditionalGeneration` paths
-- Store custom model IDs in localStorage
-- Limits: must be ONNX-exported, must fit in GPU memory, must be a supported architecture (causal LM or Gemma4-style multimodal)
-
-**~80 lines.**
-
 ### 5. Voice mode
 - Web Speech API (`SpeechRecognition`) for input (free, built into Chrome)
 - Web Speech API (`SpeechSynthesis`) for output
@@ -78,9 +98,22 @@ Single-file (4,220 lines) private AI research agent running entirely in-browser.
 
 **~60 lines.**
 
+### 6. Custom model dtype picker
+Today the validator picks the best-available quantisation automatically. Some users may want to force `q4` or `int8` for compatibility or quality reasons.
+
+**~40 lines.**
+
+### 7. Multimodal custom models
+The worker hardcodes `Gemma4ForConditionalGeneration`. To support other multimodal architectures (LLaVA, Idefics, PaliGemma), the worker needs to dispatch on `model_type` and import the right class.
+
+**~120 lines.**
+
+### 8. SRI for `transformers@4 +esm`
+The `+esm` jsDelivr endpoint internally redirects to content-addressed URLs, so a static hash can't be pinned without hardcoding the resolved URL. Either pin the resolved URL (brittle across releases) or self-host the bundle.
+
 ---
 
-## Tier 3 — Blocked on ecosystem
+## Tier 4 — Blocked on ecosystem
 
 | Feature | Blocker | When |
 |---------|---------|------|
