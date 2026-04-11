@@ -952,6 +952,40 @@
     }
     .api-chip.flash::before { background: var(--white); }
 
+    /* SAM loading chip — header pill shown during SAM model download */
+    .sam-chip {
+      display: none;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      color: var(--gray-600);
+      background: var(--gray-100);
+      border: 1px solid var(--gray-300);
+      border-radius: 10px;
+      white-space: nowrap;
+    }
+    .sam-chip.active {
+      display: inline-flex;
+      color: var(--indigo-600);
+      background: var(--indigo-100);
+      border-color: var(--indigo-400);
+      animation: sam-pulse 1.8s ease-in-out infinite;
+    }
+    .sam-chip.ready {
+      display: inline-flex;
+      color: #059669;
+      background: #ecfdf5;
+      border-color: #6ee7b7;
+      animation: none;
+    }
+    @keyframes sam-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
     /* Activity log modal — reuses the share-modal backdrop pattern */
     .api-log-modal {
       display: none;
@@ -1803,6 +1837,7 @@
       <h1>LocalMind</h1>
       <div class="header-right">
         <div class="help-wrap">
+          <span class="sam-chip" id="samChip">SAM</span>
           <button class="help-btn" id="helpBtn" aria-label="Help">?</button>
           <div class="help-popover" id="helpPopover">
             <div class="help-tabs">
@@ -2453,18 +2488,18 @@
         },
       },
       segment_image: {
-        description: 'Segment objects in the user\'s attached image using SAM (Segment Anything Model). Provide point coordinates as [x, y] in normalized [0,1] range where (0,0) is top-left and (1,1) is bottom-right. Pick the center of the object you want to segment. labels: 1 means foreground (the object), 0 means background (exclude this area). Use when the user asks to segment, outline, isolate, find, count, or identify specific objects in their image.',
+        description: 'Segment objects in the attached image using SAM. YOU MUST estimate the point coordinates yourself by looking at the image — do NOT ask the user for coordinates. Coordinates are [x, y] in normalized [0,1] range: (0,0)=top-left, (1,1)=bottom-right, (0.5,0.5)=center. Example: to segment a dog in the center-left of the image, use points [[0.3, 0.5]] with labels [1]. Always call this tool immediately when the user asks to segment, outline, isolate, or identify objects — pick your best estimate for the object center.',
         parameters: {
           type: 'object',
           properties: {
             points: {
               type: 'array',
-              description: 'Array of [x, y] coordinate pairs in normalized [0,1] range. Each point marks a location on the image. Place points at the center of objects to segment.',
+              description: 'Array of [x, y] pairs in [0,1] range. YOU choose these by estimating where the target object is in the image. Place at the center of each object to segment.',
               items: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2 },
             },
             labels: {
               type: 'array',
-              description: 'Array of integers, same length as points. 1 = foreground (include), 0 = background (exclude).',
+              description: 'Same length as points. 1 = foreground (the object to segment), 0 = background (area to exclude).',
               items: { type: 'integer', enum: [0, 1] },
             },
           },
@@ -5848,6 +5883,16 @@ ${JSON.stringify({ name, result })}
 
       _ensureSAMWorker(modelId) {
         const self = this;
+        const chip = document.getElementById('samChip');
+        function showChip(text, state) {
+          if (!chip) return;
+          chip.textContent = text;
+          chip.className = 'sam-chip ' + state;
+        }
+        function hideChip() {
+          if (!chip) return;
+          setTimeout(() => { chip.className = 'sam-chip'; }, 2000);
+        }
         // Model changed — tear down old worker
         if (this._samWorker && this._samModelId !== modelId) {
           try { this._samWorker.terminate(); } catch {}
@@ -5858,31 +5903,55 @@ ${JSON.stringify({ name, result })}
         if (this._samReady && this._samModelId === modelId) return Promise.resolve();
         if (this._samWorker) {
           // Worker exists but not ready yet — wait for it
+          showChip('SAM loading\u2026', 'active');
           return new Promise((resolve, reject) => {
             const handler = (e) => {
-              if (e.data.type === 'ready') {
+              if (e.data.type === 'progress' && e.data.data) {
+                const p = e.data.data;
+                if (p.status === 'downloading' && p.total) {
+                  const pct = Math.round((p.loaded / p.total) * 100);
+                  showChip('SAM ' + pct + '%', 'active');
+                }
+              } else if (e.data.type === 'ready') {
                 self._samReady = true;
                 self._samWorker.removeEventListener('message', handler);
+                showChip('SAM ready', 'ready');
+                hideChip();
                 resolve();
               } else if (e.data.type === 'error') {
                 self._samWorker.removeEventListener('message', handler);
+                showChip('SAM error', 'active');
+                hideChip();
                 reject(new Error(e.data.message));
               }
             };
             self._samWorker.addEventListener('message', handler);
           });
         }
+        showChip('SAM loading\u2026', 'active');
         this._samWorker = createSAMWorker();
         this._samModelId = modelId;
         return new Promise((resolve, reject) => {
           const handler = (e) => {
-            if (e.data.type === 'ready') {
+            if (e.data.type === 'progress' && e.data.data) {
+              const p = e.data.data;
+              if (p.status === 'downloading' && p.total) {
+                const pct = Math.round((p.loaded / p.total) * 100);
+                showChip('SAM ' + pct + '%', 'active');
+              } else if (p.status === 'loading') {
+                showChip('SAM initializing\u2026', 'active');
+              }
+            } else if (e.data.type === 'ready') {
               self._samReady = true;
               self._samWorker.removeEventListener('message', handler);
+              showChip('SAM ready', 'ready');
+              hideChip();
               resolve();
             } else if (e.data.type === 'error') {
               self._samWorker.removeEventListener('message', handler);
               self._samReady = false;
+              showChip('SAM error', 'active');
+              hideChip();
               reject(new Error(e.data.message));
             }
           };
@@ -5894,7 +5963,9 @@ ${JSON.stringify({ name, result })}
       segmentImage(imageBlob, points, labels) {
         const self = this;
         const modelId = localStorage.getItem('lm_sam_model') || 'Xenova/slimsam-77-uniform';
+        const chip = document.getElementById('samChip');
         this._samQueue = this._samQueue.then(() => self._ensureSAMWorker(modelId).then(async () => {
+          if (chip) { chip.textContent = 'SAM segmenting\u2026'; chip.className = 'sam-chip active'; }
           const arrayBuf = await imageBlob.arrayBuffer();
           return new Promise((resolve, reject) => {
             const id = Math.random().toString(36).slice(2);
@@ -5902,8 +5973,10 @@ ${JSON.stringify({ name, result })}
               if (e.data.id === id) {
                 self._samWorker.removeEventListener('message', handler);
                 if (e.data.type === 'masks') {
+                  if (chip) { chip.textContent = 'SAM ready'; chip.className = 'sam-chip ready'; setTimeout(() => { chip.className = 'sam-chip'; }, 2000); }
                   resolve({ masks: e.data.masks, scores: e.data.scores });
                 } else {
+                  if (chip) { chip.className = 'sam-chip'; }
                   reject(new Error(e.data.message || 'Segmentation failed'));
                 }
               }
