@@ -31,6 +31,7 @@ Gemma 4 models have built-in tool calling. The model decides when to use tools b
 | **set_reminder** | Browser notification after N minutes |
 | **web_search** | Search the web via Brave, Tavily, or SearXNG (BYOK) |
 | **fetch_page** | Fetch and read a URL's content with Readability.js extraction |
+| **segment_image** | Segment objects in attached images using SAM (Segment Anything Model) |
 
 **Translation:** Gemma 4 supports 140+ languages natively — just ask it to translate. No separate model needed.
 
@@ -89,6 +90,21 @@ Every response shows a transparency badge: **On-device** (pure local), **Agent**
 - **Drag and drop** — drop files onto the chat
 
 Documents are extracted, chunked, embedded, and auto-summarized on upload. Video is experimental — keyframes and audio are extracted separately.
+
+## Image segmentation (SAM)
+
+Gemma 4 can call the **Segment Anything Model** to segment objects in attached images. Attach an image, ask "segment the dog" or "outline the person on the left" — Gemma estimates point coordinates from the image, calls SAM, and renders a colored mask overlay in the chat bubble. The overlay is downloadable.
+
+**SAM model picker** (Settings, visible with Gemma 4):
+
+| Model | Size | Notes |
+|---|---|---|
+| **SlimSAM 50** | ~10 MB | Fastest, lower accuracy |
+| **SlimSAM 77** (default) | ~14 MB | Good balance |
+| **SAM ViT-Base** | ~350 MB | Full SAM 1 quality |
+| **SAM 3** | Latest | Newest architecture from Meta |
+
+SAM runs in a separate WASM worker (independent of Gemma's WebGPU worker). Loaded lazily on first use — a progress bar shows download and inference status. Models are cached after first download.
 
 ## Batch prompts
 
@@ -229,6 +245,11 @@ The object is frozen (`Object.freeze`) and attached as a non-writable property, 
 - "Describe this image in detail"
 - "What text can you see in this image? Transcribe it."
 
+**Image Segmentation** (attach an image first, Gemma 4)
+- "Segment the main object in this image"
+- "Outline the person on the left"
+- "Isolate the background"
+
 **Web Research** (requires API key in Settings)
 - "What are the top tech news stories today?"
 - "Search for the latest WebGPU browser support status and summarize"
@@ -267,6 +288,7 @@ No build step. No dependencies. No backend.
 - **[Gemma 4 E2B](https://huggingface.co/onnx-community/gemma-4-E2B-it-ONNX)** — multimodal, 2.3B effective params, q4f16
 - **[Gemma 4 E4B](https://huggingface.co/onnx-community/gemma-4-E4B-it-ONNX)** — multimodal, 4.5B effective params, q4f16
 - **[MiniLM](https://huggingface.co/Xenova/all-MiniLM-L6-v2)** — 384-dim embeddings for RAG (~23 MB, WASM)
+- **[SlimSAM](https://huggingface.co/Xenova/slimsam-77-uniform)** / **[SAM 3](https://huggingface.co/onnx-community/sam3-tracker-ONNX)** — image segmentation via Segment Anything Model (WASM, lazy-loaded)
 - **[Readability.js](https://github.com/mozilla/readability)** — article extraction from fetched pages (lazy-loaded)
 - **[PDF.js](https://mozilla.github.io/pdf.js/)** — PDF text extraction (lazy-loaded on first PDF upload)
 - **[mammoth.js](https://github.com/mwilliamson/mammoth.js)** — DOCX text extraction (lazy-loaded on first DOCX upload)
@@ -293,12 +315,12 @@ There's a growing set of "run an LLM in your browser tab" projects. LocalMind ov
 | Runs fully in-browser (WebGPU) | ✅ | ✅ | ✅ | ✅ |
 | Works offline after download | ✅ | ✅ | ✅ | ✅ |
 | Open source | ✅ (MIT) | ✅ (Apache 2.0) | ✅ (MIT) | ✅ (Apache 2.0) |
-| **Single HTML file, zero build** | ✅ (one file, ~5.3k lines) | ❌ (Next.js app) | ❌ (Next.js app) | ❌ (Vite demo) |
+| **Single HTML file, zero build** | ✅ (one file, ~7k lines) | ❌ (Next.js app) | ❌ (Next.js app) | ❌ (Vite demo) |
 | Runtime | Transformers.js v4 | WebLLM (MLC) | WebLLM + Transformers.js | Transformers.js v3 |
 | Default models | Gemma 3 1B / Gemma 4 E2B & E4B | Llama 3, Phi-3, Mistral, Gemma, Qwen | Gemma, Llama 2/3, Mistral | Phi-3.5, Llama-3.2 |
 | **Vision input** (image → text) | ✅ (Gemma 4) | ✅ | ⚠️ (model-dependent) | ⚠️ (separate demos) |
 | **Audio input** | ✅ (Gemma 4) | ❌ | ⚠️ (voice-to-text only) | ⚠️ (separate Whisper demo) |
-| **Tool calling / agent loop** | ✅ (9 built-in tools) | ❌ | ❌ | ❌ |
+| **Tool calling / agent loop** | ✅ (10 built-in tools) | ❌ | ❌ | ❌ |
 | **Persistent memory (RAG)** | ✅ (MiniLM + IndexedDB vector store) | ❌ | ⚠️ (session memory, transient embeddings) | ❌ |
 | **PDF / DOCX ingestion** | ✅ (PDF.js + mammoth.js, auto-summarized) | ❌ | ⚠️ (PDF/text only) | ❌ |
 | **Folder ingestion** (FS Access API + sync) | ✅ | ❌ | ❌ | ❌ |
@@ -327,11 +349,12 @@ There's a growing set of "run an LLM in your browser tab" projects. LocalMind ov
 
 **Where LocalMind is distinct**
 
-1. **Agent + RAG in one file.** WebLLM Chat and Chatty ship as Next.js apps; the HF demos are per-task. LocalMind keeps the entire agent loop, vector store, tool router, and UI in a single ~5.3k-line `index.html` — no build, no bundler, trivially auditable and trivially self-hostable.
+1. **Agent + RAG in one file.** WebLLM Chat and Chatty ship as Next.js apps; the HF demos are per-task. LocalMind keeps the entire agent loop, vector store, tool router, and UI in a single ~7k-line `index.html` — no build, no bundler, trivially auditable and trivially self-hostable.
 2. **Memory that persists and can be cleaned.** The closest peer (Chatty) has session memory; LocalMind has a full IndexedDB vector store with category filters, bulk per-source deletion, stale/duplicate/outlier audit, and export/import.
 3. **Web-enriched answers with a BYOK model.** None of the pure in-browser peers integrate live web search. LocalMind lets you bring a Brave/Tavily/SearXNG key; fetched pages are chunked, embedded, and fed back into RAG.
 4. **Batch pipelines with `{{previous}}` chaining.** A multi-step research pipeline (summarize → extract → translate) runs without leaving the tab or writing code.
 5. **Multimodal *and* agentic.** Gemma 4 on Transformers.js v4 gives image + audio + tool calling in one model, which most of the peer demos don't expose together.
+6. **Multi-model inference.** Three concurrent workers — Gemma (WebGPU), MiniLM embeddings (WASM), and SAM segmentation (WASM) — running in parallel without competing for resources.
 
 **Where the peers are ahead**
 

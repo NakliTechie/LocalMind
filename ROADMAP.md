@@ -1,13 +1,13 @@
 # LocalMind — Roadmap
 
-**Last updated:** April 7, 2026
+**Last updated:** April 11, 2026
 
 ## Current state
 
 Single-file (~5.8k lines) private AI research agent running entirely in-browser. Zero backend.
 
 **Tier 1 — shipped:**
-- 9 agent tools (calculate, time, memory CRUD, reminder, web_search, fetch_page)
+- 10 agent tools (calculate, time, memory CRUD, reminder, web_search, fetch_page, segment_image)
 - RAG pipeline (MiniLM embeddings on WASM, IndexedDB vector store, semantic search, auto-injection)
 - Document ingestion: PDF (PDF.js), DOCX (mammoth.js), .txt, .md, .json, .csv
 - Folder ingestion via File System Access API with incremental sync
@@ -46,6 +46,13 @@ Single-file (~5.8k lines) private AI research agent running entirely in-browser.
   - Persisted in localStorage; restored on reload; remove button per entry
 - **`demo.html`** — standalone same-origin iframe page demonstrating the JS API end-to-end (non-streaming + streaming)
 - **README benchmark** — comparison table vs WebLLM Chat, Chatty, Transformers.js demos
+- **SAM image segmentation** — `segment_image` tool calling Segment Anything Model (SlimSAM 50/77, SAM ViT-Base, SAM 3)
+  - Separate WASM blob-URL worker, lazy-loaded on first use
+  - SAM model picker in Settings (4 options, default SlimSAM 77 ~14 MB)
+  - Gemma estimates point coordinates from the image, SAM returns masks
+  - Overlay rendered on image in chat bubble, downloadable
+  - Full-width progress bar + header chip for download/inference status
+  - Tool call parser extended to accept `"function"` key alongside `"name"`
 
 ## Status
 
@@ -53,9 +60,9 @@ Single-file (~5.8k lines) private AI research agent running entirely in-browser.
 |-----------|--------|
 | Chat UI | Strong |
 | Model management | Strong (cache view/clear, custom HF ONNX loading) |
-| Multi-model | Strong (3 Gemma + custom HF ONNX + MiniLM sidecar) |
+| Multi-model | Strong (3 Gemma + custom HF ONNX + MiniLM sidecar + SAM sidecar) |
 | RAG | Strong (PDF/DOCX/text, auto-summarize, audit) |
-| Tools | Strong (9 tools, hardcoded) |
+| Tools | Strong (10 tools incl. SAM segmentation) |
 | Agents | Partial (single-agent loop, no planning) |
 | JavaScript API | Strong (v1.0 — chat completions with streaming) |
 | Plugins | Not started |
