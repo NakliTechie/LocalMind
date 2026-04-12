@@ -4,6 +4,8 @@
 !ROADMAP.md
 !LICENSE
 !.gitignore
+!.github
+!.github/**
 
 # wrangler files
 .wrangler
