@@ -53,6 +53,7 @@ Single-file (~5.8k lines) private AI research agent running entirely in-browser.
   - Overlay rendered on image in chat bubble, downloadable
   - Full-width progress bar + header chip for download/inference status
   - Tool call parser extended to accept `"function"` key alongside `"name"`
+- **Stream cancellation on consumer early-break** — JS API's streaming iterator posts `{type:'stop'}` to the worker on `return()`, so `for await` + `break` doesn't leave the worker chugging to `max_tokens` while the next call waits in the FIFO
 - **Resumable model downloads** — HF CDN fetches checkpoint to IndexedDB every 5 MB
   - Monkey-patched `self.fetch` inside the main model worker; HEAD → ETag-keyed chunk store → Range request for missing tail
   - Dynamic import of `transformers@4` so the patch lands before the module captures `globalThis.fetch`; `env.fetch = self.fetch` as belt-and-braces
@@ -77,25 +78,20 @@ Single-file (~5.8k lines) private AI research agent running entirely in-browser.
 
 ## Next — Tier 3
 
-### 1. Worker cancellation on stream consumer early-break
-When a `for await` loop breaks out of a streaming chat completion, the iterator finishes but the worker keeps generating until natural completion or `max_tokens`. The next API call waits behind the abandoned job. Fix: have `iter.return()` post `{type:'stop'}` to the worker.
-
-**~20 lines.**
-
-### 2. Multi-step planner agent
+### 1. Multi-step planner agent
 - First pass: "Break this into steps" → parse plan → execute each step with tools → synthesize
 - Same model, different system prompts per phase
 - Reliability depends on model quality at 4.5B
 
 **~80 lines.**
 
-### 3. Conversation branching
+### 2. Conversation branching
 - Right-click or long-press a user message → "Branch from here"
 - Creates new conversation in history with messages up to that point
 
 **~40 lines.**
 
-### 4. Plugin / custom tool API
+### 3. Plugin / custom tool API
 - Settings: "Custom Tools" section
 - User defines tools as JSON: `{ name, description, parameters, endpoint }`
 - On tool call: `fetch(endpoint, { method: 'POST', body: JSON.stringify(args) })`
@@ -104,27 +100,27 @@ When a `for await` loop breaks out of a streaming chat completion, the iterator 
 
 **~100 lines.**
 
-### 5. Voice mode
+### 4. Voice mode
 - Web Speech API (`SpeechRecognition`) for input (free, built into Chrome)
 - Web Speech API (`SpeechSynthesis`) for output
 - Toggle button in input bar
 
 **~60 lines.**
 
-### 6. Custom model dtype picker
+### 5. Custom model dtype picker
 Today the validator picks the best-available quantisation automatically. Some users may want to force `q4` or `int8` for compatibility or quality reasons.
 
 **~40 lines.**
 
-### 7. Multimodal custom models
+### 6. Multimodal custom models
 The worker hardcodes `Gemma4ForConditionalGeneration`. To support other multimodal architectures (LLaVA, Idefics, PaliGemma), the worker needs to dispatch on `model_type` and import the right class.
 
 **~120 lines.**
 
-### 8. SRI for `transformers@4 +esm`
+### 7. SRI for `transformers@4 +esm`
 The `+esm` jsDelivr endpoint internally redirects to content-addressed URLs, so a static hash can't be pinned without hardcoding the resolved URL. Either pin the resolved URL (brittle across releases) or self-host the bundle.
 
-### 9. Brave / restricted-WebGPU diagnostics (pending)
+### 8. Brave / restricted-WebGPU diagnostics (pending)
 Github and Reddit users report model fails to load in Brave. Likely causes: `navigator.gpu` present but `requestAdapter()` returns null under strict fingerprinting; Shields blocking jsdelivr or huggingface.co; `device: 'webgpu'` failing in the worker. Current error surfacing is poor — on worker error the code hides the progress section *then* writes the error message into it (see `attachWorkerHandlers`), so users see a bare "Error" badge with zero detail.
 
 Two small follow-ups:
