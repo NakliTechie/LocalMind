@@ -40,7 +40,26 @@ Gemma 4 models have built-in tool calling. The model decides when to use tools b
 
 **Custom tools:** Settings → *Custom tools*. Paste a JSON tool definition (`name`, `description`, `parameters` as a JSON-schema object, `endpoint`). When the model decides to call the tool, LocalMind `POST`s the args to your endpoint as a JSON body and feeds the response back. The endpoint must allow CORS for this origin. Useful for connecting to local dev servers or CORS-enabled APIs.
 
-**MCP servers:** Settings → *MCP servers*. Paste a Streamable HTTP MCP endpoint URL (optional bearer). LocalMind runs JSON-RPC 2.0 `initialize` + `tools/list` on add, then registers each remote tool with the `mcp_` prefix. Tool calls route back as `tools/call`. Reconnects on page load.
+**MCP servers:**
+
+1. **Settings → MCP servers.** Paste the server's Streamable HTTP URL (the one that accepts JSON-RPC POSTs — often ends in `/mcp` or `/sse`). If the server requires auth, paste a bearer token in the second field. Click *Add server*.
+2. On success you'll see e.g. `Connected. Discovered 7 tool(s).` and the tools appear in `TOOL_REGISTRY` with the `mcp_` prefix (so `fetch_url` from the server becomes `mcp_fetch_url` for the model). They're included in any chat with an agent-capable model automatically — no extra toggle.
+3. Ask the model to use one: *"Use mcp_fetch_url to grab https://example.com/robots.txt and summarise it."*
+4. Removing the server also unregisters its tools. Connections re-establish on page load.
+
+**Finding an MCP server to try:**
+
+- **[modelcontextprotocol.io/servers](https://modelcontextprotocol.io/servers)** — the official registry. Most are stdio (local only) and need an MCP-over-HTTP bridge. Look specifically for ones labelled *Streamable HTTP* or *SSE*.
+- **Your own local server.** Any MCP server that speaks HTTP can be proxied: `npx @modelcontextprotocol/inspector --transport http <your-server>` exposes a local endpoint. Point LocalMind at `http://localhost:PORT`.
+- **Remote hosted servers.** Some SaaS products (Zapier, Linear, Notion) ship hosted MCP endpoints with auth. Paste the URL + your API token.
+
+**Requirements the server must satisfy:**
+
+- **CORS:** it must send `Access-Control-Allow-Origin: https://naklitechie.github.io` (or `*` for public endpoints). Browsers refuse cross-origin JSON-RPC without this. Local servers: either add CORS middleware, or run LocalMind from the same origin (e.g. `python3 -m http.server` next to your MCP server).
+- **JSON-RPC 2.0 over HTTP POST** at the given URL. Streaming SSE responses are partially supported (the first `data:` frame is parsed); long-running stream tools won't work yet.
+- **Protocol:** LocalMind sends `protocolVersion: 2025-03-26` on `initialize`. Most current servers accept this.
+
+Tools are discovered once on add (and again on page reload). If the server adds new tools later, remove and re-add the entry to pick them up.
 
 **Math & diagrams:** inline `$\int x^2 dx$` and display `$$\sum i$$` math render via KaTeX; ` ```mermaid ` blocks render as SVG via lazy-loaded Mermaid.
 

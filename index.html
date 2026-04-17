@@ -2110,7 +2110,19 @@
               <h4>Multi-step planning (Gemma 4, Settings toggle)</h4>
               <span class="try-prompt" data-prompt="Compare cold brew, pour-over, and French press coffee: typical brew time, caffeine content, flavor profile, and equipment cost. Give a recommendation for someone new to specialty coffee.">Compare 3 coffee brewing methods</span>
               <span class="try-prompt" data-prompt="Research the history of the Silk Road in 3 phases (ancient origins, medieval peak, modern revival), then summarize the key goods traded at each phase.">Silk Road in 3 phases</span>
-              <div class="help-note">Click any prompt to paste it. Web search needs a provider in Settings. Multimodal needs a Gemma 4 model + an attached image. Artifact and math rendering work on any model; run_python and multi-step planning require an agent-capable (Gemma 4) model.</div>
+              <h4>MCP tools (after adding a server in Settings)</h4>
+              <span class="try-prompt" data-prompt="List every MCP tool you have available and what each one does.">List all MCP tools I have</span>
+              <span class="try-prompt" data-prompt="Use mcp_fetch_url (or whatever fetch-like MCP tool is available) to grab https://example.com and summarise the response.">Use an MCP fetch tool</span>
+              <h4>Voice to text (no prompt needed)</h4>
+              <p style="font-size:0.78rem;color:var(--gray-500);margin:4px 0 8px">Click the 🗣 button to the left of the input, speak a sentence, click again to stop. Whisper runs on-device. Try saying: <em>&ldquo;Write a short summary of the Great Pyramid of Giza in three sentences.&rdquo;</em></p>
+              <div class="help-note">
+                <strong>Tips.</strong>
+                <ul style="margin:4px 0 0 16px;padding:0;font-size:0.72rem;line-height:1.5">
+                  <li>For artifact and Mermaid prompts, start with <em>&ldquo;Output only this&hellip;&rdquo;</em> or <em>&ldquo;Copy this exactly&hellip;&rdquo;</em> &mdash; smaller models tend to wrap code blocks in prose otherwise.</li>
+                  <li>If a <code>```mermaid</code> block renders as plain code, the model stripped the language label. Re-send with <em>&ldquo;Preserve the language tag after the backticks&rdquo;</em>.</li>
+                  <li>Click any prompt above to paste it. Web search needs a provider in Settings. Multimodal needs a Gemma 4 model + an attached image. Artifact, math, and Mermaid rendering work on any model; <code>run_python</code>, MCP tools, and multi-step planning require an agent-capable (Gemma 4) model.</li>
+                </ul>
+              </div>
             </div>
           </div>
         </div>
