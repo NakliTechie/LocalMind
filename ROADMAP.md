@@ -60,6 +60,12 @@ Single-file (~5.8k lines) private AI research agent running entirely in-browser.
   - Fallback to original fetch on any error in the resumable path — model still loads, just can't resume
   - Settings toggle (default on) as a kill switch
   - Worker-boot cleanup drops IDB chunks for URLs already in Cache Storage
+- **Multi-step planner agent** (experimental, agent-capable models only) — Settings toggle off by default
+  - Plan phase: one model call asks for a 2–5 step numbered list; tolerant parser; <2 parsed steps → fall back to single-pass
+  - Execute phase: per-step mini tool loop (2 iterations max) with prior-step outputs passed in as context
+  - Synthesize phase: one model call combines step outputs into the final answer, streaming into the bubble
+  - Plan + per-step outputs render as collapsible blocks on the msg container (survive bubble innerHTML rewrites)
+  - 3×+ model calls per message — clearly labelled "experimental" because Gemma 4 E2B/E4B at ~4.5B plans even trivial questions
 
 ## Status
 
