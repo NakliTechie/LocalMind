@@ -3306,7 +3306,9 @@
     // push() with each chunk and finish() when done (optionally with an
     // error). Consumers iterate via `for await`. Pulls outpace pushes by
     // queueing pending promises; pushes outpace pulls by buffering.
-    function makeAsyncIterator() {
+    // onReturn fires exactly once if the consumer exits the loop early
+    // (break, return, throw); producers use it to cancel upstream work.
+    function makeAsyncIterator(onReturn) {
       const buffer = [];
       const pending = [];
       let done = false;
@@ -3333,8 +3335,11 @@
           return new Promise((resolve, reject) => pending.push({ resolve, reject }));
         },
         return() {
-          // Consumer broke out of the loop early
+          const wasDone = done;
           this.finish();
+          if (!wasDone && typeof onReturn === 'function') {
+            try { onReturn(); } catch {}
+          }
           return Promise.resolve({ value: undefined, done: true });
         },
         [Symbol.asyncIterator]() { return this; },
@@ -3385,7 +3390,15 @@
       const modelId = modelEntry.id;
       const promptChars = chatMessages.reduce((s, m) => s + m.content.length, 0);
 
-      const iter = makeAsyncIterator();
+      // If the consumer breaks out of `for await` before generation ends,
+      // tell the worker to stop so the next API call isn't queued behind
+      // an abandoned generation that keeps running to max_tokens.
+      const iter = makeAsyncIterator(() => {
+        try {
+          const w = LocalMind.runtime._worker;
+          if (w) w.postMessage({ type: 'stop' });
+        } catch {}
+      });
       let tokenCount = 0;
 
       runInference({
