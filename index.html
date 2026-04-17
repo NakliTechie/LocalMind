@@ -2218,6 +2218,23 @@
           </label>
         </div>
         <div class="settings-divider">
+          <label for="voiceLanguageSelect">Voice to text language <span style="font-weight:400;color:var(--gray-500)">(Whisper &mdash; leaving as English improves accuracy on short clips)</span></label>
+          <select id="voiceLanguageSelect" class="settings-select">
+            <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="it">Italian</option>
+            <option value="pt">Portuguese</option>
+            <option value="ru">Russian</option>
+            <option value="ja">Japanese</option>
+            <option value="zh">Chinese</option>
+            <option value="hi">Hindi</option>
+            <option value="ar">Arabic</option>
+            <option value="ko">Korean</option>
+          </select>
+        </div>
+        <div class="settings-divider">
           <label>Custom models <span style="font-weight:400;color:var(--gray-500)">(causal LMs with ONNX exports on Hugging Face)</span></label>
           <div style="display:flex;gap:6px;margin-top:4px">
             <input type="text" id="customModelInput" class="settings-input" placeholder="owner/repo e.g. onnx-community/Llama-3.2-1B-Instruct" style="flex:1">
@@ -3471,6 +3488,15 @@
     resumableToggle.addEventListener('change', () => {
       try { localStorage.setItem('lm_resumable_downloads', resumableToggle.checked ? '1' : '0'); } catch {}
       showToast(resumableToggle.checked ? 'Resumable downloads on' : 'Resumable downloads off — takes effect on next model load');
+    });
+
+    // Voice-to-text language. Whisper's auto-detect is unreliable on short
+    // clips and often degenerates to filler tokens ("and", "the"); forcing
+    // an explicit language avoids that. Default English.
+    const voiceLanguageSelect = document.getElementById('voiceLanguageSelect');
+    voiceLanguageSelect.value = localStorage.getItem('lm_voice_language') || 'en';
+    voiceLanguageSelect.addEventListener('change', () => {
+      try { localStorage.setItem('lm_voice_language', voiceLanguageSelect.value); } catch {}
     });
 
     // ── JavaScript API: chip, toggle, activity log ──────────────
@@ -5660,7 +5686,8 @@
             }
           };
           voiceWorker.addEventListener('message', onMsg);
-          voiceWorker.postMessage({ type: 'transcribe', pcm, id }, [pcm.buffer]);
+          const lang = localStorage.getItem('lm_voice_language') || 'en';
+          voiceWorker.postMessage({ type: 'transcribe', pcm, lang, id }, [pcm.buffer]);
         });
         if (text) {
           const existing = chatInput.value;
@@ -7182,7 +7209,7 @@ env.allowRemoteModels = true;
 let transcriber = null;
 
 self.addEventListener('message', async (e) => {
-  const { type, pcm, id } = e.data;
+  const { type, pcm, lang, id } = e.data;
   if (type === 'load') {
     try {
       transcriber = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-base', {
@@ -7197,7 +7224,14 @@ self.addEventListener('message', async (e) => {
   } else if (type === 'transcribe') {
     try {
       if (!transcriber) throw new Error('Whisper not loaded');
-      const output = await transcriber(pcm, { return_timestamps: false, chunk_length_s: 30 });
+      // Explicit language + task stops Whisper from hallucinating common
+      // filler tokens on short/quiet clips (auto-detect is unreliable there).
+      const output = await transcriber(pcm, {
+        language: lang || 'en',
+        task: 'transcribe',
+        return_timestamps: false,
+        chunk_length_s: 30,
+      });
       self.postMessage({ type: 'transcription', text: (output && output.text ? output.text.trim() : ''), id });
     } catch (err) {
       self.postMessage({ type: 'error', message: err.message || String(err), id });
