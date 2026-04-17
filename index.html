@@ -2218,6 +2218,21 @@
           </div>
         </div>
         <div class="settings-divider">
+          <label>MCP servers <span style="font-weight:400;color:var(--gray-500)">(Streamable HTTP transport; tools discovered via JSON-RPC <code>tools/list</code>)</span></label>
+          <div style="display:flex;gap:6px;margin-top:4px">
+            <input type="text" id="mcpUrlInput" class="settings-input" placeholder="https://mcp.example.com" style="flex:1">
+            <input type="password" id="mcpAuthInput" class="settings-input" placeholder="Bearer (optional)" style="flex:0 0 40%">
+            <button class="btn-icon" id="mcpAddBtn">Add server</button>
+          </div>
+          <div id="mcpStatus" style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5;min-height:1em"></div>
+          <div id="mcpList" style="margin-top:6px"></div>
+          <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
+            Tools discovered from an MCP server are registered with the prefix <code>mcp_</code>
+            to avoid collisions with built-ins. The server must allow CORS for this origin and
+            accept JSON-RPC 2.0 requests at the given URL. Connections re-established on page load.
+          </div>
+        </div>
+        <div class="settings-divider">
           <label>JavaScript API <span style="font-weight:400;color:var(--gray-500)">(experimental)</span></label>
           <label class="toggle-row" style="padding-top:4px">
             <input type="checkbox" id="apiEnabledToggle">
@@ -4214,6 +4229,176 @@
       if (!err) registerCustomTool(def);
     }
     renderCustomToolList();
+
+    // ── MCP servers (Streamable HTTP JSON-RPC 2.0) ─────────────
+    // Discover tools on page load from each registered server and add them
+    // to TOOL_REGISTRY with an mcp_ prefix. Tool execution POSTs a
+    // tools/call JSON-RPC request back to the same URL.
+    const mcpUrlInput = document.getElementById('mcpUrlInput');
+    const mcpAuthInput = document.getElementById('mcpAuthInput');
+    const mcpAddBtn = document.getElementById('mcpAddBtn');
+    const mcpStatus = document.getElementById('mcpStatus');
+    const mcpListDiv = document.getElementById('mcpList');
+    // Keep server connection state here so removeMcpServer can wipe only
+    // the tools that belong to that server.
+    const __mcpServers = [];  // [{ url, auth, toolNames: [] }]
+
+    function mcpSetStatus(msg, kind) {
+      mcpStatus.textContent = msg || '';
+      mcpStatus.style.color = kind === 'err' ? '#dc2626' : 'var(--gray-500)';
+    }
+
+    async function mcpRpc(url, auth, method, params) {
+      const body = { jsonrpc: '2.0', id: Math.floor(Math.random() * 1e9), method };
+      if (params !== undefined) body.params = params;
+      const headers = { 'content-type': 'application/json', 'accept': 'application/json, text/event-stream' };
+      if (auth) headers['authorization'] = 'Bearer ' + auth;
+      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+      const ct = res.headers.get('content-type') || '';
+      // MVP: only parse JSON responses. SSE streams aren't supported yet —
+      // callers that need them should pick a stateless MCP server.
+      const text = await res.text();
+      if (ct.includes('text/event-stream')) {
+        // Pull the first `data: …` line's JSON — sufficient for discrete replies
+        const line = text.split(/\r?\n/).find((l) => l.startsWith('data:'));
+        if (!line) throw new Error('MCP SSE response had no data frame');
+        const j = JSON.parse(line.slice(5).trim());
+        if (j.error) throw new Error('MCP error: ' + (j.error.message || JSON.stringify(j.error)));
+        return j.result;
+      }
+      const j = JSON.parse(text);
+      if (j.error) throw new Error('MCP error: ' + (j.error.message || JSON.stringify(j.error)));
+      return j.result;
+    }
+
+    function mcpMakeExecute(url, auth, remoteName) {
+      return async function execute(args) {
+        try {
+          const result = await mcpRpc(url, auth, 'tools/call', { name: remoteName, arguments: args || {} });
+          // MCP tool result shape: { content: [{ type: 'text', text: '…' }], isError? }
+          if (result && Array.isArray(result.content)) {
+            const textParts = result.content.filter((c) => c && c.type === 'text').map((c) => c.text).join('\n');
+            return result.isError ? { error: textParts || 'tool reported error' } : (textParts || result.content);
+          }
+          return result;
+        } catch (e) {
+          return { error: 'MCP call failed: ' + (e.message || e) };
+        }
+      };
+    }
+
+    async function mcpConnectServer(url, auth) {
+      // Initialize handshake + list tools, then register each.
+      await mcpRpc(url, auth, 'initialize', {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'LocalMind', version: '2.0' },
+      });
+      const list = await mcpRpc(url, auth, 'tools/list');
+      const tools = (list && list.tools) || [];
+      const registered = [];
+      for (const t of tools) {
+        if (!t || !t.name) continue;
+        // Sanitise the MCP tool name into a valid identifier, prefix with mcp_.
+        const clean = String(t.name).replace(/[^a-zA-Z0-9_]/g, '_');
+        const local = 'mcp_' + clean;
+        if (TOOL_REGISTRY[local] && !TOOL_REGISTRY[local]._mcp) continue;  // skip collisions
+        TOOL_REGISTRY[local] = {
+          description: t.description || ('MCP tool from ' + url),
+          parameters: t.inputSchema || { type: 'object', properties: {}, required: [] },
+          execute: mcpMakeExecute(url, auth, t.name),
+          _mcp: true,
+          _mcpUrl: url,
+        };
+        registered.push(local);
+      }
+      return registered;
+    }
+
+    function mcpLoadFromStorage() {
+      try {
+        const raw = localStorage.getItem('lm_mcp_servers');
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr : [];
+      } catch { return []; }
+    }
+
+    function mcpSaveToStorage() {
+      const list = __mcpServers.map((s) => ({ url: s.url, auth: s.auth || '' }));
+      try { localStorage.setItem('lm_mcp_servers', JSON.stringify(list)); } catch {}
+    }
+
+    function renderMcpList() {
+      mcpListDiv.innerHTML = '';
+      if (__mcpServers.length === 0) return;
+      for (const server of __mcpServers) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 6px;margin-top:4px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:4px;font-size:0.72rem';
+        const left = document.createElement('div');
+        left.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        left.textContent = server.url + ' \u2014 ' + server.toolNames.length + ' tool(s)';
+        const del = document.createElement('button');
+        del.className = 'btn-icon';
+        del.textContent = 'Remove';
+        del.style.cssText = 'flex-shrink:0;padding:2px 8px;font-size:0.7rem';
+        del.addEventListener('click', () => removeMcpServer(server.url));
+        row.appendChild(left);
+        row.appendChild(del);
+        mcpListDiv.appendChild(row);
+      }
+    }
+
+    async function addMcpServer(url, auth) {
+      if (__mcpServers.some((s) => s.url === url)) { mcpSetStatus('already added', 'err'); return; }
+      mcpSetStatus('Connecting to ' + url + '\u2026');
+      mcpAddBtn.disabled = true;
+      try {
+        const names = await mcpConnectServer(url, auth);
+        __mcpServers.push({ url, auth, toolNames: names });
+        mcpSaveToStorage();
+        renderMcpList();
+        mcpSetStatus('Connected. Discovered ' + names.length + ' tool(s).');
+        mcpUrlInput.value = '';
+        mcpAuthInput.value = '';
+      } catch (e) {
+        mcpSetStatus('Failed: ' + (e.message || e), 'err');
+      } finally {
+        mcpAddBtn.disabled = false;
+      }
+    }
+
+    function removeMcpServer(url) {
+      const idx = __mcpServers.findIndex((s) => s.url === url);
+      if (idx < 0) return;
+      for (const name of __mcpServers[idx].toolNames) {
+        if (TOOL_REGISTRY[name] && TOOL_REGISTRY[name]._mcp) delete TOOL_REGISTRY[name];
+      }
+      __mcpServers.splice(idx, 1);
+      mcpSaveToStorage();
+      renderMcpList();
+    }
+
+    mcpAddBtn.addEventListener('click', () => {
+      const url = mcpUrlInput.value.trim();
+      if (!url || !/^https?:\/\//i.test(url)) { mcpSetStatus('URL must be http(s)://', 'err'); return; }
+      addMcpServer(url, mcpAuthInput.value.trim());
+    });
+
+    // Auto-reconnect saved servers on page load. Silent on failures —
+    // users will see the stale count in the list and can retry manually.
+    (async () => {
+      for (const s of mcpLoadFromStorage()) {
+        try {
+          const names = await mcpConnectServer(s.url, s.auth);
+          __mcpServers.push({ url: s.url, auth: s.auth, toolNames: names });
+        } catch {
+          __mcpServers.push({ url: s.url, auth: s.auth, toolNames: [] });
+        }
+      }
+      renderMcpList();
+    })();
 
     // ── Web search settings ───────────────────────────────────
     const searchProvider = document.getElementById('searchProvider');
