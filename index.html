@@ -2057,6 +2057,10 @@
         <div class="settings-divider">
           <label>Model cache</label>
           <div id="cacheInfo" style="font-size:0.75rem;color:var(--gray-500);margin-top:4px">Loading...</div>
+          <label class="toggle-row" style="padding-top:8px">
+            <input type="checkbox" id="resumableDownloadsToggle">
+            Resumable downloads <span style="font-weight:400;color:var(--gray-500)">(5 MB chunks cached in IndexedDB; interrupted downloads resume from the last chunk)</span>
+          </label>
         </div>
         <div class="settings-divider">
           <label>Custom models <span style="font-weight:400;color:var(--gray-500)">(causal LMs with ONNX exports on Hugging Face)</span></label>
@@ -3193,6 +3197,14 @@
     // Refresh cache info when settings panel opens
     settingsBtn.addEventListener('click', () => { if (settingsPanel.classList.contains('open')) refreshCacheInfo(); });
     refreshCacheInfo();
+
+    // Resumable downloads toggle (default on; set to '0' to disable)
+    const resumableToggle = document.getElementById('resumableDownloadsToggle');
+    resumableToggle.checked = localStorage.getItem('lm_resumable_downloads') !== '0';
+    resumableToggle.addEventListener('change', () => {
+      try { localStorage.setItem('lm_resumable_downloads', resumableToggle.checked ? '1' : '0'); } catch {}
+      showToast(resumableToggle.checked ? 'Resumable downloads on' : 'Resumable downloads off — takes effect on next model load');
+    });
 
     // ── JavaScript API: chip, toggle, activity log ──────────────
     const apiChip = document.getElementById('apiChip');
@@ -5520,7 +5532,8 @@ ${JSON.stringify({ name, result })}
             cleanup();
             reject(new Error(ev.message || 'Worker startup failed'));
           });
-          w.postMessage({ type: 'load', modelId, dtype, modelType });
+          const resumable = localStorage.getItem('lm_resumable_downloads') !== '0';
+          w.postMessage({ type: 'load', modelId, dtype, modelType, resumable });
         });
 
         return promise;
@@ -6185,25 +6198,242 @@ self.addEventListener('message', async (e) => {
     // GQA variant required for Gemma 3 1B (issue #1469: regular variant crashes).
     function createWorker() {
       const code = `
-import {
-  env,
-  AutoTokenizer,
-  AutoModelForCausalLM,
-  AutoProcessor,
-  Gemma4ForConditionalGeneration,
-  load_image,
-  TextStreamer,
-  InterruptableStoppingCriteria,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+// ── Resumable download cache ────────────────────────────────
+// Monkey-patches self.fetch so HF CDN downloads checkpoint to IndexedDB
+// every 5 MB. If the tab closes mid-download, the next load resumes from
+// the last saved chunk via HTTP Range instead of restarting from byte 0.
+// Any failure in this path falls back to the original fetch, so the model
+// still loads — it just won't resume if re-interrupted. Toggle via the
+// 'resumable' flag on the load message; default on.
+const __RDB_NAME = 'localmind-downloads';
+const __RDB_CHUNK = 5 * 1024 * 1024;
+let __resumableEnabled = true;
 
-env.allowLocalModels  = true;
-env.localModelPath    = '/models/';
-env.allowRemoteModels = true;
+function __openRDB() {
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open(__RDB_NAME, 1);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'url' });
+      if (!db.objectStoreNames.contains('chunks')) db.createObjectStore('chunks', { keyPath: 'key' });
+    };
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+
+function __rdbGet(db, store, key) {
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(store, 'readonly').objectStore(store).get(key);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function __rdbPut(db, store, value) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readwrite');
+    tx.objectStore(store).put(value);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function __rdbClearFile(db, url) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(['chunks', 'meta'], 'readwrite');
+    const req = tx.objectStore('chunks').openCursor();
+    req.onsuccess = (e) => {
+      const c = e.target.result;
+      if (!c) return;
+      if (c.value.key.indexOf(url + '|') === 0) c.delete();
+      c.continue();
+    };
+    tx.objectStore('meta').delete(url);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// On worker start: drop IDB chunks for files already fully cached in Cache
+// Storage. Recovers disk after transformers.js has cache.put()'d the whole
+// response independently of our chunk store.
+async function __rdbCleanup() {
+  let db;
+  try { db = await __openRDB(); } catch { return; }
+  try {
+    const urls = await new Promise((resolve, reject) => {
+      const r = db.transaction('meta', 'readonly').objectStore('meta').getAllKeys();
+      r.onsuccess = () => resolve(r.result || []);
+      r.onerror = () => reject(r.error);
+    });
+    for (const url of urls) {
+      try {
+        const hit = await caches.match(url);
+        if (hit) await __rdbClearFile(db, url);
+      } catch {}
+    }
+  } finally {
+    try { db.close(); } catch {}
+  }
+}
+
+function __shouldIntercept(url) {
+  return typeof url === 'string' && url.indexOf('https://huggingface.co/') === 0;
+}
+
+const __origFetch = self.fetch.bind(self);
+
+self.fetch = async function(input, init) {
+  const urlStr = typeof input === 'string' ? input : (input && input.url);
+  const method = (init && init.method) || (input && input.method) || 'GET';
+  if (!__resumableEnabled || method !== 'GET' || !__shouldIntercept(urlStr)) {
+    return __origFetch(input, init);
+  }
+
+  let db;
+  try { db = await __openRDB(); }
+  catch { return __origFetch(input, init); }
+
+  const closeDb = () => { try { db.close(); } catch {} };
+
+  try {
+    const headResp = await __origFetch(urlStr, { method: 'HEAD' });
+    if (!headResp.ok) { closeDb(); return __origFetch(input, init); }
+
+    const totalSize = parseInt(headResp.headers.get('content-length'), 10);
+    const etag = headResp.headers.get('etag') || headResp.headers.get('last-modified') || '';
+    const contentType = headResp.headers.get('content-type') || 'application/octet-stream';
+
+    if (!totalSize || totalSize < __RDB_CHUNK) {
+      closeDb();
+      return __origFetch(input, init);
+    }
+
+    let meta = await __rdbGet(db, 'meta', urlStr);
+    if (meta && meta.etag !== etag) {
+      await __rdbClearFile(db, urlStr);
+      meta = null;
+    }
+
+    const chunkCount = Math.ceil(totalSize / __RDB_CHUNK);
+    const existing = new Array(chunkCount).fill(null);
+    if (meta) {
+      for (let i = 0; i < chunkCount; i++) {
+        const rec = await __rdbGet(db, 'chunks', urlStr + '|' + i);
+        if (rec) existing[i] = rec.data;
+      }
+    }
+
+    const firstMissing = existing.findIndex(c => !c);
+    if (firstMissing === -1) {
+      closeDb();
+      return new Response(new Blob(existing, { type: contentType }), {
+        status: 200,
+        headers: new Headers({
+          'content-length': String(totalSize),
+          'content-type': contentType,
+        }),
+      });
+    }
+
+    if (!meta) {
+      await __rdbPut(db, 'meta', { url: urlStr, etag, totalSize, chunkSize: __RDB_CHUNK, chunkCount });
+    }
+
+    const startByte = firstMissing * __RDB_CHUNK;
+    const rangeResp = await __origFetch(urlStr, { headers: { Range: 'bytes=' + startByte + '-' } });
+    if (!rangeResp.ok) { closeDb(); return __origFetch(input, init); }
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          for (let i = 0; i < firstMissing; i++) {
+            const buf = await existing[i].arrayBuffer();
+            controller.enqueue(new Uint8Array(buf));
+          }
+          const reader = rangeResp.body.getReader();
+          let accum = new Uint8Array(__RDB_CHUNK);
+          let accumLen = 0;
+          let chunkIdx = firstMissing;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            let pos = 0;
+            while (pos < value.length) {
+              const take = Math.min(__RDB_CHUNK - accumLen, value.length - pos);
+              accum.set(value.subarray(pos, pos + take), accumLen);
+              accumLen += take;
+              pos += take;
+              if (accumLen === __RDB_CHUNK) {
+                const slice = accum.slice(0, accumLen);
+                await __rdbPut(db, 'chunks', { key: urlStr + '|' + chunkIdx, data: new Blob([slice]) });
+                controller.enqueue(slice);
+                chunkIdx++;
+                accumLen = 0;
+                accum = new Uint8Array(__RDB_CHUNK);
+              }
+            }
+          }
+          if (accumLen > 0) {
+            const slice = accum.slice(0, accumLen);
+            await __rdbPut(db, 'chunks', { key: urlStr + '|' + chunkIdx, data: new Blob([slice]) });
+            controller.enqueue(slice);
+          }
+          controller.close();
+        } catch (e) {
+          controller.error(e);
+        } finally {
+          closeDb();
+        }
+      },
+      cancel() { closeDb(); },
+    });
+
+    return new Response(stream, {
+      status: 200,
+      headers: new Headers({
+        'content-length': String(totalSize),
+        'content-type': contentType,
+      }),
+    });
+  } catch {
+    closeDb();
+    return __origFetch(input, init);
+  }
+};
+
+__rdbCleanup();
+
+// Dynamic import *after* the fetch patch is installed. Using top-level await
+// would race the 'load' postMessage from the main thread — it can arrive
+// before the module-body handler is registered and get dropped. Kick off
+// the import eagerly and have the message handler await it.
+let env, AutoTokenizer, AutoModelForCausalLM, AutoProcessor, Gemma4ForConditionalGeneration, load_image, TextStreamer, InterruptableStoppingCriteria;
+let stopping_criteria;
+
+const __modReady = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm').then((m) => {
+  env = m.env;
+  AutoTokenizer = m.AutoTokenizer;
+  AutoModelForCausalLM = m.AutoModelForCausalLM;
+  AutoProcessor = m.AutoProcessor;
+  Gemma4ForConditionalGeneration = m.Gemma4ForConditionalGeneration;
+  load_image = m.load_image;
+  TextStreamer = m.TextStreamer;
+  InterruptableStoppingCriteria = m.InterruptableStoppingCriteria;
+  env.allowLocalModels  = true;
+  env.localModelPath    = '/models/';
+  env.allowRemoteModels = true;
+  // Transformers.js captures globalThis.fetch at module init via .bind(), so
+  // overriding self.fetch alone doesn't reach it. Replace env.fetch so its
+  // internal getFile() routes through our resumable path.
+  env.fetch = self.fetch;
+  stopping_criteria = new InterruptableStoppingCriteria();
+});
 
 let processor = null;
 let tokenizer = null;
 let model = null;
-let stopping_criteria = new InterruptableStoppingCriteria();
 let loadedType = null;
 
 function progressCallback(p) {
@@ -6366,9 +6596,11 @@ async function generateMultimodal(chatMessages, id, attachmentData, enableThinki
 }
 
 self.addEventListener('message', async (e) => {
-  const { type, messages, id, modelId, dtype, modelType, attachments: attData, enableThinking, generationConfig } = e.data;
+  await __modReady;  // Transformers.js may still be loading on first message
+  const { type, messages, id, modelId, dtype, modelType, attachments: attData, enableThinking, generationConfig, resumable } = e.data;
 
   if (type === 'load') {
+    if (resumable === false) __resumableEnabled = false;
     try {
       if (modelType === 'multimodal') {
         await loadMultimodal(modelId, dtype);
