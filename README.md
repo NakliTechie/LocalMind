@@ -37,6 +37,10 @@ Gemma 4 models have built-in tool calling. The model decides when to use tools b
 
 **Multi-step planning (experimental):** Settings → tick *Multi-step planning*. Each message is planned into 2–5 steps, each executed with tools, then synthesised into a final answer. Plan + per-step outputs appear as collapsible blocks. 3×+ slower but handles research-style queries ("compare X and Y, cite sources") better than a single pass.
 
+**Custom tools:** Settings → *Custom tools*. Paste a JSON tool definition (`name`, `description`, `parameters` as a JSON-schema object, `endpoint`). When the model decides to call the tool, LocalMind `POST`s the args to your endpoint as a JSON body and feeds the response back. The endpoint must allow CORS for this origin. Useful for connecting to local dev servers or CORS-enabled APIs.
+
+**Branch from here:** right-click (or long-press) any user message → *Branch from here*. Archives the current conversation, then forks a new one containing messages up to that point. Open the History sidebar to switch back.
+
 ## Persistent memory (RAG)
 
 LocalMind remembers across sessions. Powered by a local RAG pipeline:

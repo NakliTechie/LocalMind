@@ -66,6 +66,8 @@ Single-file (~5.8k lines) private AI research agent running entirely in-browser.
   - Synthesize phase: one model call combines step outputs into the final answer, streaming into the bubble
   - Plan + per-step outputs render as collapsible blocks on the msg container (survive bubble innerHTML rewrites)
   - 3×+ model calls per message — clearly labelled "experimental" because Gemma 4 E2B/E4B at ~4.5B plans even trivial questions
+- **Conversation branching** — right-click (or long-press) a user message → "Branch from here". Archives the current conversation, slices messages up to that index into a new conversation record, and switches to it. If no `activeConversationId` existed yet (fresh session), mints one so the original isn't orphaned.
+- **Custom tools** (agent-capable models) — Settings accepts a JSON tool definition (`name`, `description`, `parameters`, `endpoint`) persisted in localStorage. Registered into `TOOL_REGISTRY` like a built-in. On tool call, `POST`s args as JSON to the endpoint; CORS must allow this origin. Name must match `/^[a-zA-Z_][a-zA-Z0-9_]*$/` and not collide with a built-in. Auto-restored on page load.
 
 ## Status
 
@@ -78,48 +80,33 @@ Single-file (~5.8k lines) private AI research agent running entirely in-browser.
 | Tools | Strong (10 tools incl. SAM segmentation) |
 | Agents | Partial (single-agent loop, no planning) |
 | JavaScript API | Strong (v1.0 — chat completions with streaming) |
-| Plugins | Not started |
+| Plugins | Partial (user-defined tools via HTTP POST — see "Custom tools" above) |
 
 ---
 
 ## Next — Tier 3
 
-### 1. Conversation branching
-- Right-click or long-press a user message → "Branch from here"
-- Creates new conversation in history with messages up to that point
-
-**~40 lines.**
-
-### 2. Plugin / custom tool API
-- Settings: "Custom Tools" section
-- User defines tools as JSON: `{ name, description, parameters, endpoint }`
-- On tool call: `fetch(endpoint, { method: 'POST', body: JSON.stringify(args) })`
-- Store definitions in localStorage
-- Risk: CORS blocks most endpoints. Best with local servers or CORS-enabled APIs.
-
-**~100 lines.**
-
-### 4. Voice mode
+### 1. Voice mode
 - Web Speech API (`SpeechRecognition`) for input (free, built into Chrome)
 - Web Speech API (`SpeechSynthesis`) for output
 - Toggle button in input bar
 
 **~60 lines.**
 
-### 5. Custom model dtype picker
+### 2. Custom model dtype picker
 Today the validator picks the best-available quantisation automatically. Some users may want to force `q4` or `int8` for compatibility or quality reasons.
 
 **~40 lines.**
 
-### 6. Multimodal custom models
+### 3. Multimodal custom models
 The worker hardcodes `Gemma4ForConditionalGeneration`. To support other multimodal architectures (LLaVA, Idefics, PaliGemma), the worker needs to dispatch on `model_type` and import the right class.
 
 **~120 lines.**
 
-### 7. SRI for `transformers@4 +esm`
+### 4. SRI for `transformers@4 +esm`
 The `+esm` jsDelivr endpoint internally redirects to content-addressed URLs, so a static hash can't be pinned without hardcoding the resolved URL. Either pin the resolved URL (brittle across releases) or self-host the bundle.
 
-### 8. Brave / restricted-WebGPU diagnostics (pending)
+### 5. Brave / restricted-WebGPU diagnostics (pending)
 Github and Reddit users report model fails to load in Brave. Likely causes: `navigator.gpu` present but `requestAdapter()` returns null under strict fingerprinting; Shields blocking jsdelivr or huggingface.co; `device: 'webgpu'` failing in the worker. Current error surfacing is poor — on worker error the code hides the progress section *then* writes the error message into it (see `attachWorkerHandlers`), so users see a bare "Error" badge with zero detail.
 
 Two small follow-ups:

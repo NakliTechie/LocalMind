@@ -540,6 +540,33 @@
       padding: 6px 0;
     }
 
+    /* Message context menu (right-click / long-press) */
+    .msg-context-menu {
+      position: fixed;
+      display: none;
+      background: white;
+      border: 1px solid var(--gray-200);
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      padding: 4px 0;
+      font-size: 0.82rem;
+      z-index: 1000;
+      min-width: 160px;
+    }
+    .msg-context-menu.visible { display: block; }
+    .msg-context-menu button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: none;
+      border: none;
+      padding: 8px 12px;
+      cursor: pointer;
+      color: var(--gray-700);
+      font-size: inherit;
+    }
+    .msg-context-menu button:hover { background: var(--gray-50); }
+
     .tool-call-result pre {
       margin: 0;
       padding: 6px 8px;
@@ -1945,6 +1972,8 @@
                 <li><strong>Web Search</strong> &mdash; Settings &rarr; provider + API key &rarr; &#127760; button</li>
                 <li><strong>Thinking Mode</strong> &mdash; see chain-of-thought (collapses when done)</li>
                 <li><strong>Multi-step planning</strong> (experimental, Gemma 4 only) &mdash; Settings &rarr; tick the toggle. Each message is planned into 2&ndash;5 steps, each step executed (with tools), then synthesised. Plan + per-step outputs render as collapsible blocks below the answer. Slower (3&times;+ model calls) but handles research-style queries better.</li>
+                <li><strong>Branch from here</strong> &mdash; right-click (or long-press) a user message &rarr; "Branch from here". Archives the current conversation, then forks a new one containing messages up to that point. Continue the new branch from that question.</li>
+                <li><strong>Custom tools</strong> (agent-capable models) &mdash; Settings &rarr; Custom tools. Paste a tool definition as JSON (<code>name</code>, <code>description</code>, <code>parameters</code>, <code>endpoint</code>). On a tool call the model's args are <code>POST</code>ed to your endpoint as a JSON body; the response is fed back to the model. CORS must allow this origin.</li>
                 <li><strong>Cache management</strong> &mdash; view/clear cached models in Settings</li>
                 <li><strong>Custom models</strong> &mdash; Settings &rarr; paste a Hugging Face ONNX repo id (causal LMs only). The validator probes the HF API, picks the best available quantisation, estimates real load size, and hard-blocks anything that exceeds the device&rsquo;s WebGPU buffer limit or the 6 GB ceiling.</li>
                 <li><strong>Response badges</strong> &mdash; On-device / Agent / Web-enriched</li>
@@ -2115,6 +2144,26 @@
           </div>
         </div>
         <div class="settings-divider">
+          <label>Custom tools <span style="font-weight:400;color:var(--gray-500)">(agent-capable models; HTTP POST to your endpoint)</span></label>
+          <textarea id="customToolInput" class="settings-input" rows="6" placeholder='{
+  "name": "my_tool",
+  "description": "What this tool does",
+  "parameters": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] },
+  "endpoint": "https://example.com/tool"
+}' style="margin-top:4px;font-family:monospace;font-size:0.72rem"></textarea>
+          <div style="display:flex;gap:6px;margin-top:4px">
+            <button class="btn-icon" id="customToolAddBtn">Add tool</button>
+          </div>
+          <div id="customToolStatus" style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5;min-height:1em"></div>
+          <div id="customToolList" style="margin-top:6px"></div>
+          <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
+            On a tool call, LocalMind does <code>POST &lt;endpoint&gt;</code> with the model-generated
+            args as JSON body; the response JSON is fed back to the model. The endpoint must send
+            CORS headers for this origin. Name must be <code>[a-zA-Z_][a-zA-Z0-9_]*</code> and not
+            collide with a built-in.
+          </div>
+        </div>
+        <div class="settings-divider">
           <label>JavaScript API <span style="font-weight:400;color:var(--gray-500)">(experimental)</span></label>
           <label class="toggle-row" style="padding-top:4px">
             <input type="checkbox" id="apiEnabledToggle">
@@ -2221,6 +2270,11 @@
     <input type="password" id="importPassphrase" placeholder="Passphrase" style="display:none">
     <button id="importConfirmBtn">Load conversation</button>
     <button class="dismiss-btn" id="importDismissBtn">Dismiss</button>
+  </div>
+
+  <!-- Message context menu (right-click / long-press on a message) -->
+  <div class="msg-context-menu" id="msgContextMenu">
+    <button id="msgBranchBtn">Branch from here</button>
   </div>
 
   <!-- API activity log modal -->
@@ -3993,6 +4047,119 @@
     }
     renderCustomModelList();
 
+    // ── Custom tools (user-defined, HTTP POST) ────────────────
+    const customToolInput = document.getElementById('customToolInput');
+    const customToolAddBtn = document.getElementById('customToolAddBtn');
+    const customToolStatus = document.getElementById('customToolStatus');
+    const customToolList = document.getElementById('customToolList');
+
+    function setCustomToolStatus(msg, kind) {
+      customToolStatus.textContent = msg || '';
+      customToolStatus.style.color = kind === 'err' ? 'var(--red-600, #dc2626)' : 'var(--gray-500)';
+    }
+
+    function validateCustomToolDef(def) {
+      if (!def || typeof def !== 'object') return 'must be a JSON object';
+      if (typeof def.name !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(def.name)) {
+        return 'name must match /^[a-zA-Z_][a-zA-Z0-9_]*$/';
+      }
+      if (TOOL_REGISTRY[def.name] && !TOOL_REGISTRY[def.name]._custom) {
+        return 'name collides with a built-in tool';
+      }
+      if (typeof def.description !== 'string' || !def.description.trim()) return 'description required';
+      if (typeof def.endpoint !== 'string' || !/^https?:\/\//i.test(def.endpoint)) return 'endpoint must be http(s) URL';
+      if (!def.parameters || typeof def.parameters !== 'object') return 'parameters required (JSON schema object)';
+      return null;
+    }
+
+    function makeCustomToolExecute(endpoint, toolName) {
+      return async function execute(args) {
+        try {
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(args || {}),
+          });
+          const ct = res.headers.get('content-type') || '';
+          const body = ct.includes('application/json') ? await res.json() : await res.text();
+          if (!res.ok) return { error: 'Tool "' + toolName + '" returned ' + res.status, body };
+          return body;
+        } catch (e) {
+          return { error: 'Tool "' + toolName + '" fetch failed: ' + (e.message || e) };
+        }
+      };
+    }
+
+    function registerCustomTool(def) {
+      TOOL_REGISTRY[def.name] = {
+        description: def.description,
+        parameters: def.parameters,
+        execute: makeCustomToolExecute(def.endpoint, def.name),
+        _custom: true,
+        _endpoint: def.endpoint,
+      };
+    }
+
+    function loadCustomToolsFromStorage() {
+      try {
+        const raw = localStorage.getItem('lm_custom_tools');
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr : [];
+      } catch { return []; }
+    }
+
+    function saveCustomToolsToStorage() {
+      const arr = Object.entries(TOOL_REGISTRY)
+        .filter(([, t]) => t._custom)
+        .map(([name, t]) => ({ name, description: t.description, parameters: t.parameters, endpoint: t._endpoint }));
+      try { localStorage.setItem('lm_custom_tools', JSON.stringify(arr)); } catch {}
+    }
+
+    function renderCustomToolList() {
+      customToolList.innerHTML = '';
+      const entries = Object.entries(TOOL_REGISTRY).filter(([, t]) => t._custom);
+      if (entries.length === 0) return;
+      for (const [name, t] of entries) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 6px;margin-top:4px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:4px;font-size:0.72rem';
+        const left = document.createElement('div');
+        left.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        left.textContent = name + ' \u2192 ' + t._endpoint;
+        const del = document.createElement('button');
+        del.className = 'btn-icon';
+        del.textContent = 'Remove';
+        del.style.cssText = 'flex-shrink:0;padding:2px 8px;font-size:0.7rem';
+        del.addEventListener('click', () => {
+          delete TOOL_REGISTRY[name];
+          saveCustomToolsToStorage();
+          renderCustomToolList();
+        });
+        row.appendChild(left);
+        row.appendChild(del);
+        customToolList.appendChild(row);
+      }
+    }
+
+    customToolAddBtn.addEventListener('click', () => {
+      let def;
+      try { def = JSON.parse(customToolInput.value); }
+      catch (e) { setCustomToolStatus('Invalid JSON: ' + e.message, 'err'); return; }
+      const err = validateCustomToolDef(def);
+      if (err) { setCustomToolStatus(err, 'err'); return; }
+      registerCustomTool(def);
+      saveCustomToolsToStorage();
+      renderCustomToolList();
+      customToolInput.value = '';
+      setCustomToolStatus('Added "' + def.name + '". Agent-capable models will see it on next message.');
+    });
+
+    for (const def of loadCustomToolsFromStorage()) {
+      const err = validateCustomToolDef(def);
+      if (!err) registerCustomTool(def);
+    }
+    renderCustomToolList();
+
     // ── Web search settings ───────────────────────────────────
     const searchProvider = document.getElementById('searchProvider');
     const searchApiKey = document.getElementById('searchApiKey');
@@ -4512,6 +4679,75 @@
       renderRestoredMessages();
       closeHistorySidebar();
     }
+
+    // ── Branch from message ────────────────────────────────────
+    // Right-click / long-press on a user message → archive the current
+    // conversation, then slice messages[0..index] into a new conversation
+    // and switch to it. The original conversation keeps its full history.
+    async function branchFromMessage(index) {
+      if (generating) { showToast('Finish the current message first'); return; }
+      if (!Number.isFinite(index) || index < 0 || index >= messages.length) return;
+      // Archive the current conversation first so the branch doesn't
+      // lose messages after the branch point. If no activeConversationId
+      // exists yet (fresh session, user hasn't hit New Chat), mint one
+      // now so the original isn't orphaned.
+      if (messages.length >= 2) {
+        if (!activeConversationId) activeConversationId = newConversationId();
+        try { await saveConversation(messages, activeConversationId); } catch {}
+      }
+      const branched = messages.slice(0, index + 1);
+      const newId = newConversationId();
+      messages = branched;
+      activeConversationId = newId;
+      conversationSummary = '';
+      saveChat();
+      try { await saveConversation(messages, newId); } catch {}
+      chatArea.innerHTML = '';
+      chatArea.appendChild(welcomeMsg);
+      welcomeMsg.style.display = messages.length ? 'none' : '';
+      renderRestoredMessages();
+      showToast('Branched to new conversation');
+    }
+
+    const msgContextMenu = document.getElementById('msgContextMenu');
+    const msgBranchBtn = document.getElementById('msgBranchBtn');
+    let msgContextTargetIndex = null;
+
+    function showMsgContextMenu(x, y, index) {
+      msgContextTargetIndex = index;
+      // Position near the cursor, clamping to viewport
+      const menuW = 170, menuH = 40;
+      const left = Math.min(x, window.innerWidth - menuW - 8);
+      const top = Math.min(y, window.innerHeight - menuH - 8);
+      msgContextMenu.style.left = left + 'px';
+      msgContextMenu.style.top = top + 'px';
+      msgContextMenu.classList.add('visible');
+    }
+    function hideMsgContextMenu() {
+      msgContextMenu.classList.remove('visible');
+      msgContextTargetIndex = null;
+    }
+
+    chatArea.addEventListener('contextmenu', (e) => {
+      const msgEl = e.target.closest('.msg.user');
+      if (!msgEl) return;
+      const idxStr = msgEl.dataset.msgIndex;
+      if (idxStr == null) return;
+      e.preventDefault();
+      showMsgContextMenu(e.clientX, e.clientY, parseInt(idxStr, 10));
+    });
+
+    msgBranchBtn.addEventListener('click', () => {
+      const idx = msgContextTargetIndex;
+      hideMsgContextMenu();
+      if (idx != null) branchFromMessage(idx);
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!msgContextMenu.contains(e.target)) hideMsgContextMenu();
+    });
+    document.addEventListener('scroll', hideMsgContextMenu, true);
+    window.addEventListener('resize', hideMsgContextMenu);
 
     // New Chat: archive current → start fresh
     // Auto-backup toggle
@@ -5161,10 +5397,12 @@
     function renderRestoredMessages() {
       if (messages.length === 0) return;
       welcomeMsg.style.display = 'none';
-      for (const msg of messages) {
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
         const role = msg.role === 'user' ? 'user' : 'assistant';
         const el = document.createElement('div');
         el.className = `msg ${role}`;
+        el.dataset.msgIndex = String(i);
         const bubble = document.createElement('div');
         bubble.className = 'msg-bubble';
         if (role === 'user') {
@@ -5185,6 +5423,9 @@
       welcomeMsg.style.display = 'none';
       const el = document.createElement('div');
       el.className = 'msg user';
+      // Index stored so right-click/long-press can find the corresponding
+      // entry in the messages array for "Branch from here".
+      el.dataset.msgIndex = String(messages.length - 1);
       const bubble = document.createElement('div');
       bubble.className = 'msg-bubble';
 
