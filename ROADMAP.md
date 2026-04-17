@@ -124,6 +124,15 @@ The worker hardcodes `Gemma4ForConditionalGeneration`. To support other multimod
 ### 8. SRI for `transformers@4 +esm`
 The `+esm` jsDelivr endpoint internally redirects to content-addressed URLs, so a static hash can't be pinned without hardcoding the resolved URL. Either pin the resolved URL (brittle across releases) or self-host the bundle.
 
+### 9. Brave / restricted-WebGPU diagnostics (pending)
+Github and Reddit users report model fails to load in Brave. Likely causes: `navigator.gpu` present but `requestAdapter()` returns null under strict fingerprinting; Shields blocking jsdelivr or huggingface.co; `device: 'webgpu'` failing in the worker. Current error surfacing is poor — on worker error the code hides the progress section *then* writes the error message into it (see `attachWorkerHandlers`), so users see a bare "Error" badge with zero detail.
+
+Two small follow-ups:
+- Probe `navigator.gpu.requestAdapter()` at startup and show a clear "WebGPU adapter unavailable — try disabling Shields or use a different browser" before the user wastes the download.
+- Keep the progress section visible on worker error so the error message is readable; include the error text inline instead of in the console only.
+
+Blocked on repro data from the Brave reporter (console log). **~40 lines.**
+
 ---
 
 ## Tier 4 — Blocked on ecosystem
