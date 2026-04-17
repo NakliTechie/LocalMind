@@ -35,6 +35,8 @@ Gemma 4 models have built-in tool calling. The model decides when to use tools b
 
 **Translation:** Gemma 4 supports 140+ languages natively — just ask it to translate. No separate model needed.
 
+**Multi-step planning (experimental):** Settings → tick *Multi-step planning*. Each message is planned into 2–5 steps, each executed with tools, then synthesised into a final answer. Plan + per-step outputs appear as collapsible blocks. 3×+ slower but handles research-style queries ("compare X and Y, cite sources") better than a single pass.
+
 ## Persistent memory (RAG)
 
 LocalMind remembers across sessions. Powered by a local RAG pipeline:

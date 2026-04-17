@@ -78,20 +78,13 @@ Single-file (~5.8k lines) private AI research agent running entirely in-browser.
 
 ## Next — Tier 3
 
-### 1. Multi-step planner agent
-- First pass: "Break this into steps" → parse plan → execute each step with tools → synthesize
-- Same model, different system prompts per phase
-- Reliability depends on model quality at 4.5B
-
-**~80 lines.**
-
-### 2. Conversation branching
+### 1. Conversation branching
 - Right-click or long-press a user message → "Branch from here"
 - Creates new conversation in history with messages up to that point
 
 **~40 lines.**
 
-### 3. Plugin / custom tool API
+### 2. Plugin / custom tool API
 - Settings: "Custom Tools" section
 - User defines tools as JSON: `{ name, description, parameters, endpoint }`
 - On tool call: `fetch(endpoint, { method: 'POST', body: JSON.stringify(args) })`

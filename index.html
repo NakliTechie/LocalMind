@@ -1944,6 +1944,7 @@
               <ul>
                 <li><strong>Web Search</strong> &mdash; Settings &rarr; provider + API key &rarr; &#127760; button</li>
                 <li><strong>Thinking Mode</strong> &mdash; see chain-of-thought (collapses when done)</li>
+                <li><strong>Multi-step planning</strong> (experimental, Gemma 4 only) &mdash; Settings &rarr; tick the toggle. Each message is planned into 2&ndash;5 steps, each step executed (with tools), then synthesised. Plan + per-step outputs render as collapsible blocks below the answer. Slower (3&times;+ model calls) but handles research-style queries better.</li>
                 <li><strong>Cache management</strong> &mdash; view/clear cached models in Settings</li>
                 <li><strong>Custom models</strong> &mdash; Settings &rarr; paste a Hugging Face ONNX repo id (causal LMs only). The validator probes the HF API, picks the best available quantisation, estimates real load size, and hard-blocks anything that exceeds the device&rsquo;s WebGPU buffer limit or the 6 GB ceiling.</li>
                 <li><strong>Response badges</strong> &mdash; On-device / Agent / Web-enriched</li>
