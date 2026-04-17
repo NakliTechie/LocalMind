@@ -2922,6 +2922,63 @@
     // sendMessage() consumes tool_call events from runtime.chat()
     // instead of parsing model output itself.
 
+    // Singleton Pyodide worker — instantiated lazily the first time the
+    // run_python tool is called. The blob worker imports Pyodide ESM and
+    // holds the interpreter across calls so subsequent runs reuse the
+    // already-loaded runtime and installed packages.
+    let __pyodideWorker = null;
+    let __pyodideLoadingToastShown = false;
+
+    function runPython(userCode) {
+      if (!__pyodideWorker) {
+        __pyodideWorker = createPyodideWorker();
+        __pyodideWorker.addEventListener('message', (e) => {
+          if (e.data.type === 'loading' && !__pyodideLoadingToastShown) {
+            showToast('Loading Python runtime (first use)\u2026');
+            __pyodideLoadingToastShown = true;
+          } else if (e.data.type === 'loaded') {
+            showToast('Python runtime ready');
+          }
+        });
+      }
+      return new Promise((resolve) => {
+        const id = Math.random().toString(36).slice(2);
+        const onMsg = (e) => {
+          if (e.data.id !== id) return;
+          if (e.data.type === 'result') {
+            __pyodideWorker.removeEventListener('message', onMsg);
+            resolve(e.data);
+          }
+        };
+        __pyodideWorker.addEventListener('message', onMsg);
+        __pyodideWorker.postMessage({ type: 'run', code: userCode, id });
+      });
+    }
+
+    TOOL_REGISTRY.run_python = {
+      description: 'Execute Python code in a sandboxed in-browser runtime (Pyodide). Imported packages (numpy, pandas, matplotlib, etc.) auto-install on first use. Returns stdout, stderr, and the last-expression result as strings. Good for arithmetic, data manipulation, CSV parsing, quick simulations. First call downloads ~10 MB of Python runtime.',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'Python source to execute. The last expression (if any) is returned in `result`.' },
+        },
+        required: ['code'],
+      },
+      async execute(args) {
+        const code = typeof args.code === 'string' ? args.code : '';
+        if (!code.trim()) return { error: 'code parameter is required' };
+        try {
+          const out = await runPython(code);
+          if (out.error) return { error: out.error };
+          const compact = { stdout: out.stdout || '', stderr: out.stderr || '' };
+          if (out.result) compact.result = out.result;
+          return compact;
+        } catch (e) {
+          return { error: 'Python execution failed: ' + (e.message || e) };
+        }
+      },
+    };
+
     // Helper used only by the agent loop to build the OpenAI-shaped
     // tools array from TOOL_REGISTRY. Stays outside the adapter — the
     // adapter receives an explicit tools[] array per call and never
@@ -7013,6 +7070,64 @@ self.addEventListener('message', async (e) => {
       const w = new Worker(url, { type: 'module' });
       w.addEventListener('error', (e) => {
         console.error('SAM worker error:', e.message);
+      });
+      return w;
+    }
+
+    // ── Pyodide worker factory (run_python agent tool) ──────
+    // Lazy-loaded on first tool call. Loads Pyodide + auto-loads imports
+    // (numpy, pandas, matplotlib via loadPackagesFromImports). stdout /
+    // stderr buffered and returned; no plots yet.
+    function createPyodideWorker() {
+      const code = `
+import { loadPyodide } from 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.mjs';
+
+let pyodide = null;
+let pyodideReadyPromise = null;
+
+function ensurePyodide() {
+  if (!pyodideReadyPromise) {
+    self.postMessage({ type: 'loading' });
+    pyodideReadyPromise = loadPyodide({ indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/' }).then((p) => {
+      pyodide = p;
+      self.postMessage({ type: 'loaded' });
+      return p;
+    });
+  }
+  return pyodideReadyPromise;
+}
+
+self.addEventListener('message', async (e) => {
+  const { type, code, id } = e.data;
+  if (type === 'run') {
+    try {
+      await ensurePyodide();
+      let out = '';
+      let err = '';
+      pyodide.setStdout({ batched: (s) => { out += s + '\\n'; } });
+      pyodide.setStderr({ batched: (s) => { err += s + '\\n'; } });
+      try { await pyodide.loadPackagesFromImports(code); } catch (loadErr) {
+        err += 'Package load warning: ' + (loadErr.message || loadErr) + '\\n';
+      }
+      let result = undefined;
+      try {
+        result = await pyodide.runPythonAsync(code);
+      } catch (pyErr) {
+        err += (pyErr.message || String(pyErr)) + '\\n';
+      }
+      const resultStr = (result !== undefined && result !== null) ? String(result) : '';
+      self.postMessage({ type: 'result', stdout: out, stderr: err, result: resultStr, id });
+    } catch (outerErr) {
+      self.postMessage({ type: 'result', error: outerErr.message || String(outerErr), id });
+    }
+  }
+});
+`;
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url, { type: 'module' });
+      w.addEventListener('error', (e) => {
+        console.error('Pyodide worker error:', e.message);
       });
       return w;
     }
