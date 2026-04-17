@@ -2306,6 +2306,11 @@
     let loadResolvers = null;   // { resolve, reject } for window.localmind.load() awaiters
     let currentInferenceContext = null; // { onToken } when a streaming API caller wants per-token notifications
 
+    // Most recent file the worker reported activity on — used so the
+    // 'progress_total' event (aggregate across all files, no `file` field)
+    // can still show *which* file is currently streaming bytes.
+    let currentDownloadFile = '';
+
     // ── JavaScript API state ────────────────────────────────────
     // Feature-flag persisted in localStorage. The real window.localmind
     // object is attached in a later step; this step only builds the
@@ -5897,8 +5902,10 @@ ${JSON.stringify({ name, result })}
         function handleProgress(e, resolve, reject) {
           if (e.data.type === 'progress' && e.data.data) {
             const p = e.data.data;
-            if (p.status === 'downloading' && p.total) {
-              const pct = Math.round((p.loaded / p.total) * 100);
+            // v4 emits 'progress_total' as the aggregate across files; the
+            // older 'downloading' branch is kept as a belt-and-braces fallback.
+            if ((p.status === 'progress_total' || p.status === 'downloading') && p.total) {
+              const pct = Math.min(100, Math.round((p.loaded / p.total) * 100));
               const loadedMB = (p.loaded / 1e6).toFixed(1);
               const totalMB = (p.total / 1e6).toFixed(1);
               showBar('Downloading SAM \u2014 ' + loadedMB + ' / ' + totalMB + ' MB (' + pct + '%)', pct);
@@ -6410,22 +6417,28 @@ self.addEventListener('message', async (e) => {
         if (data.type === 'progress') {
           const p = data.data;
           progressSection.classList.add('visible');
-          if (p.status === 'downloading' || p.status === 'loading') {
-            const pct = p.total ? Math.round((p.loaded / p.total) * 100) : 0;
-            progressFill.style.width = pct + '%';
-            const fileName = p.file ? p.file.split('/').pop() : 'files';
-            if (p.status === 'downloading' && p.loaded && p.total) {
-              const loadedMB = (p.loaded / 1024 / 1024).toFixed(0);
-              const totalMB = (p.total / 1024 / 1024).toFixed(0);
-              progressText.textContent = `Downloading ${fileName} — ${loadedMB} / ${totalMB} MB (${pct}%)`;
-              statusText.textContent = 'Downloading...';
-            } else {
-              progressText.textContent = `Loading ${fileName}...`;
-              statusText.textContent = 'Loading into memory...';
-            }
-          } else if (p.status === 'initiate') {
-            const fileName = p.file ? p.file.split('/').pop() : '';
+          const fileName = p.file ? p.file.split('/').pop() : '';
+          if (fileName) currentDownloadFile = fileName;
+
+          // Transformers.js v4 emits: 'initiate' (fetch starting), 'progress'
+          // (per-file bytes), 'progress_total' (aggregate bytes across all
+          // files — no `file` field), and 'loading' (file parsing into
+          // memory after download). We drive the bar off progress_total so
+          // it moves monotonically across the whole model instead of
+          // resetting per file.
+          if (p.status === 'initiate') {
             progressText.textContent = `Fetching ${fileName}...`;
+          } else if (p.status === 'progress_total' && p.loaded && p.total) {
+            const pct = Math.min(100, Math.round((p.loaded / p.total) * 100));
+            progressFill.style.width = pct + '%';
+            const loadedMB = (p.loaded / 1024 / 1024).toFixed(0);
+            const totalMB = (p.total / 1024 / 1024).toFixed(0);
+            const label = currentDownloadFile ? ` ${currentDownloadFile}` : '';
+            progressText.textContent = `Downloading${label} — ${loadedMB} / ${totalMB} MB (${pct}%)`;
+            statusText.textContent = 'Downloading...';
+          } else if (p.status === 'loading') {
+            progressText.textContent = `Loading ${fileName}...`;
+            statusText.textContent = 'Loading into memory...';
           }
         }
 
@@ -6543,6 +6556,9 @@ self.addEventListener('message', async (e) => {
 
       // Clear attachments when switching away from multimodal
       if (!m.multimodal) clearAttachments();
+
+      // Reset aggregate-progress state for this load
+      currentDownloadFile = '';
 
       // Reset UI
       statusBadge.className = 'status-badge loading';
