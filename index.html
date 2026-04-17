@@ -5687,6 +5687,7 @@
           };
           voiceWorker.addEventListener('message', onMsg);
           const lang = localStorage.getItem('lm_voice_language') || 'en';
+          console.log('[whisper] posting transcribe. lang=', lang, 'pcm samples=', pcm.length, 'seconds=', (pcm.length / 16000).toFixed(2));
           voiceWorker.postMessage({ type: 'transcribe', pcm, lang, id }, [pcm.buffer]);
         });
         if (text) {
@@ -7224,6 +7225,7 @@ self.addEventListener('message', async (e) => {
   } else if (type === 'transcribe') {
     try {
       if (!transcriber) throw new Error('Whisper not loaded');
+      console.log('[whisper-worker] transcribe. lang=', lang, 'pcm samples=', pcm && pcm.length);
       // Explicit language + task stops Whisper from hallucinating common
       // filler tokens on short/quiet clips (auto-detect is unreliable there).
       const output = await transcriber(pcm, {
@@ -7232,6 +7234,7 @@ self.addEventListener('message', async (e) => {
         return_timestamps: false,
         chunk_length_s: 30,
       });
+      console.log('[whisper-worker] raw output=', output);
       self.postMessage({ type: 'transcription', text: (output && output.text ? output.text.trim() : ''), id });
     } catch (err) {
       self.postMessage({ type: 'error', message: err.message || String(err), id });
