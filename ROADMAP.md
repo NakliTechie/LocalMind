@@ -53,6 +53,12 @@ Single-file (~5.8k lines) private AI research agent running entirely in-browser.
   - Overlay rendered on image in chat bubble, downloadable
   - Full-width progress bar + header chip for download/inference status
   - Tool call parser extended to accept `"function"` key alongside `"name"`
+- **Resumable model downloads** — HF CDN fetches checkpoint to IndexedDB every 5 MB
+  - Monkey-patched `self.fetch` inside the main model worker; HEAD → ETag-keyed chunk store → Range request for missing tail
+  - Dynamic import of `transformers@4` so the patch lands before the module captures `globalThis.fetch`; `env.fetch = self.fetch` as belt-and-braces
+  - Fallback to original fetch on any error in the resumable path — model still loads, just can't resume
+  - Settings toggle (default on) as a kill switch
+  - Worker-boot cleanup drops IDB chunks for URLs already in Cache Storage
 
 ## Status
 
@@ -117,13 +123,6 @@ The worker hardcodes `Gemma4ForConditionalGeneration`. To support other multimod
 
 ### 8. SRI for `transformers@4 +esm`
 The `+esm` jsDelivr endpoint internally redirects to content-addressed URLs, so a static hash can't be pinned without hardcoding the resolved URL. Either pin the resolved URL (brittle across releases) or self-host the bundle.
-
-### 9. Resumable model download
-Today each model file either completes or is discarded — Transformers.js uses the Cache Storage API which only writes fully-received responses. Completed files persist across reloads, but a file interrupted mid-fetch has to restart from zero. For the E4B (~4.9 GB) model on a flaky connection this is painful.
-
-Fix: monkey-patch `self.fetch` inside the worker blob to (a) issue HTTP Range requests against the HF CDN, (b) stash chunks in IndexedDB as they arrive, and (c) synthesize a `Response` once the full byte range is assembled so `cache.put()` still works downstream. Needs a chunked-chunk-store keyed by URL+ETag (to invalidate on upstream change), a resume entry point on next load, and careful handling of the `content-length` / `content-range` headers.
-
-**~250 lines.** Touches the hot download path — needs a staged rollout behind a Settings toggle.
 
 ---
 
