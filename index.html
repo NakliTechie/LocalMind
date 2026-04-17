@@ -2299,6 +2299,7 @@
           <button class="afford-btn" id="cameraBtn" title="Camera" aria-label="Take photo">&#128247;</button>
           <button class="afford-btn" id="micBtn" title="Record audio" aria-label="Record audio">&#127908;</button>
         </div>
+        <button class="afford-btn" id="voiceBtn" title="Voice to text (Whisper, on-device)" aria-label="Voice to text">&#x1F5E3;</button>
         <textarea id="chatInput" rows="1" placeholder="Type a message..." disabled></textarea>
         <div class="send-group">
           <button class="send-btn" id="sendBtn" disabled aria-label="Send" title="Send (offline)">&#9654;</button>
@@ -5301,7 +5302,134 @@
       cameraPreview.srcObject = null;
     }
 
-    // ── Microphone recording ────────────────────────────────────
+    // ── Voice to text (Whisper WebGPU, on-device) ──────────────
+    // Separate from the mic-for-audio-attachment flow above: this records
+    // audio, decodes it to 16 kHz mono PCM, and runs local Whisper to
+    // transcribe text back into the input field. Works on any model.
+    const voiceBtn = document.getElementById('voiceBtn');
+    let voiceRecorder = null;
+    let voiceStream = null;
+    let voiceWorker = null;
+    let voiceReady = false;
+    let voiceReadyPromise = null;
+
+    function ensureVoiceWorker() {
+      if (voiceReadyPromise) return voiceReadyPromise;
+      voiceWorker = createTranscriptionWorker();
+      voiceReadyPromise = new Promise((resolve, reject) => {
+        const onMsg = (e) => {
+          if (e.data.type === 'progress') {
+            const p = e.data.data;
+            if (p.status === 'downloading' && p.total) {
+              const mb = (p.loaded / 1024 / 1024).toFixed(0);
+              const total = (p.total / 1024 / 1024).toFixed(0);
+              showToast('Loading Whisper ' + mb + ' / ' + total + ' MB');
+            }
+          } else if (e.data.type === 'ready') {
+            voiceReady = true;
+            voiceWorker.removeEventListener('message', onMsg);
+            resolve();
+          } else if (e.data.type === 'error') {
+            voiceWorker.removeEventListener('message', onMsg);
+            reject(new Error(e.data.message));
+          }
+        };
+        voiceWorker.addEventListener('message', onMsg);
+        voiceWorker.postMessage({ type: 'load' });
+      });
+      return voiceReadyPromise;
+    }
+
+    async function decodeToWhisperPCM(blob) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) throw new Error('AudioContext unavailable');
+      const audioCtx = new AC();
+      try {
+        const arrayBuf = await blob.arrayBuffer();
+        const audioBuf = await audioCtx.decodeAudioData(arrayBuf);
+        const targetRate = 16000;
+        if (audioBuf.sampleRate === targetRate && audioBuf.numberOfChannels === 1) {
+          return new Float32Array(audioBuf.getChannelData(0));
+        }
+        // Resample + downmix via OfflineAudioContext
+        const length = Math.ceil(audioBuf.duration * targetRate);
+        const offline = new OfflineAudioContext(1, length, targetRate);
+        const src = offline.createBufferSource();
+        src.buffer = audioBuf;
+        src.connect(offline.destination);
+        src.start();
+        const rendered = await offline.startRendering();
+        return new Float32Array(rendered.getChannelData(0));
+      } finally {
+        try { audioCtx.close(); } catch {}
+      }
+    }
+
+    async function transcribeAndInsert(blob) {
+      try {
+        voiceBtn.classList.remove('recording');
+        voiceBtn.innerHTML = '&#x23F3;';  // hourglass
+        showToast(voiceReady ? 'Transcribing\u2026' : 'Loading Whisper \u2014 first use may take a minute');
+        await ensureVoiceWorker();
+        const pcm = await decodeToWhisperPCM(blob);
+        const text = await new Promise((resolve, reject) => {
+          const id = Math.random().toString(36).slice(2);
+          const onMsg = (e) => {
+            if (e.data.id && e.data.id !== id) return;
+            if (e.data.type === 'transcription') {
+              voiceWorker.removeEventListener('message', onMsg);
+              resolve(e.data.text || '');
+            } else if (e.data.type === 'error') {
+              voiceWorker.removeEventListener('message', onMsg);
+              reject(new Error(e.data.message));
+            }
+          };
+          voiceWorker.addEventListener('message', onMsg);
+          voiceWorker.postMessage({ type: 'transcribe', pcm, id }, [pcm.buffer]);
+        });
+        if (text) {
+          const existing = chatInput.value;
+          chatInput.value = existing ? existing + (existing.endsWith(' ') ? '' : ' ') + text : text;
+          chatInput.dispatchEvent(new Event('input'));
+          chatInput.focus();
+          showToast('Transcribed');
+        } else {
+          showToast('No speech detected');
+        }
+      } catch (e) {
+        console.error('Whisper error:', e);
+        showToast('Transcription failed: ' + (e.message || e));
+      } finally {
+        voiceBtn.innerHTML = '&#x1F5E3;';  // speaking head
+      }
+    }
+
+    voiceBtn.addEventListener('click', async () => {
+      if (voiceRecorder && voiceRecorder.state === 'recording') {
+        voiceRecorder.stop();
+        return;
+      }
+      try {
+        voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const chunks = [];
+        voiceRecorder = new MediaRecorder(voiceStream);
+        voiceRecorder.addEventListener('dataavailable', (e) => { if (e.data.size > 0) chunks.push(e.data); });
+        voiceRecorder.addEventListener('stop', () => {
+          voiceStream.getTracks().forEach(t => t.stop());
+          voiceStream = null;
+          const blob = new Blob(chunks, { type: voiceRecorder.mimeType || 'audio/webm' });
+          voiceRecorder = null;
+          if (blob.size === 0) { showToast('No audio captured'); voiceBtn.classList.remove('recording'); return; }
+          transcribeAndInsert(blob);
+        });
+        voiceRecorder.start();
+        voiceBtn.classList.add('recording');
+      } catch (err) {
+        showToast('Mic error: ' + err.message);
+      }
+    });
+
+    // ── Microphone recording (audio attachment for multimodal) ───
     micBtn.addEventListener('click', () => {
       if (mediaRecorder && mediaRecorder.state === 'recording') {
         mediaRecorder.stop();
@@ -6700,6 +6828,55 @@ self.addEventListener('message', async (e) => {
       const w = new Worker(url, { type: 'module' });
       w.addEventListener('error', (e) => {
         console.error('SAM worker error:', e.message);
+      });
+      return w;
+    }
+
+    // ── Transcription worker factory (Whisper via WebGPU) ───
+    // Lazy-loaded on first voice-to-text click. Expects Float32Array PCM
+    // at 16 kHz mono (decoded+resampled on the main thread via OfflineAudioContext).
+    function createTranscriptionWorker() {
+      const code = `
+import {
+  env,
+  pipeline,
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+
+env.allowLocalModels  = true;
+env.localModelPath    = '/models/';
+env.allowRemoteModels = true;
+
+let transcriber = null;
+
+self.addEventListener('message', async (e) => {
+  const { type, pcm, id } = e.data;
+  if (type === 'load') {
+    try {
+      transcriber = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-base', {
+        dtype: { encoder_model: 'fp16', decoder_model_merged: 'q4' },
+        device: 'webgpu',
+        progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
+      });
+      self.postMessage({ type: 'ready' });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: err.message || String(err) });
+    }
+  } else if (type === 'transcribe') {
+    try {
+      if (!transcriber) throw new Error('Whisper not loaded');
+      const output = await transcriber(pcm, { return_timestamps: false, chunk_length_s: 30 });
+      self.postMessage({ type: 'transcription', text: (output && output.text ? output.text.trim() : ''), id });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: err.message || String(err), id });
+    }
+  }
+});
+`;
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url, { type: 'module' });
+      w.addEventListener('error', (e) => {
+        console.error('Transcription worker error:', e.message);
       });
       return w;
     }
