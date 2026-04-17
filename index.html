@@ -506,6 +506,40 @@
 
     .tool-call-result.open { display: block; }
 
+    /* Planner blocks (multi-step planning) — mirror tool-call-block but indigo */
+    .planner-block {
+      background: rgba(99, 102, 241, 0.06);
+      border-left: 3px solid var(--indigo-500);
+      padding: 8px 12px;
+      border-radius: 0 8px 8px 0;
+      margin: 8px 0;
+      font-size: 0.82rem;
+      color: var(--gray-600);
+    }
+    .planner-toggle {
+      cursor: pointer;
+      font-size: 0.75rem;
+      color: var(--indigo-500);
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .planner-body {
+      display: none;
+      margin-top: 6px;
+      white-space: pre-wrap;
+      font-size: 0.78rem;
+      color: var(--gray-600);
+    }
+    .planner-body.open { display: block; }
+    .planner-status {
+      font-size: 0.78rem;
+      color: var(--gray-500);
+      font-style: italic;
+      padding: 6px 0;
+    }
+
     .tool-call-result pre {
       margin: 0;
       padding: 6px 8px;
@@ -2021,6 +2055,10 @@
           <input type="checkbox" id="thinkingToggle">
           Show reasoning (thinking mode)
         </label>
+        <label class="toggle-row hidden" id="plannerRow">
+          <input type="checkbox" id="plannerToggle">
+          Multi-step planning <span style="font-weight:400;color:var(--gray-500)">(experimental &mdash; slower but handles complex research tasks better)</span>
+        </label>
         <div class="settings-divider" id="searchSettingsSection" style="display:none">
           <label for="searchProvider">Web search provider</label>
           <select id="searchProvider" class="settings-select">
@@ -2321,6 +2359,13 @@
     // toggle, chip, and activity log infrastructure.
     let apiEnabled = false;
     try { apiEnabled = localStorage.getItem('lm_api_enabled') === '1'; } catch {}
+
+    // Multi-step planning: when on + agent-capable model, sendMessage routes
+    // through runPlannerAgent (plan → per-step execute → synthesize) instead
+    // of the single-pass agent loop. Default off; Gemma 4 at ~4.5B produces
+    // inconsistent plans, so this is labelled experimental.
+    let plannerEnabled = false;
+    try { plannerEnabled = localStorage.getItem('lm_planner_enabled') === '1'; } catch {}
     const API_LOG_MAX = 50;
     const apiLog = []; // newest first: [{ ts, method, promptLen, tokens, durationMs, outcome }]
 
@@ -3109,6 +3154,13 @@
     const fileInput = document.getElementById('fileInput');
     const thinkingToggle = document.getElementById('thinkingToggle');
     const thinkingRow = document.getElementById('thinkingRow');
+    const plannerRow = document.getElementById('plannerRow');
+    const plannerToggle = document.getElementById('plannerToggle');
+    plannerToggle.checked = plannerEnabled;
+    plannerToggle.addEventListener('change', () => {
+      plannerEnabled = plannerToggle.checked;
+      try { localStorage.setItem('lm_planner_enabled', plannerEnabled ? '1' : '0'); } catch {}
+    });
     const cameraOverlay = document.getElementById('cameraOverlay');
     const cameraPreview = document.getElementById('cameraPreview');
     const camCaptureBtn = document.getElementById('camCaptureBtn');
@@ -4515,6 +4567,7 @@
       const isAgent = !!(caps && caps.toolCalling);
       inputAffordances.classList.toggle('visible', isMultimodal && modelReady);
       thinkingRow.classList.toggle('hidden', !isMultimodal);
+      plannerRow.classList.toggle('hidden', !isAgent);
       searchSettingsSection.style.display = isAgent ? '' : 'none';
       samSettingsSection.style.display = isAgent ? '' : 'none';
       updateSearchUI();
@@ -7058,6 +7111,192 @@ self.addEventListener('message', async (e) => {
       bubble.appendChild(container);
     }
 
+    // ── Multi-step planner ──────────────────────────────────────
+    // parsePlan is tolerant: picks up any line that starts with "N." or "N)"
+    // or "- N." and ignores everything else (prefaces, trailing commentary).
+    function parsePlan(text) {
+      const steps = [];
+      const lines = String(text || '').split(/\r?\n/);
+      for (const line of lines) {
+        const m = line.match(/^[\s\-*]*(\d+)[.):\]]\s+(.+?)\s*$/);
+        if (m && m[2]) steps.push(m[2].trim());
+      }
+      return steps;
+    }
+
+    // Append a collapsible block to the msg container (parent of bubble, so
+    // bubble.innerHTML updates from streaming tokens don't wipe it).
+    function renderPlannerBlock(container, title, body) {
+      const id = 'pb-' + Math.random().toString(36).slice(2, 8);
+      const block = document.createElement('div');
+      block.className = 'planner-block';
+      const safeBody = escapeHtml(body || '(no output)');
+      block.innerHTML =
+        '<div class="planner-toggle" onclick="document.getElementById(\'' + id +
+        '\').classList.toggle(\'open\'); this.querySelector(\'span\').textContent = ' +
+        'document.getElementById(\'' + id + '\').classList.contains(\'open\') ? \'\\u25bc\' : \'\\u25b6\'">' +
+        '<span>\u25b6</span> <strong>' + escapeHtml(title) + '</strong></div>' +
+        '<div class="planner-body" id="' + id + '">' + safeBody + '</div>';
+      container.appendChild(block);
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    // Drive one runtime.chat() call, collect text + any tool_calls. Pure —
+    // does no tool execution. Used by the planner for plan/synthesis passes
+    // and as the inner loop of runStepWithTools.
+    async function runPlannerChatTurn(messages, thinking, tools, genConfig) {
+      let fullText = '';
+      const toolCalls = [];
+      let error = null;
+      try {
+        for await (const ev of LocalMind.runtime.chat({
+          messages,
+          tools: tools || undefined,
+          enableThinking: thinking,
+          maxTokens: genConfig && genConfig.max_new_tokens,
+          temperature: genConfig && genConfig.temperature,
+        })) {
+          if (ev.type === 'token') fullText += ev.text;
+          else if (ev.type === 'tool_call') toolCalls.push(ev);
+          else if (ev.type === 'done') break;
+          else if (ev.type === 'error') { error = ev.error; break; }
+        }
+      } catch (e) { error = e; }
+      return { fullText, toolCalls, error };
+    }
+
+    // Run a planner step: up to 2 tool iterations, returns the text of the
+    // final (non-tool) assistant response along with collected sources and
+    // a flag for whether any tool was actually called.
+    async function runPlannerStepWithTools(stepMessages, enableThinking, tools, genConfig, lastImageBlob, userQuery) {
+      const STEP_MAX_ITER = 2;
+      let loopMessages = [...stepMessages];
+      let finalText = '';
+      let usedTools = false;
+      const sources = [];
+
+      for (let iter = 0; iter < STEP_MAX_ITER; iter++) {
+        if (!generating) return { fullText: finalText, usedTools, sources };
+        const turn = await runPlannerChatTurn(loopMessages, iter === 0 ? enableThinking : false, tools, genConfig);
+        if (turn.error) return { fullText: finalText || turn.fullText || '', usedTools, sources };
+
+        finalText = turn.fullText;
+
+        if (turn.toolCalls.length === 0) return { fullText: finalText, usedTools, sources };
+
+        const tc = turn.toolCalls[0];
+        const tool = TOOL_REGISTRY[tc.name];
+        let toolResult;
+        if (!tool) {
+          toolResult = { error: 'Unknown tool: ' + tc.name };
+        } else {
+          try {
+            toolResult = await tool.execute(tc.arguments, { userQuery, imageBlob: lastImageBlob });
+          } catch (e) {
+            toolResult = { error: e.message };
+          }
+        }
+        usedTools = true;
+        if (tc.name === 'web_search' && toolResult && toolResult.results) {
+          sources.push(...toolResult.results);
+        }
+        loopMessages.push({ role: 'assistant', content: turn.fullText });
+        loopMessages.push({ role: 'tool', name: tc.name, content: JSON.stringify(toolResult) });
+
+        if (iter === STEP_MAX_ITER - 1) {
+          loopMessages.push({ role: 'user', content: '[System: Tool limit reached — give final answer for this step now.]' });
+          const finalTurn = await runPlannerChatTurn(loopMessages, false, null, genConfig);
+          finalText = finalTurn.fullText || finalText;
+        }
+      }
+
+      return { fullText: finalText, usedTools, sources };
+    }
+
+    // Plan → execute per step → synthesize. Returns { handled, fullText,
+    // usedTools, sources }. handled=false means the caller should fall back
+    // to the single-pass agent loop (bad plan, plan phase errored, etc.).
+    async function runPlannerAgent(opts) {
+      const { text, chatMessages, tools, genConfig, enableThinking, msgEl, bubble, lastImageBlob, searchSources } = opts;
+
+      // Suppress token→bubble streaming during planner phases so the
+      // planner-block DOM we render to msgEl isn't wiped by each token
+      // arrival. Restore savedEl for the synthesis phase to stream
+      // normally into the bubble.
+      const savedEl = currentAssistantEl;
+      currentAssistantEl = null;
+      bubble.innerHTML = '<div class="planner-status">Planning\u2026</div>';
+
+      const plannerSystem =
+        'You are a task planner. Given the user task, break it into 2 to 5 sequential steps.\n' +
+        'Format: a numbered list, one step per line, each step written as a short imperative ' +
+        '("Find X", "Compare Y and Z", "Summarize results").\n' +
+        'Do NOT explain or add commentary. Do NOT perform the task. Only list the steps.';
+      const planTurn = await runPlannerChatTurn(
+        [{ role: 'system', content: plannerSystem }, { role: 'user', content: text }],
+        false, null, genConfig,
+      );
+
+      if (!generating) { currentAssistantEl = savedEl; return { handled: true, fullText: null }; }
+      if (planTurn.error) { currentAssistantEl = savedEl; return { handled: false }; }
+
+      const steps = parsePlan(planTurn.fullText);
+      if (steps.length < 2) {
+        // Bad / too-short plan — fall back to single-pass
+        currentAssistantEl = savedEl;
+        return { handled: false };
+      }
+
+      renderPlannerBlock(msgEl, 'Plan (' + steps.length + ' steps)',
+        steps.map((s, i) => (i + 1) + '. ' + s).join('\n'));
+
+      const stepOutputs = [];
+      const allSources = [...(searchSources || [])];
+      let anyToolsUsed = false;
+
+      for (let i = 0; i < steps.length; i++) {
+        if (!generating) { currentAssistantEl = savedEl; return { handled: true, fullText: null }; }
+        bubble.innerHTML = '<div class="planner-status">Step ' + (i + 1) + ' / ' + steps.length + ': ' + escapeHtml(steps[i]) + '</div>';
+
+        const stepMessages = [...chatMessages];
+        const priorBlock = stepOutputs.length
+          ? '[Prior step outputs]\n' + stepOutputs.map((o, j) => 'Step ' + (j + 1) + ' result: ' + o).join('\n\n') + '\n\n'
+          : '';
+        stepMessages.push({ role: 'user', content: priorBlock + '[Current step]\n' + steps[i] });
+
+        const result = await runPlannerStepWithTools(stepMessages, enableThinking, tools, genConfig, lastImageBlob, text);
+        anyToolsUsed = anyToolsUsed || result.usedTools;
+        if (result.sources && result.sources.length) allSources.push(...result.sources);
+        stepOutputs.push(result.fullText || '');
+        renderPlannerBlock(msgEl, 'Step ' + (i + 1) + ': ' + steps[i], result.fullText || '(no output)');
+      }
+
+      if (!generating) { currentAssistantEl = savedEl; return { handled: true, fullText: null }; }
+
+      // Synthesis — restore bubble so tokens stream into it normally.
+      currentAssistantEl = savedEl;
+      currentAssistantText = '';
+      bubble.innerHTML = '';
+
+      const synthSystem =
+        'You just completed a multi-step task. Using the step outputs provided, write a direct final ' +
+        'answer for the user. Do not repeat the steps — deliver the answer. Cite sources by number if present.';
+      const synthMessages = [
+        { role: 'system', content: synthSystem },
+        { role: 'user', content: text },
+        { role: 'assistant', content: 'Step outputs:\n\n' + stepOutputs.map((o, i) => 'Step ' + (i + 1) + ' (' + steps[i] + '): ' + (o || '(none)')).join('\n\n') },
+        { role: 'user', content: 'Now give me the final answer.' },
+      ];
+      const synthTurn = await runPlannerChatTurn(synthMessages, false, null, genConfig);
+
+      return {
+        handled: true,
+        fullText: synthTurn.fullText || '',
+        usedTools: anyToolsUsed,
+        sources: allSources,
+      };
+    }
+
     async function sendMessage() {
       const text = chatInput.value.trim();
       if ((!text && attachments.length === 0) || !modelReady || generating) return;
@@ -7225,6 +7464,30 @@ self.addEventListener('message', async (e) => {
         }
         finishGeneration(fullText || null, searchSources);
         return;
+      }
+
+      // ── Multi-step planner (opt-in, agent-capable only) ──────
+      // Returns handled=false on a malformed/short plan — in that case we
+      // fall through to the single-pass agent loop below.
+      if (plannerEnabled) {
+        const plannerTools = buildToolsForRuntime();
+        const msgElForPlanner = currentAssistantEl.bubble.parentElement;
+        const result = await runPlannerAgent({
+          text,
+          chatMessages,
+          tools: plannerTools,
+          genConfig,
+          enableThinking,
+          msgEl: msgElForPlanner,
+          bubble: currentAssistantEl.bubble,
+          lastImageBlob,
+          searchSources,
+        });
+        if (result.handled) {
+          finishGeneration(result.fullText || null, result.sources || searchSources, result.usedTools);
+          return;
+        }
+        // Fall through to single-pass agent loop on bad plan
       }
 
       // ── Agentic loop ──────────────────────────────────────────
