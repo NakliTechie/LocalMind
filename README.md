@@ -184,6 +184,8 @@ for await (const chunk of stream) {
   const delta = chunk.choices[0].delta.content;
   if (delta) process.stdout.write(delta);
 }
+// Breaking out of the loop cancels the worker so the next call
+// doesn't queue behind the abandoned generation.
 ```
 
 **What's exposed (v1.0):**
