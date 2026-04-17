@@ -564,6 +564,36 @@
       font-size: 0.78rem;
     }
 
+    /* Artifact preview (sandboxed iframe for ```html, ```svg, ```artifact) */
+    .artifact-preview {
+      margin: 8px 0;
+      border: 1px solid var(--gray-200);
+      border-radius: 6px;
+      overflow: hidden;
+      background: #fff;
+    }
+    .artifact-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      background: var(--gray-50);
+      border-bottom: 1px solid var(--gray-200);
+      font-size: 0.72rem;
+      color: var(--gray-600);
+    }
+    .artifact-header strong {
+      font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+      color: var(--indigo-500);
+    }
+    .artifact-frame {
+      width: 100%;
+      min-height: 200px;
+      border: 0;
+      display: block;
+      background: #fff;
+    }
+
     /* Message context menu (right-click / long-press) */
     .msg-context-menu {
       position: fixed;
@@ -5350,10 +5380,43 @@
       });
     }
 
-    // Transform `<pre data-lang="mermaid">` blocks into `<div class="mermaid">`
-    // and kick off rendering. Called after each bubble innerHTML update.
+    // Transform `<pre data-lang="mermaid">` blocks into rendered Mermaid
+    // diagrams, and attach sandboxed preview iframes beneath `<pre>` blocks
+    // tagged html / svg / artifact. Called after each bubble innerHTML update;
+    // guarded with data attributes so repeated calls are cheap.
     async function postProcessBubble(bubble) {
       if (!bubble) return;
+
+      // Artifact previews — cheap, pure DOM.
+      const ARTIFACT_LANGS = new Set(['html', 'svg', 'artifact']);
+      bubble.querySelectorAll('pre[data-lang]:not([data-af-processed])').forEach((pre) => {
+        const lang = pre.dataset.lang;
+        if (!ARTIFACT_LANGS.has(lang)) return;
+        pre.dataset.afProcessed = '1';
+        const code = pre.querySelector('code');
+        const src = code ? code.textContent : pre.textContent;
+        const doc = lang === 'svg'
+          ? '<!DOCTYPE html><html><body style="margin:0;padding:12px">' + src + '</body></html>'
+          : src;
+        const wrap = document.createElement('div');
+        wrap.className = 'artifact-preview';
+        const header = document.createElement('div');
+        header.className = 'artifact-header';
+        const badge = document.createElement('span');
+        badge.innerHTML = 'Preview \u2014 <strong>' + escapeHtml(lang) + '</strong> <span style="color:var(--gray-400)">(sandboxed)</span>';
+        header.appendChild(badge);
+        const frame = document.createElement('iframe');
+        frame.className = 'artifact-frame';
+        // allow-scripts only — no allow-same-origin so the frame runs in an
+        // opaque origin and can't touch localStorage, IDB, cookies, or parent.
+        frame.setAttribute('sandbox', 'allow-scripts');
+        frame.srcdoc = doc;
+        wrap.appendChild(header);
+        wrap.appendChild(frame);
+        pre.after(wrap);
+      });
+
+      // Mermaid — async, lazy-loaded.
       const pendingMermaid = bubble.querySelectorAll('pre[data-lang="mermaid"]:not([data-mm-processed])');
       if (pendingMermaid.length === 0) return;
       const nodes = [];
@@ -5434,7 +5497,8 @@
         const ext = (lang || 'txt').replace(/[^a-zA-Z0-9]/g, '') || 'txt';
         const codeId = 'code-' + Math.random().toString(36).slice(2, 8);
         // data-lang carries the original language for post-processors
-        // (mermaid). Separate from `ext` which feeds the download filename.
+        // (mermaid, artifact preview). Separate from `ext` which feeds
+        // the download filename.
         const langAttr = ext === 'txt' && lang ? '' : ' data-lang="' + ext + '"';
         return `<pre class="cb-${cbNonce}"${langAttr}><code id="${codeId}">${escapeHtml(code.trim())}</code><button class="code-download-btn" onclick="downloadCodeBlock('${codeId}','${ext}')" title="Download">&#8595;</button></pre>`;
       });
