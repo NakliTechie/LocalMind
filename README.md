@@ -32,12 +32,21 @@ Gemma 4 models have built-in tool calling. The model decides when to use tools b
 | **web_search** | Search the web via Brave, Tavily, or SearXNG (BYOK) |
 | **fetch_page** | Fetch and read a URL's content with Readability.js extraction |
 | **segment_image** | Segment objects in attached images using SAM (Segment Anything Model) |
+| **run_python** | Execute Python in a sandboxed Pyodide worker (numpy/pandas/matplotlib auto-install) |
 
 **Translation:** Gemma 4 supports 140+ languages natively — just ask it to translate. No separate model needed.
 
 **Multi-step planning (experimental):** Settings → tick *Multi-step planning*. Each message is planned into 2–5 steps, each executed with tools, then synthesised into a final answer. Plan + per-step outputs appear as collapsible blocks. 3×+ slower but handles research-style queries ("compare X and Y, cite sources") better than a single pass.
 
 **Custom tools:** Settings → *Custom tools*. Paste a JSON tool definition (`name`, `description`, `parameters` as a JSON-schema object, `endpoint`). When the model decides to call the tool, LocalMind `POST`s the args to your endpoint as a JSON body and feeds the response back. The endpoint must allow CORS for this origin. Useful for connecting to local dev servers or CORS-enabled APIs.
+
+**MCP servers:** Settings → *MCP servers*. Paste a Streamable HTTP MCP endpoint URL (optional bearer). LocalMind runs JSON-RPC 2.0 `initialize` + `tools/list` on add, then registers each remote tool with the `mcp_` prefix. Tool calls route back as `tools/call`. Reconnects on page load.
+
+**Math & diagrams:** inline `$\int x^2 dx$` and display `$$\sum i$$` math render via KaTeX; ` ```mermaid ` blocks render as SVG via lazy-loaded Mermaid.
+
+**Artifact preview:** ` ```html `, ` ```svg ` or ` ```artifact ` code blocks get a live sandboxed iframe beneath the code (`sandbox="allow-scripts"`, no same-origin). Safe to run model-generated UI inline.
+
+**Voice to text:** the 🗣 button to the left of the input records mic audio, decodes to 16 kHz mono PCM on-device, and runs Whisper-base on WebGPU to transcribe into the input. ~80 MB first-use download.
 
 **Branch from here:** right-click (or long-press) any user message → *Branch from here*. Archives the current conversation, then forks a new one containing messages up to that point. Open the History sidebar to switch back.
 

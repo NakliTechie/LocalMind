@@ -68,6 +68,11 @@ Single-file (~5.8k lines) private AI research agent running entirely in-browser.
   - 3×+ model calls per message — clearly labelled "experimental" because Gemma 4 E2B/E4B at ~4.5B plans even trivial questions
 - **Conversation branching** — right-click (or long-press) a user message → "Branch from here". Archives the current conversation, slices messages up to that index into a new conversation record, and switches to it. If no `activeConversationId` existed yet (fresh session), mints one so the original isn't orphaned.
 - **Custom tools** (agent-capable models) — Settings accepts a JSON tool definition (`name`, `description`, `parameters`, `endpoint`) persisted in localStorage. Registered into `TOOL_REGISTRY` like a built-in. On tool call, `POST`s args as JSON to the endpoint; CORS must allow this origin. Name must match `/^[a-zA-Z_][a-zA-Z0-9_]*$/` and not collide with a built-in. Auto-restored on page load.
+- **MCP client** (agent-capable models) — Streamable HTTP JSON-RPC 2.0. Add an MCP server URL (+ optional bearer) in Settings → `initialize` + `tools/list` → each remote tool registers into `TOOL_REGISTRY` with an `mcp_` prefix. Tool calls route back as `tools/call`; result `content[text]` is fed to the model. Stateless, no SSE streaming yet (first `data:` frame read for servers that always use SSE).
+- **KaTeX + Mermaid in bubbles** — inline `$…$` and display `$$…$$` render via KaTeX (eager-loaded in `<head>` with defer); ` ```mermaid ` blocks lazy-load Mermaid and render to SVG. Render happens on the msg container (not inside the bubble) so streaming token updates don't wipe rendered SVGs.
+- **Artifact preview** — ` ```html `, ` ```svg `, ` ```artifact ` code blocks get a live `<iframe sandbox="allow-scripts">` beneath them. No `allow-same-origin` — the frame runs in an opaque origin with no access to localStorage, IDB, cookies, or the parent.
+- **Voice to text (Whisper WebGPU)** — 🗣 button records mic, main thread decodes+resamples to 16 kHz mono PCM via OfflineAudioContext, transfers Float32Array to a Whisper-base worker (`onnx-community/whisper-base`, encoder fp16 + decoder q4, WebGPU). Transcribed text inserted into the input. Always visible, works on any model. Replaces the planned Web Speech API path (which phoned home).
+- **`run_python` agent tool (Pyodide)** — 11th tool. Model can execute Python in a sandboxed Pyodide worker; `loadPackagesFromImports` auto-installs numpy / pandas / matplotlib. Returns `{ stdout, stderr, result }`. Lazy-loaded on first call (~10 MB). Matplotlib image capture not yet shipped — stdout-only.
 
 ## Status
 
@@ -77,34 +82,30 @@ Single-file (~5.8k lines) private AI research agent running entirely in-browser.
 | Model management | Strong (cache view/clear, custom HF ONNX loading) |
 | Multi-model | Strong (3 Gemma + custom HF ONNX + MiniLM sidecar + SAM sidecar) |
 | RAG | Strong (PDF/DOCX/text, auto-summarize, audit) |
-| Tools | Strong (10 tools incl. SAM segmentation) |
+| Tools | Strong (11 tools incl. SAM segmentation + Pyodide Python runtime) |
 | Agents | Partial (single-agent loop, no planning) |
 | JavaScript API | Strong (v1.0 — chat completions with streaming) |
-| Plugins | Partial (user-defined tools via HTTP POST — see "Custom tools" above) |
+| Plugins | Strong (user-defined HTTP tools + MCP server discovery + Pyodide Python) |
 
 ---
 
 ## Next — Tier 3
 
-### 1. Voice mode
-- Web Speech API (`SpeechRecognition`) for input (free, built into Chrome)
-- Web Speech API (`SpeechSynthesis`) for output
-- Toggle button in input bar
-
-**~60 lines.**
-
-### 2. Custom model dtype picker
+### 1. Custom model dtype picker
 Today the validator picks the best-available quantisation automatically. Some users may want to force `q4` or `int8` for compatibility or quality reasons.
 
 **~40 lines.**
 
-### 3. Multimodal custom models
+### 2. Multimodal custom models
 The worker hardcodes `Gemma4ForConditionalGeneration`. To support other multimodal architectures (LLaVA, Idefics, PaliGemma), the worker needs to dispatch on `model_type` and import the right class.
 
 **~120 lines.**
 
-### 4. SRI for `transformers@4 +esm`
+### 3. SRI for `transformers@4 +esm`
 The `+esm` jsDelivr endpoint internally redirects to content-addressed URLs, so a static hash can't be pinned without hardcoding the resolved URL. Either pin the resolved URL (brittle across releases) or self-host the bundle.
+
+### 4. Pyodide plot capture
+`run_python` returns stdout/stderr only; matplotlib figures go nowhere. Capture via `pyplot.savefig(BytesIO)` → base64 → image in the tool-result block.
 
 ### 5. Brave / restricted-WebGPU diagnostics (pending)
 Github and Reddit users report model fails to load in Brave. Likely causes: `navigator.gpu` present but `requestAdapter()` returns null under strict fingerprinting; Shields blocking jsdelivr or huggingface.co; `device: 'webgpu'` failing in the worker. Current error surfacing is poor — on worker error the code hides the progress section *then* writes the error message into it (see `attachWorkerHandlers`), so users see a bare "Error" badge with zero detail.
