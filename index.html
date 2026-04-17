@@ -7,6 +7,11 @@
   <meta name="version" content="2.0.0">
   <meta name="description" content="Private AI chatbot running Gemma entirely in your browser. No server, no API keys, no data leaves your device.">
   <title>LocalMind — Private AI Chat in Your Browser</title>
+  <!-- KaTeX for inline math ($…$) and display math ($$…$$) in assistant
+       responses. Loaded from jsdelivr with defer to avoid blocking parse.
+       TODO: add SRI hashes alongside the transformers@4 SRI work. -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
   <style>
     :root {
       --gray-900: #1a202c;
@@ -538,6 +543,25 @@
       color: var(--gray-500);
       font-style: italic;
       padding: 6px 0;
+    }
+
+    /* Mermaid + KaTeX */
+    .mermaid {
+      background: #fff;
+      border: 1px solid var(--gray-200);
+      border-radius: 6px;
+      padding: 12px;
+      margin: 8px 0;
+      overflow-x: auto;
+      text-align: center;
+    }
+    .mermaid-error, .katex-error {
+      color: #b91c1c;
+      background: rgba(185, 28, 28, 0.08);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.78rem;
     }
 
     /* Message context menu (right-click / long-press) */
@@ -5293,6 +5317,76 @@
     }
 
     // ── Markdown renderer (lightweight) ─────────────────────────
+    // ── Math & diagram rendering ────────────────────────────────
+    // KaTeX loads via a <script defer> in <head>. If a render happens
+    // before it finishes, math stays literal; once it loads we re-render
+    // any already-painted assistant bubbles. Mermaid is heavier (~2 MB),
+    // so it's lazy-loaded on the first message that contains a ```mermaid
+    // block.
+    let __mermaidPromise = null;
+    async function ensureMermaid() {
+      if (!__mermaidPromise) {
+        __mermaidPromise = import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs')
+          .then((m) => {
+            m.default.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'strict' });
+            return m.default;
+          });
+      }
+      return __mermaidPromise;
+    }
+
+    // Re-render all assistant bubbles that already contain literal math
+    // markers ($…$ or $$…$$) once KaTeX finishes loading. Called once from
+    // the KaTeX onload hook installed below.
+    function rerenderAssistantBubblesWithMath() {
+      document.querySelectorAll('.msg.assistant').forEach((el) => {
+        const idxStr = el.dataset.msgIndex;
+        if (idxStr == null) return;
+        const msg = messages[parseInt(idxStr, 10)];
+        if (!msg || msg.role !== 'assistant' || typeof msg.content !== 'string') return;
+        if (!/\$[^$\n]/.test(msg.content)) return;
+        const bubble = el.querySelector('.msg-bubble');
+        if (bubble) { bubble.innerHTML = renderMarkdown(msg.content); postProcessBubble(bubble); }
+      });
+    }
+
+    // Transform `<pre data-lang="mermaid">` blocks into `<div class="mermaid">`
+    // and kick off rendering. Called after each bubble innerHTML update.
+    async function postProcessBubble(bubble) {
+      if (!bubble) return;
+      const pendingMermaid = bubble.querySelectorAll('pre[data-lang="mermaid"]:not([data-mm-processed])');
+      if (pendingMermaid.length === 0) return;
+      const nodes = [];
+      pendingMermaid.forEach((pre) => {
+        pre.dataset.mmProcessed = '1';
+        const code = pre.querySelector('code');
+        const src = code ? code.textContent : pre.textContent;
+        const div = document.createElement('div');
+        div.className = 'mermaid';
+        div.textContent = src;
+        pre.replaceWith(div);
+        nodes.push(div);
+      });
+      try {
+        const m = await ensureMermaid();
+        await m.run({ nodes });
+      } catch (e) {
+        nodes.forEach((n) => {
+          n.innerHTML = '<span class="mermaid-error">Mermaid: ' + escapeHtml(e.message || String(e)) + '</span>';
+        });
+      }
+    }
+
+    // Once KaTeX finishes loading, re-paint any already-rendered bubbles so
+    // math shows up. No-op if katex never loads (offline, CDN blocked).
+    if (typeof katex === 'undefined') {
+      const poll = setInterval(() => {
+        if (typeof katex !== 'undefined') { clearInterval(poll); rerenderAssistantBubblesWithMath(); }
+      }, 200);
+      // Stop polling after 30 s so we don't burn CPU forever when offline
+      setTimeout(() => clearInterval(poll), 30000);
+    }
+
     function renderMarkdown(text) {
       let thinkContent = '';
       let mainContent = text;
@@ -5339,18 +5433,42 @@
         // the onclick handler's single-quoted string argument.
         const ext = (lang || 'txt').replace(/[^a-zA-Z0-9]/g, '') || 'txt';
         const codeId = 'code-' + Math.random().toString(36).slice(2, 8);
-        return `<pre class="cb-${cbNonce}"><code id="${codeId}">${escapeHtml(code.trim())}</code><button class="code-download-btn" onclick="downloadCodeBlock('${codeId}','${ext}')" title="Download">&#8595;</button></pre>`;
+        // data-lang carries the original language for post-processors
+        // (mermaid). Separate from `ext` which feeds the download filename.
+        const langAttr = ext === 'txt' && lang ? '' : ' data-lang="' + ext + '"';
+        return `<pre class="cb-${cbNonce}"${langAttr}><code id="${codeId}">${escapeHtml(code.trim())}</code><button class="code-download-btn" onclick="downloadCodeBlock('${codeId}','${ext}')" title="Download">&#8595;</button></pre>`;
       });
 
       // Split on our nonce-stamped code-block wrapper. The nonce ensures the
       // split matches only code blocks WE emitted in this call, not any
       // <pre>-looking HTML the model may have produced verbatim via prompt
-      // injection.
-      const splitRe = new RegExp('(<pre class="cb-' + cbNonce + '">[\\s\\S]*?<\\/pre>)', 'g');
+      // injection. The [^>]* allows for optional attributes (e.g. data-lang).
+      const splitRe = new RegExp('(<pre class="cb-' + cbNonce + '"[^>]*>[\\s\\S]*?<\\/pre>)', 'g');
       const parts = mainContent.split(splitRe);
-      const preTag = '<pre class="cb-' + cbNonce + '">';
+      const preTag = '<pre class="cb-' + cbNonce + '"';
       html += parts.map(part => {
         if (part.startsWith(preTag)) return part;
+
+        // Extract math expressions BEFORE escapeHtml so LaTeX survives. The
+        // `§§KM…§§` marker is vanishingly unlikely in model output and
+        // contains no HTML-meaningful characters, so it survives escape.
+        // Display math ($$…$$) is checked first to avoid `$$` being eaten
+        // by the inline rule. Inline math must contain a LaTeX-ish token
+        // (`\`, `^`, `_`, `{`, `}`, or a Greek name) so plain prose like
+        // "cost $5 and $10" doesn't get treated as math.
+        const maths = [];
+        part = part.replace(/\$\$([\s\S]+?)\$\$/g, (_, expr) => {
+          maths.push({ expr, display: true });
+          return '\u00A7\u00A7KM' + (maths.length - 1) + '\u00A7\u00A7';
+        });
+        part = part.replace(/\$([^\n$]+?)\$/g, (full, expr) => {
+          if (!/[\\^_{}]|\\(alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|sum|int|frac|sqrt)/i.test(expr)) {
+            return full;
+          }
+          maths.push({ expr, display: false });
+          return '\u00A7\u00A7KM' + (maths.length - 1) + '\u00A7\u00A7';
+        });
+
         // SAFETY: escape untrusted text before running markdown regexes.
         // Model output can contain raw HTML via prompt injection from fetched
         // pages, search results, or ingested documents. Inline markdown
@@ -5370,6 +5488,25 @@
         part = part.replace(/\n\n+/g, '</p><p>');
         part = part.replace(/\n/g, '<br>');
         if (part.trim() && !part.startsWith('<')) part = `<p>${part}</p>`;
+
+        // Substitute math placeholders with KaTeX HTML (or literal $… if
+        // KaTeX isn't loaded yet; a poll re-renders once it's ready).
+        if (maths.length) {
+          part = part.replace(/\u00A7\u00A7KM(\d+)\u00A7\u00A7/g, (_, i) => {
+            const m = maths[parseInt(i, 10)];
+            if (!m) return '';
+            if (typeof katex === 'undefined') {
+              const d = m.display ? '$$' : '$';
+              return d + escapeHtml(m.expr) + d;
+            }
+            try {
+              return katex.renderToString(m.expr, { displayMode: m.display, throwOnError: false, output: 'html' });
+            } catch (e) {
+              return '<span class="katex-error">' + escapeHtml((m.display ? '$$' : '$') + m.expr) + '</span>';
+            }
+          });
+        }
+
         return part;
       }).join('');
 
@@ -5412,6 +5549,7 @@
           bubble.textContent = textContent;
         } else {
           bubble.innerHTML = renderMarkdown(msg.content);
+          postProcessBubble(bubble);
         }
         el.appendChild(bubble);
         chatArea.appendChild(el);
@@ -5476,6 +5614,9 @@
 
     function updateAssistantBubble(bubble, text) {
       bubble.innerHTML = renderMarkdown(text);
+      // Mermaid blocks render async once the bubble is in the DOM. Safe to
+      // call every token — postProcessBubble guards with data-mm-processed.
+      postProcessBubble(bubble);
       chatArea.scrollTop = chatArea.scrollHeight;
     }
 
