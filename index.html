@@ -2351,7 +2351,10 @@
         <span style="flex:1"></span>
         <span class="api-chip" id="apiChip" title="window.localmind API is enabled — click to view activity log">API</span>
         <select class="model-select" id="modelSelect" title="Choose model">
-          <option value="gemma3-1b" selected>Gemma 3 1B &middot; Fast (~760 MB)</option>
+          <option value="bonsai-ternary-1.7b" selected>Ternary Bonsai 1.7B &middot; Agent (~470 MB)</option>
+          <option value="bonsai-ternary-4b">Ternary Bonsai 4B &middot; Agent (~1.1 GB)</option>
+          <option value="bonsai-ternary-8b">Ternary Bonsai 8B &middot; Agent (~2.2 GB)</option>
+          <option value="gemma3-1b">Gemma 3 1B &middot; Fast (~760 MB)</option>
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
         </select>
@@ -2471,6 +2474,41 @@
 
     // ── Model registry ──────────────────────────────────────────
     const MODELS = {
+      'bonsai-ternary-1.7b': {
+        id: 'onnx-community/Ternary-Bonsai-1.7B-ONNX',
+        label: 'Ternary Bonsai 1.7B',
+        dtype: 'q2f16',
+        size: '~470 MB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 32768,
+        // Qwen3 recommended sampling for chat/agent. min_p not exposed by
+        // Transformers.js generate(), top_p covers it adequately.
+        genConfig: { temperature: 0.7, top_k: 20, top_p: 0.8, max_new_tokens: 2048, repetition_penalty: 1.05 },
+      },
+      'bonsai-ternary-4b': {
+        id: 'onnx-community/Ternary-Bonsai-4B-ONNX',
+        label: 'Ternary Bonsai 4B',
+        dtype: 'q2f16',
+        size: '~1.1 GB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 32768,
+        genConfig: { temperature: 0.7, top_k: 20, top_p: 0.8, max_new_tokens: 2048, repetition_penalty: 1.05 },
+      },
+      'bonsai-ternary-8b': {
+        id: 'onnx-community/Ternary-Bonsai-8B-ONNX',
+        label: 'Ternary Bonsai 8B',
+        dtype: 'q2f16',
+        size: '~2.2 GB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 65536,
+        genConfig: { temperature: 0.7, top_k: 20, top_p: 0.8, max_new_tokens: 2048, repetition_penalty: 1.05 },
+      },
       'gemma3-1b': {
         id: 'onnx-community/gemma-3-1b-it-ONNX-GQA',
         label: 'Gemma 3 1B',
