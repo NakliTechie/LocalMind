@@ -196,118 +196,15 @@ Settings → **Custom models** → paste a Hugging Face repo id (e.g. `HuggingFa
 
 Successful adds appear in the model selector dropdown immediately and persist in `localStorage` across reloads. The Remove button next to each entry strips it from both the dropdown and storage. v1 supports causal LMs only.
 
-## JavaScript API (`window.localmind`)
+## Developer API
 
-Settings → **JavaScript API** → tick the checkbox. An OpenAI-shaped object is exposed on `window.localmind` so any script in the same tab can drive the loaded model. Disabled by default, opt-in only, and detached when the toggle goes off.
+Scripts in the same tab can drive the loaded model via an OpenAI-shaped `window.localmind` object. Opt-in under Settings → JavaScript API. Non-streaming + streaming (async iterator), model loading, frozen surface. Tools / memory / web search intentionally not exposed.
 
-```js
-const lm = window.localmind;
-await lm.load('gemma3-1b');                    // or any HF id you've added
+Full reference: **[API.md](./API.md)** · live demo: **[demo.html](./demo.html)**.
 
-// Non-streaming
-const r = await lm.chat.completions.create({
-  messages: [
-    { role: 'system', content: 'You are concise.' },
-    { role: 'user',   content: 'What is 2 + 2?' },
-  ],
-  max_tokens: 30,
-});
-console.log(r.choices[0].message.content);
+## Example prompts
 
-// Streaming — async iterator yielding OpenAI-shaped chat.completion.chunk
-const stream = await lm.chat.completions.create({
-  messages: [{ role: 'user', content: 'Count to 10' }],
-  stream: true,
-});
-for await (const chunk of stream) {
-  const delta = chunk.choices[0].delta.content;
-  if (delta) process.stdout.write(delta);
-}
-// Breaking out of the loop cancels the worker so the next call
-// doesn't queue behind the abandoned generation.
-```
-
-**What's exposed (v1.0):**
-- `version`, `ready`, `model` (live getters reflecting current state)
-- `listModels()` — full registry incl. custom models, with `loaded` flag
-- `load(idOrKey)` — accepts the short key or the full HF id
-- `chat.completions.create(params)` — non-streaming or streaming via `stream: true`
-
-**What's NOT exposed (intentional):**
-- `tools` / tool calling (would let callers spend search credits, write to memory, etc.)
-- Memory read/write
-- File system handles
-- Web search
-- Multimodal input
-- API keys or user profile
-
-The object is frozen (`Object.freeze`) and attached as a non-writable property, so scripts can't overwrite it with a malicious shim. Every call is logged to the in-memory **activity log** (last 50 entries) viewable via the `● API` chip in the toolbar or `Settings → View activity log`.
-
-**Demo:** open [`demo.html`](./demo.html) in the same folder. It iframes `index.html`, auto-flips the toggle, waits for the model, and runs both a non-streaming and a streaming completion against `iframe.contentWindow.localmind`.
-
-**Architecture / security:**
-- Same-tab only — cross-origin scripts cannot reach `window.localmind` (Same-Origin Policy)
-- Same-origin iframes *can* (used by `demo.html`)
-- All chat-UI and API calls share a single FIFO inference queue, so a misbehaving caller can't race the user
-- No tools means a stored-XSS attacker (e.g. via a compromised CDN or a poisoned web search result) can't trivially exfiltrate memory or burn search credits — they'd already need page-level XSS to read those, which the API doesn't make easier
-
-**Stability:** experimental. v1.0 is a tech demonstrator; the shape may change before a stable v1.1.
-
-## Things to try
-
-**Math & Conversions**
-- "What is 15% of 2450?"
-- "Convert 72 Fahrenheit to Celsius"
-- "If I invest $10,000 at 7% annual return, how much after 5 years with compound interest?"
-
-**Time & Reminders**
-- "What time is it in Tokyo?"
-- "Remind me in 5 minutes to check the oven"
-
-**Memory**
-- "Remember that I'm a software engineer working on a React project called Dashboard Pro"
-- "What do you know about me and my projects?"
-- "Forget everything about my preferences"
-
-**Translation** (140+ languages)
-- "Translate 'Good morning, how are you?' to Japanese, French, and Hindi"
-- "How do you say 'Where is the nearest train station?' in Spanish and German?"
-
-**Writing & Analysis**
-- "Write a professional email declining a meeting invitation politely"
-- "Summarize the pros and cons of microservices vs monolithic architecture"
-- "Explain the concept of WebGPU to a non-technical person in 3 sentences"
-
-**Documents** (attach a PDF, DOCX, or text file)
-- "Summarize the key points from the document I just uploaded"
-- "What are the main conclusions or recommendations in my document?"
-
-**Multimodal** (attach an image first)
-- "Describe this image in detail"
-- "What text can you see in this image? Transcribe it."
-
-**Image Segmentation** (attach an image first, Gemma 4)
-- "Segment the main object in this image"
-- "Outline the person on the left"
-- "Isolate the background"
-
-**Web Research** (requires API key in Settings)
-- "What are the top tech news stories today?"
-- "Search for the latest WebGPU browser support status and summarize"
-- "Find recent articles about AI running locally in the browser and give me a summary with sources"
-
-**Coding**
-- "Write a Python function that finds all prime numbers up to n using the Sieve of Eratosthenes"
-- "Explain the difference between async/await and Promises in JavaScript with examples"
-
-## Context engineering
-
-The raw context window is 12-16K tokens depending on model. The effective knowledge is unlimited:
-
-- **Sliding window** — last 3 turn-pairs verbatim, older turns compressed to rolling summary
-- **RAG retrieval** — top relevant memories auto-injected into system prompt
-- **Semantic pre-filtering** — fetched web pages split into paragraphs, embedded, ranked by relevance to your query
-- **Multi-hop reasoning** — agentic loop chains up to 3 tool calls per message
+A full gallery is inside the app — click the **?** help button → *Try these* tab. Click any prompt to paste it. Covers math, code, research, diagrams, artifacts, voice-to-text, planner workflows, and more.
 
 ## How to run
 
@@ -322,21 +219,11 @@ No build step. No dependencies. No backend.
 
 **Note:** Requires a browser with WebGPU support (Chrome 113+, Edge 113+, Firefox 130+). Will not work from `file://` — needs an HTTP server.
 
-## Tech
+## Architecture & tech stack
 
-- **[Transformers.js](https://huggingface.co/docs/transformers.js)** v4 — runs Hugging Face models in the browser via WebGPU
-- **[Gemma 3 1B](https://huggingface.co/onnx-community/gemma-3-1b-it-ONNX-GQA)** — text-only, q4f16 quantized
-- **[Gemma 4 E2B](https://huggingface.co/onnx-community/gemma-4-E2B-it-ONNX)** — multimodal, 2.3B effective params, q4f16
-- **[Gemma 4 E4B](https://huggingface.co/onnx-community/gemma-4-E4B-it-ONNX)** — multimodal, 4.5B effective params, q4f16
-- **[MiniLM](https://huggingface.co/Xenova/all-MiniLM-L6-v2)** — 384-dim embeddings for RAG (~23 MB, WASM)
-- **[SlimSAM](https://huggingface.co/Xenova/slimsam-77-uniform)** / **[SAM 3](https://huggingface.co/onnx-community/sam3-tracker-ONNX)** — image segmentation via Segment Anything Model (WASM, lazy-loaded)
-- **[Readability.js](https://github.com/mozilla/readability)** — article extraction from fetched pages (lazy-loaded)
-- **[PDF.js](https://mozilla.github.io/pdf.js/)** — PDF text extraction (lazy-loaded on first PDF upload)
-- **[mammoth.js](https://github.com/mwilliamson/mammoth.js)** — DOCX text extraction (lazy-loaded on first DOCX upload)
-- Web Workers for off-main-thread inference (LLM on WebGPU, embeddings on WASM)
-- IndexedDB for persistent vector store + user profile
-- All static CDN dependencies pinned to exact versions and protected with **subresource integrity (SRI)** hashes; the PDF.js worker is fetched via the Fetch-API SRI option and handed to `workerSrc` as a verified blob URL
-- Zero build tooling. One HTML file.
+Single HTML file. Five on-demand Web Workers (chat, embeddings, SAM, Whisper, Pyodide). Transformers.js v4 on WebGPU for LLMs; WASM for the sidecars. Resumable 5 MB-chunked downloads backed by IndexedDB. Sliding-window context + RAG retrieval + semantic pre-filtering.
+
+Full details, worker topology, and resumable-download internals: **[ARCHITECTURE.md](./ARCHITECTURE.md)**.
 
 ## Browser support
 
@@ -388,20 +275,7 @@ There's a growing set of "run an LLM in your browser tab" projects. LocalMind ov
 - **[window.ai](https://github.com/alexanderatallah/window.ai)** — Browser-extension bridge to remote/local models; not a chat app and not WebGPU-native.
 - **[transformers.js-examples](https://github.com/huggingface/transformers.js-examples)** — Hugging Face's 25+ demos (Phi-3.5, SmolVLM, Whisper, etc.). Each demo is single-task; none combine chat + RAG + tools + web search.
 
-**Where LocalMind is distinct**
-
-1. **Agent + RAG in one file.** WebLLM Chat and Chatty ship as Next.js apps; the HF demos are per-task. LocalMind keeps the entire agent loop, vector store, tool router, and UI in a single ~7k-line `index.html` — no build, no bundler, trivially auditable and trivially self-hostable.
-2. **Memory that persists and can be cleaned.** The closest peer (Chatty) has session memory; LocalMind has a full IndexedDB vector store with category filters, bulk per-source deletion, stale/duplicate/outlier audit, and export/import.
-3. **Web-enriched answers with a BYOK model.** None of the pure in-browser peers integrate live web search. LocalMind lets you bring a Brave/Tavily/SearXNG key; fetched pages are chunked, embedded, and fed back into RAG.
-4. **Batch pipelines with `{{previous}}` chaining.** A multi-step research pipeline (summarize → extract → translate) runs without leaving the tab or writing code.
-5. **Multimodal *and* agentic.** Gemma 4 on Transformers.js v4 gives image + audio + tool calling in one model, which most of the peer demos don't expose together.
-6. **Multi-model inference.** Three concurrent workers — Gemma (WebGPU), MiniLM embeddings (WASM), and SAM segmentation (WASM) — running in parallel without competing for resources.
-
-**Where the peers are ahead**
-
-- **WebLLM Chat** — much larger model catalog (Llama 3, Qwen, Mistral, bigger Gemma variants) and an OpenAI-compatible API surface for integration. If you mainly want raw chat with a big model, it's the fastest path.
-- **Chatty** — polished Next.js UX, voice input, and a friendlier onboarding flow.
-- **HF demos** — always first to ship the newest architectures (SmolVLM, Phi-3.5, Whisper, etc.) as minimal reference implementations.
+**Where LocalMind is distinct:** agent + RAG + live web search + batch pipelines + multimodal + five concurrent workers, all in a single HTML file with zero build. Memory persists across sessions and can be audited (stale / duplicate / outlier); fetched pages are chunked and fed back into RAG. Bring-your-own-key for web search so the privacy story stays clean.
 
 ---
 
