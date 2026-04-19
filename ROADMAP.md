@@ -107,7 +107,16 @@ The `+esm` jsDelivr endpoint internally redirects to content-addressed URLs, so 
 ### 4. Pyodide plot capture
 `run_python` returns stdout/stderr only; matplotlib figures go nowhere. Capture via `pyplot.savefig(BytesIO)` → base64 → image in the tool-result block.
 
-### 5. Brave / restricted-WebGPU diagnostics (pending)
+### 5. Second runtime adapter (wllama / WebLLM / GGUF)
+The runtime adapter boundary at [index.html:6213+](index.html) was deliberately built so a second backend can be slotted in — the code comments already reference this ("a second backend (WebLLM, wllama, …) can be slotted in by adding another adapter section without touching anything above"). Not yet implemented.
+
+A real GGUF path would unlock: (a) models with no ONNX export, (b) the native llama.cpp quant ladder (Q1_0, Q2_0, Q4_K_M, …) without waiting for ONNX exports, (c) interoperability with the broader local-LLM ecosystem where GGUF is the de facto format.
+
+Minimum deliverables: implement the `loadModel / chat / embed / capabilities` contract against **wllama** (llama.cpp WASM) — it's the most drop-in option; WebLLM is heavier and uses MLC's own format, not raw GGUF. Extend the MODELS registry entry shape to carry an explicit `runtime: 'onnx' | 'wllama'` field. Settings pickers route to the right adapter on load.
+
+Sizeable: **~400-600 lines** (wllama bindings + adapter + per-entry runtime dispatch + UI + download path). Probably a multi-session effort.
+
+### 6. Brave / restricted-WebGPU diagnostics (pending)
 Github and Reddit users report model fails to load in Brave. Likely causes: `navigator.gpu` present but `requestAdapter()` returns null under strict fingerprinting; Shields blocking jsdelivr or huggingface.co; `device: 'webgpu'` failing in the worker. Current error surfacing is poor — on worker error the code hides the progress section *then* writes the error message into it (see `attachWorkerHandlers`), so users see a bare "Error" badge with zero detail.
 
 Two small follow-ups:
