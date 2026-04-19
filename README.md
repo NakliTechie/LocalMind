@@ -8,17 +8,22 @@ A private AI research agent that runs entirely inside your browser. Tool calling
 
 LocalMind runs Google's Gemma models directly in your browser tab using WebGPU. Models download once, are cached locally, and run offline from that point on. Your conversations, reasoning, and memories never leave your device. Only web search queries touch the network — and only when you explicitly choose to.
 
-**Three models, your choice:**
+**Six models, your choice:**
 
 | Model | Size | Capabilities | Best for |
 |---|---|---|---|
-| **Gemma 3 1B** (default) | ~760 MB | Text chat | Quick everyday chat |
+| **Ternary Bonsai 1.7B** (default) | ~470 MB | Text + agent (tool calling) | Smallest download with tool calling; strong reasoning |
+| **Ternary Bonsai 4B** | ~1.1 GB | Text + agent | Same capabilities, better quality |
+| **Ternary Bonsai 8B** | ~2.2 GB | Text + agent | Best Bonsai quality; 65K context |
+| **Gemma 3 1B** | ~760 MB | Text chat only | Fallback if Bonsai doesn't suit |
 | **Gemma 4 E2B** | ~1.5 GB | Text + image + audio + agent | Multimodal on any device |
-| **Gemma 4 E4B** | ~4.9 GB | Text + image + audio + agent | Best quality, needs more VRAM |
+| **Gemma 4 E4B** | ~4.9 GB | Text + image + audio + agent | Best multimodal quality |
 
-## Agent tools (Gemma 4 models)
+The Bonsai family are 1.58-bit ternary-weight LLMs from Prism ML (Apache-2.0, Qwen3 backbone). They benchmark materially higher than Gemma 3 1B on reasoning/code/tool-calling at roughly half the download size. Multimodal input (images/audio) still goes through Gemma 4.
 
-Gemma 4 models have built-in tool calling. The model decides when to use tools based on your question.
+## Agent tools (Ternary Bonsai + Gemma 4 models)
+
+Tool-capable models have built-in tool calling. The model decides when to use tools based on your question.
 
 | Tool | What it does |
 |---|---|

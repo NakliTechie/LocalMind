@@ -1939,11 +1939,14 @@
             <div class="help-tab-content" data-tab="models">
               <h4>Available Models</h4>
               <ul>
-                <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; fast, text-only chat</li>
-                <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal + agent</li>
-                <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality</li>
+                <li><strong>Ternary Bonsai 1.7B</strong> (~470 MB, default) &mdash; text + agent (tool calling). Smallest download with tool calling. 1.58-bit ternary weights, Qwen3 backbone, Apache-2.0.</li>
+                <li><strong>Ternary Bonsai 4B</strong> (~1.1 GB) &mdash; same capabilities, better quality.</li>
+                <li><strong>Ternary Bonsai 8B</strong> (~2.2 GB) &mdash; best Bonsai quality, 65K context.</li>
+                <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; text-only, no tool calling. Fallback option.</li>
+                <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
+                <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
               </ul>
-              <h4>Gemma 4 Agent Tools</h4>
+              <h4>Agent Tools (Ternary Bonsai + Gemma 4)</h4>
               <ul>
                 <li><strong>calculate</strong> &mdash; math, percentages, conversions</li>
                 <li><strong>get_current_time</strong> &mdash; date/time with timezone</li>
@@ -1972,7 +1975,7 @@
                 <li>&ldquo;How many distinct objects are in this image?&rdquo;</li>
               </ul>
               <p>Translation works directly &mdash; Gemma 4 speaks 140+ languages natively, no tool needed.</p>
-              <p>Gemma 3 1B works as a simple chatbot &mdash; no agent tools.</p>
+              <p>Gemma 3 1B works as a simple chatbot &mdash; no agent tools. Prefer Ternary Bonsai 1.7B if you want tool calling at a similar size.</p>
             </div>
             <div class="help-tab-content" data-tab="features">
               <h4>Document Upload</h4>
@@ -5725,7 +5728,6 @@
           };
           voiceWorker.addEventListener('message', onMsg);
           const lang = localStorage.getItem('lm_voice_language') || 'en';
-          console.log('[whisper] posting transcribe. lang=', lang, 'pcm samples=', pcm.length, 'seconds=', (pcm.length / 16000).toFixed(2));
           voiceWorker.postMessage({ type: 'transcribe', pcm, lang, id }, [pcm.buffer]);
         });
         if (text) {
@@ -7234,49 +7236,78 @@ self.addEventListener('message', async (e) => {
     // ── Transcription worker factory (Whisper via WebGPU) ───
     // Lazy-loaded on first voice-to-text click. Expects Float32Array PCM
     // at 16 kHz mono (decoded+resampled on the main thread via OfflineAudioContext).
+    // Follows the HF realtime-whisper-webgpu pattern: bypasses the pipeline()
+    // wrapper (which drops language/task kwargs silently on v4) and calls
+    // model.generate() directly with language/task/max_new_tokens.
     function createTranscriptionWorker() {
       const code = `
 import {
   env,
-  pipeline,
+  AutoProcessor,
+  AutoTokenizer,
+  WhisperForConditionalGeneration,
+  full,
 } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
 env.allowRemoteModels = true;
 
-let transcriber = null;
+const MODEL_ID = 'onnx-community/whisper-base';
+const MAX_NEW_TOKENS = 64;
+
+let processor = null;
+let tokenizer = null;
+let model = null;
+
+async function load() {
+  const onProgress = (p) => self.postMessage({ type: 'progress', data: p });
+  processor = await AutoProcessor.from_pretrained(MODEL_ID, { progress_callback: onProgress });
+  tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID, { progress_callback: onProgress });
+  model = await WhisperForConditionalGeneration.from_pretrained(MODEL_ID, {
+    // fp32 encoder + q4 decoder is the known-good combo (HF realtime demo).
+    // fp16 encoder produced subtle feature drift that biased the decoder to
+    // filler tokens ("and", "the") on short clips.
+    dtype: { encoder_model: 'fp32', decoder_model_merged: 'q4' },
+    device: 'webgpu',
+    progress_callback: onProgress,
+  });
+  // Warmup: compile shaders against a real mel-shape tensor so the first
+  // real transcription doesn't take the compile hit.
+  await model.generate({
+    input_features: full([1, 80, 3000], 0.0),
+    max_new_tokens: 1,
+  });
+  self.postMessage({ type: 'ready' });
+}
+
+async function transcribe(pcm, lang) {
+  if (!model || !processor || !tokenizer) throw new Error('Whisper not loaded');
+  // processor builds log-mel features from the Float32Array PCM.
+  const inputs = await processor(pcm);
+  // Pass language/task/max_new_tokens directly to generate() — the pipeline
+  // wrapper used to silently drop these kwargs in v4.
+  const outputs = await model.generate({
+    ...inputs,
+    max_new_tokens: MAX_NEW_TOKENS,
+    language: lang || 'en',
+    task: 'transcribe',
+  });
+  const text = tokenizer.batch_decode(outputs, { skip_special_tokens: true })[0] || '';
+  return text.trim();
+}
 
 self.addEventListener('message', async (e) => {
   const { type, pcm, lang, id } = e.data;
-  if (type === 'load') {
-    try {
-      transcriber = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-base', {
-        dtype: { encoder_model: 'fp16', decoder_model_merged: 'q4' },
-        device: 'webgpu',
-        progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
-      });
-      self.postMessage({ type: 'ready' });
-    } catch (err) {
-      self.postMessage({ type: 'error', message: err.message || String(err) });
+  try {
+    if (type === 'load') {
+      await load();
+    } else if (type === 'transcribe') {
+      const text = await transcribe(pcm, lang);
+      self.postMessage({ type: 'transcription', text, id });
     }
-  } else if (type === 'transcribe') {
-    try {
-      if (!transcriber) throw new Error('Whisper not loaded');
-      console.log('[whisper-worker] transcribe. lang=', lang, 'pcm samples=', pcm && pcm.length);
-      // Explicit language + task stops Whisper from hallucinating common
-      // filler tokens on short/quiet clips (auto-detect is unreliable there).
-      const output = await transcriber(pcm, {
-        language: lang || 'en',
-        task: 'transcribe',
-        return_timestamps: false,
-        chunk_length_s: 30,
-      });
-      console.log('[whisper-worker] raw output=', output);
-      self.postMessage({ type: 'transcription', text: (output && output.text ? output.text.trim() : ''), id });
-    } catch (err) {
-      self.postMessage({ type: 'error', message: err.message || String(err), id });
-    }
+  } catch (err) {
+    self.postMessage({ type: 'error', message: err.message || String(err), id });
   }
 });
 `;
