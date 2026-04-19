@@ -6155,6 +6155,15 @@
       chatArea.scrollTop = chatArea.scrollHeight;
     }
 
+    // Strip the model's raw <tool_call>...</tool_call> blocks from text so
+    // the tags don't leak into the visible bubble or saved message history.
+    // (They're still present in loopMessages when feeding the model its own
+    // turn back, so the model continues to see its own output format.)
+    function stripToolCallTags(text) {
+      if (!text) return text;
+      return text.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+    }
+
     function saveChat() {
       try {
         // Strip blobs from messages for sessionStorage (only persist text)
@@ -8241,35 +8250,42 @@ self.addEventListener('message', async (e) => {
       for (let iter = 0; iter < STEP_MAX_ITER; iter++) {
         if (!generating) return { fullText: finalText, usedTools, sources };
         const turn = await runPlannerChatTurn(loopMessages, iter === 0 ? enableThinking : false, tools, genConfig);
-        if (turn.error) return { fullText: finalText || turn.fullText || '', usedTools, sources };
+        if (turn.error) return { fullText: finalText || stripToolCallTags(turn.fullText) || '', usedTools, sources };
 
-        finalText = turn.fullText;
+        finalText = stripToolCallTags(turn.fullText);
 
         if (turn.toolCalls.length === 0) return { fullText: finalText, usedTools, sources };
 
-        const tc = turn.toolCalls[0];
-        const tool = TOOL_REGISTRY[tc.name];
-        let toolResult;
-        if (!tool) {
-          toolResult = { error: 'Unknown tool: ' + tc.name };
-        } else {
-          try {
-            toolResult = await tool.execute(tc.arguments, { userQuery, imageBlob: lastImageBlob });
-          } catch (e) {
-            toolResult = { error: e.message };
+        // Execute ALL tool calls emitted this turn, not just the first.
+        const stepResults = [];
+        for (const tc of turn.toolCalls) {
+          const tool = TOOL_REGISTRY[tc.name];
+          let toolResult;
+          if (!tool) {
+            toolResult = { error: 'Unknown tool: ' + tc.name };
+          } else {
+            try {
+              toolResult = await tool.execute(tc.arguments, { userQuery, imageBlob: lastImageBlob });
+            } catch (e) {
+              toolResult = { error: e.message };
+            }
           }
+          usedTools = true;
+          if (tc.name === 'web_search' && toolResult && toolResult.results) {
+            sources.push(...toolResult.results);
+          }
+          stepResults.push({ tc, toolResult });
         }
-        usedTools = true;
-        if (tc.name === 'web_search' && toolResult && toolResult.results) {
-          sources.push(...toolResult.results);
-        }
+
         loopMessages.push({ role: 'assistant', content: turn.fullText });
-        loopMessages.push({ role: 'tool', name: tc.name, content: JSON.stringify(toolResult) });
+        for (const { tc, toolResult } of stepResults) {
+          loopMessages.push({ role: 'tool', name: tc.name, content: JSON.stringify(toolResult) });
+        }
 
         if (iter === STEP_MAX_ITER - 1) {
           loopMessages.push({ role: 'user', content: '[System: Tool limit reached — give final answer for this step now.]' });
           const finalTurn = await runPlannerChatTurn(loopMessages, false, null, genConfig);
-          finalText = finalTurn.fullText || finalText;
+          finalText = stripToolCallTags(finalTurn.fullText) || finalText;
         }
       }
 
@@ -8653,7 +8669,7 @@ self.addEventListener('message', async (e) => {
         }
 
         if (turn.error) {
-          finishWithOverlay((turn.fullText || '') + `\n\n*Error: ${turn.error.message || turn.error}*`, allSources, toolsUsedInLoop);
+          finishWithOverlay(stripToolCallTags(turn.fullText || '') + `\n\n*Error: ${turn.error.message || turn.error}*`, allSources, toolsUsedInLoop);
           return;
         }
 
@@ -8663,46 +8679,63 @@ self.addEventListener('message', async (e) => {
           return;
         }
 
-        // Execute the first tool call (one at a time per scaffold rules)
-        const tc = turn.toolCalls[0];
-        const tool = TOOL_REGISTRY[tc.name];
-        let toolResult;
-        if (!tool) {
-          toolResult = { error: `Unknown tool: ${tc.name}` };
-        } else {
-          try {
-            toolResult = await tool.execute(tc.arguments, { userQuery: text, imageBlob: lastImageBlob });
-          } catch (e) {
-            toolResult = { error: e.message };
-          }
-        }
+        // Clean the raw <tool_call> tags out of the live bubble display so
+        // users see the model's prose (if any), not its raw call syntax.
+        const cleanedTurnText = stripToolCallTags(turn.fullText);
+        currentAssistantText = cleanedTurnText;
+        if (currentAssistantEl) updateAssistantBubble(currentAssistantEl.bubble, cleanedTurnText);
 
-        // Collect sources from web_search results
-        if (tc.name === 'web_search' && toolResult && toolResult.results) {
-          allSources.push(...toolResult.results);
-        }
-
-        // Show tool call in UI with step indicator
+        // Execute ALL tool calls the model emitted this turn (Qwen3-family
+        // models including Ternary Bonsai often batch multiple calls into
+        // one response). Blocks are appended to the msg CONTAINER — not
+        // the bubble — so the next iteration's streaming updates don't wipe
+        // them out when bubble.innerHTML gets rewritten.
         toolsUsedInLoop = true;
-        const stepLabel = document.createElement('div');
-        stepLabel.style.cssText = 'font-size:0.68rem;color:var(--gray-400);margin:6px 0 2px;font-weight:500';
-        stepLabel.textContent = `Step ${iter + 1}/${MAX_TOOL_ITERATIONS}`;
-        currentAssistantEl.bubble.appendChild(stepLabel);
-        renderToolCallBlock(currentAssistantEl.bubble, tc.name, tc.arguments, toolResult);
+        const msgContainer = currentAssistantEl ? currentAssistantEl.bubble.parentElement : null;
+        const toolResults = [];
+        for (let tcIdx = 0; tcIdx < turn.toolCalls.length; tcIdx++) {
+          const tc = turn.toolCalls[tcIdx];
+          const tool = TOOL_REGISTRY[tc.name];
+          let toolResult;
+          if (!tool) {
+            toolResult = { error: `Unknown tool: ${tc.name}` };
+          } else {
+            try {
+              toolResult = await tool.execute(tc.arguments, { userQuery: text, imageBlob: lastImageBlob });
+            } catch (e) {
+              toolResult = { error: e.message };
+            }
+          }
 
-        // Stash segmentation data for rendering after final response
-        if (tc.name === 'segment_image' && toolResult._rawMasks) {
-          pendingSegOverlay = { imageBlob: toolResult._imageBlob, masks: toolResult._rawMasks, scores: toolResult._scores };
-          delete toolResult._rawMasks;
-          delete toolResult._imageBlob;
-          delete toolResult._scores;
+          if (tc.name === 'web_search' && toolResult && toolResult.results) {
+            allSources.push(...toolResult.results);
+          }
+
+          if (msgContainer) {
+            const stepLabel = document.createElement('div');
+            stepLabel.style.cssText = 'font-size:0.68rem;color:var(--gray-400);margin:6px 0 2px;font-weight:500';
+            const stepSuffix = turn.toolCalls.length > 1 ? ` \u00B7 Call ${tcIdx + 1}/${turn.toolCalls.length}` : '';
+            stepLabel.textContent = `Step ${iter + 1}/${MAX_TOOL_ITERATIONS}${stepSuffix}`;
+            msgContainer.appendChild(stepLabel);
+            renderToolCallBlock(msgContainer, tc.name, tc.arguments, toolResult);
+          }
+
+          if (tc.name === 'segment_image' && toolResult._rawMasks) {
+            pendingSegOverlay = { imageBlob: toolResult._imageBlob, masks: toolResult._rawMasks, scores: toolResult._scores };
+            delete toolResult._rawMasks;
+            delete toolResult._imageBlob;
+            delete toolResult._scores;
+          }
+
+          toolResults.push({ tc, toolResult });
         }
 
-        // Append assistant response + tool-role result. The runtime
-        // adapter converts tool-role messages to whatever the model
-        // expects (Gemma: a user-role <tool_response> wrapper).
+        // Append the assistant turn once (with raw tags so the model sees
+        // its own format), then all tool-role results in order.
         loopMessages.push({ role: 'assistant', content: turn.fullText });
-        loopMessages.push({ role: 'tool', name: tc.name, content: JSON.stringify(toolResult) });
+        for (const { tc, toolResult } of toolResults) {
+          loopMessages.push({ role: 'tool', name: tc.name, content: JSON.stringify(toolResult) });
+        }
 
         // Reset streaming state for next generation pass
         currentAssistantText = '';
@@ -8711,7 +8744,7 @@ self.addEventListener('message', async (e) => {
         if (iter === MAX_TOOL_ITERATIONS - 1) {
           loopMessages.push({ role: 'user', content: '[System: Tool call limit reached. Please provide your final answer now.]' });
           const finalTurn = await runOneAgentTurn(loopMessages, enableThinking);
-          finishWithOverlay(finalTurn.fullText, allSources, toolsUsedInLoop);
+          finishWithOverlay(stripToolCallTags(finalTurn.fullText), allSources, toolsUsedInLoop);
           return;
         }
       }
