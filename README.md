@@ -281,24 +281,15 @@ There's a growing set of "run an LLM in your browser tab" projects. LocalMind ov
 
 ## Part of the NakliTechie series
 
-A collection of browser-native tools that run entirely on your device.
+A growing collection of browser-native tools that run entirely on your device. Highlights:
 
 | Project | Description |
 |---|---|
-| **[BabelLocal](https://naklitechie.github.io/BabelLocal)** | Universal translator — 55 languages, NLLB model |
-| **[VoiceVault](https://naklitechie.github.io/VoiceVault)** | Audio transcription — Whisper, offline-first |
-| **[SnipLocal](https://naklitechie.github.io/SnipLocal)** | Background remover — RMBG-1.4, passport mode |
-| **[StripLocal](https://naklitechie.github.io/StripLocal)** | EXIF metadata stripper — drag-and-drop |
-| **[GambitLocal](https://naklitechie.github.io/GambitLocal)** | Chess vs Stockfish — correspondence mode |
-| **[KingMe](https://naklitechie.github.io/KingMe)** | English draughts vs minimax AI |
-| **[KoLocal](https://naklitechie.github.io/KoLocal)** | Go (Baduk) vs MCTS AI |
-| **[PredictionMarket](https://naklitechie.github.io/PredictionMarket)** | Educational prediction market simulator |
-| **[LocalMind](https://naklitechie.github.io/LocalMind)** | Private AI agent — Gemma, multimodal, WebGPU |
+| **[BOFH](https://naklitechie.github.io/BOFH)** | Browser-native dev toolkit — one HTML file, twenty tools, zero data leaving your device |
+| **[MoD](https://naklitechie.github.io/mod)** | Merge or Die — arcade-style number merge game |
+
+Full portfolio: **[naklitechie.github.io](https://naklitechie.github.io/)**.
 
 ---
 
-**Built by [Chirag Patnaik](https://github.com/NakliTechie)**
-
----
-
-*Built with [Claude Code](https://claude.ai/code).*
+Built by [Chirag Patnaik](https://github.com/NakliTechie) · with [Claude Code](https://claude.ai/code).
