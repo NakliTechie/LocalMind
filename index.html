@@ -1023,11 +1023,32 @@
       width: 0%;
     }
 
+    .progress-text-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 6px;
+    }
     .progress-text {
       font-size: 0.72rem;
       color: var(--gray-600);
-      margin-top: 6px;
-      text-align: center;
+      flex: 1;
+    }
+    .progress-cancel-btn {
+      padding: 2px 10px;
+      font-size: 0.7rem;
+      background: transparent;
+      border: 1px solid var(--gray-200);
+      color: var(--gray-600);
+      border-radius: 4px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .progress-cancel-btn:hover {
+      border-color: var(--gray-400);
+      color: var(--gray-800);
     }
 
     /* Settings panel */
@@ -2163,7 +2184,10 @@
         <div class="progress-bar">
           <div class="progress-fill" id="progressFill"></div>
         </div>
-        <div class="progress-text" id="progressText">Preparing to download model...</div>
+        <div class="progress-text-row">
+          <div class="progress-text" id="progressText">Preparing to download model...</div>
+          <button class="progress-cancel-btn" id="progressCancelBtn" title="Cancel download (partial chunks are preserved for resume)">Cancel</button>
+        </div>
       </div>
 
       <!-- Progress bar (SAM loading) -->
@@ -7947,7 +7971,9 @@ self.addEventListener('message', async (e) => {
       chatInput.disabled = true;
       chatInput.placeholder = `Loading ${m.label}...`;
       sendBtn.disabled = true; searchSendBtn.disabled = true;
-      modelSelect.disabled = true;
+      // modelSelect stays enabled so users can hot-swap to a different model
+      // mid-download (runtime.loadModel terminates the existing worker first).
+      // Partial chunks already written to IDB stay available for resume.
       updateModelUI();
 
       // Delegate worker creation + load message to the runtime adapter.
@@ -7982,8 +8008,32 @@ self.addEventListener('message', async (e) => {
     modelSelect.addEventListener('change', () => {
       if (generating) return;
       const key = modelSelect.value;
-      if (key === activeModelKey) return;
+      if (key === activeModelKey && modelReady) return;
       loadModel(key);
+    });
+
+    // ── Cancel button on the download progress panel ────────────
+    // Terminates the worker (which aborts in-flight fetches) and returns
+    // the app to an idle state. Partial chunks already saved to IDB stay
+    // there, so reselecting the same model picks up roughly where we left
+    // off via the resumable-fetch path.
+    const progressCancelBtn = document.getElementById('progressCancelBtn');
+    progressCancelBtn.addEventListener('click', () => {
+      try { LocalMind.runtime.unload(); } catch {}
+      worker = null;
+      modelReady = false;
+      activeModelKey = null;
+      progressSection.classList.remove('visible');
+      // Base `.status-badge` class with no state modifier — neutral grey
+      // instead of red (this is user-initiated, not an error).
+      statusBadge.className = 'status-badge';
+      statusSpinner.style.display = 'none';
+      statusText.textContent = 'Cancelled — pick a model';
+      chatInput.disabled = true;
+      chatInput.placeholder = 'Select a model to load';
+      sendBtn.disabled = true;
+      searchSendBtn.disabled = true;
+      showToast('Download cancelled. Partial chunks kept for resume.');
     });
 
     // Attachment preprocessing (audio decode, video frame extraction,
