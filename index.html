@@ -434,6 +434,12 @@
       border-color: var(--gray-400);
     }
 
+    /* Collapsible tool-trace block (step labels + tool-call blocks) that
+       sits above the bubble when expanded. Default collapsed; toggle
+       button sits next to Save as MD. */
+    .tool-trace-container { margin: 0 0 8px 0; }
+    .tool-trace-container.collapsed { display: none; }
+
     .msg.assistant .msg-bubble ol,
     .msg.assistant .msg-bubble ul {
       padding-left: 20px;
@@ -8688,11 +8694,18 @@ self.addEventListener('message', async (e) => {
 
         // Execute ALL tool calls the model emitted this turn (Qwen3-family
         // models including Ternary Bonsai often batch multiple calls into
-        // one response). Blocks are appended to the msg CONTAINER — not
-        // the bubble — so the next iteration's streaming updates don't wipe
-        // them out when bubble.innerHTML gets rewritten.
+        // one response). Blocks are appended to a tool-trace container
+        // inserted BEFORE the bubble — collapsed by default, expanded via
+        // a toggle added in finishGeneration. Container is a sibling of
+        // the bubble so streaming updates to bubble.innerHTML don't wipe it.
         toolsUsedInLoop = true;
         const msgContainer = currentAssistantEl ? currentAssistantEl.bubble.parentElement : null;
+        let traceContainer = msgContainer && msgContainer.querySelector('.tool-trace-container');
+        if (msgContainer && !traceContainer) {
+          traceContainer = document.createElement('div');
+          traceContainer.className = 'tool-trace-container collapsed';
+          msgContainer.insertBefore(traceContainer, currentAssistantEl.bubble);
+        }
         const toolResults = [];
         for (let tcIdx = 0; tcIdx < turn.toolCalls.length; tcIdx++) {
           const tc = turn.toolCalls[tcIdx];
@@ -8712,13 +8725,13 @@ self.addEventListener('message', async (e) => {
             allSources.push(...toolResult.results);
           }
 
-          if (msgContainer) {
+          if (traceContainer) {
             const stepLabel = document.createElement('div');
             stepLabel.style.cssText = 'font-size:0.68rem;color:var(--gray-400);margin:6px 0 2px;font-weight:500';
             const stepSuffix = turn.toolCalls.length > 1 ? ` \u00B7 Call ${tcIdx + 1}/${turn.toolCalls.length}` : '';
             stepLabel.textContent = `Step ${iter + 1}/${MAX_TOOL_ITERATIONS}${stepSuffix}`;
-            msgContainer.appendChild(stepLabel);
-            renderToolCallBlock(msgContainer, tc.name, tc.arguments, toolResult);
+            traceContainer.appendChild(stepLabel);
+            renderToolCallBlock(traceContainer, tc.name, tc.arguments, toolResult);
           }
 
           if (tc.name === 'segment_image' && toolResult._rawMasks) {
@@ -8813,6 +8826,24 @@ self.addEventListener('message', async (e) => {
             }
           });
           bubble.appendChild(saveBtn);
+        }
+        // Tool-trace toggle: if this msg has a collapsed trace container
+        // above the bubble, expose a discreet button that expands it.
+        const msgEl = bubble.parentElement;
+        const traceContainer = msgEl && msgEl.querySelector('.tool-trace-container');
+        const callCount = traceContainer ? traceContainer.querySelectorAll('.tool-call-block').length : 0;
+        if (callCount > 0) {
+          const traceBtn = document.createElement('button');
+          traceBtn.className = 'save-md-btn';
+          traceBtn.style.marginLeft = '6px';
+          const label = () => (traceContainer.classList.contains('collapsed') ? '\u25B6' : '\u25BC') +
+            ' ' + callCount + ' tool call' + (callCount > 1 ? 's' : '');
+          traceBtn.innerHTML = label();
+          traceBtn.addEventListener('click', () => {
+            traceContainer.classList.toggle('collapsed');
+            traceBtn.innerHTML = label();
+          });
+          bubble.appendChild(traceBtn);
         }
       }
       currentAssistantEl = null;
