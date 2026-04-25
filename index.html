@@ -14,29 +14,30 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
   <style>
+    /* Rangrez · westafrica-01 · BAOBAB — Senegalese baobab bark, savanna pale dawn */
     :root {
-      --gray-900: #1a202c;
-      --gray-800: #2d3748;
-      --gray-700: #4a5568;
-      --gray-600: #718096;
-      --gray-400: #a0aec0;
-      --gray-200: #e2e8f0;
-      --gray-100: #f0f4f8;
-      --gray-50: #f8fafc;
-      --white: #ffffff;
-      --indigo-500: #667eea;
-      --indigo-600: #5a67d8;
-      --indigo-100: #ebf4ff;
-      --indigo-focus-ring: rgba(102, 126, 234, 0.15);
-      --success-bg: #e6fffa;
-      --success-border: #81e6d9;
-      --success-text: #234e52;
-      --loading-bg: #fffbeb;
-      --loading-border: #f6e05e;
+      --gray-900: #1a1408;       /* INK */
+      --gray-800: #2a2014;
+      --gray-700: #4a3818;
+      --gray-600: #7a5a28;
+      --gray-400: #b89a68;
+      --gray-200: #ddd6c0;       /* line */
+      --gray-100: #f6f3ec;       /* BODY */
+      --gray-50:  #ece8de;       /* row */
+      --white:    #fdfbf4;       /* PANEL */
+      --indigo-500: #08184a;     /* ACT — savanna near-black navy */
+      --indigo-600: #050f30;
+      --indigo-100: #d8dceb;
+      --indigo-focus-ring: rgba(8, 24, 74, 0.20);
+      --success-bg: #dceadb;
+      --success-border: #2a8a3a;
+      --success-text: #0a3014;
+      --loading-bg: #fde6c4;
+      --loading-border: #c08018;
       --loading-text: #744210;
-      --error-bg: #fff5f5;
-      --error-border: #feb2b2;
-      --error-text: #e53e3e;
+      --error-bg: #f8d4dc;
+      --error-border: #b81848;   /* BRAND — hot rose */
+      --error-text: #6a0a30;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -376,7 +377,7 @@
 
     .msg.assistant .msg-bubble pre {
       background: var(--gray-900);
-      color: #e2e8f0;
+      color: var(--gray-200);
       padding: 12px 14px;
       border-radius: 8px;
       overflow-x: auto;
@@ -486,7 +487,7 @@
     /* Tool call block */
     .tool-call-block {
       background: rgba(245, 158, 11, 0.06);
-      border-left: 3px solid #f59e0b;
+      border-left: 3px solid var(--loading-border);
       padding: 8px 12px;
       border-radius: 0 8px 8px 0;
       margin: 8px 0;
@@ -497,7 +498,7 @@
     .tool-call-toggle {
       cursor: pointer;
       font-size: 0.75rem;
-      color: #d97706;
+      color: var(--loading-text);
       font-weight: 500;
       display: flex;
       align-items: center;
@@ -554,7 +555,7 @@
 
     /* Mermaid + KaTeX */
     .mermaid {
-      background: #fff;
+      background: var(--white);
       border: 1px solid var(--gray-200);
       border-radius: 6px;
       padding: 12px;
@@ -563,7 +564,7 @@
       text-align: center;
     }
     .mermaid-error, .katex-error {
-      color: #b91c1c;
+      color: var(--error-text);
       background: rgba(185, 28, 28, 0.08);
       padding: 2px 6px;
       border-radius: 4px;
@@ -577,7 +578,7 @@
       border: 1px solid var(--gray-200);
       border-radius: 6px;
       overflow: hidden;
-      background: #fff;
+      background: var(--white);
     }
     .artifact-header {
       display: flex;
@@ -598,14 +599,14 @@
       min-height: 200px;
       border: 0;
       display: block;
-      background: #fff;
+      background: var(--white);
     }
 
     /* Message context menu (right-click / long-press) */
     .msg-context-menu {
       position: fixed;
       display: none;
-      background: white;
+      background: var(--white);
       border: 1px solid var(--gray-200);
       border-radius: 6px;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
@@ -753,7 +754,7 @@
       bottom: 3px;
       left: 3px;
       background: rgba(0,0,0,0.6);
-      color: #fff;
+      color: var(--white);
       font-size: 0.5rem;
       font-weight: 600;
       padding: 1px 4px;
@@ -806,7 +807,7 @@
       height: 18px;
       border-radius: 50%;
       background: rgba(0,0,0,0.55);
-      color: #fff;
+      color: var(--white);
       border: none;
       font-size: 0.65rem;
       cursor: pointer;
@@ -824,8 +825,8 @@
       position: absolute;
       top: 2px;
       left: 2px;
-      background: #f6ad55;
-      color: #fff;
+      background: var(--loading-border);
+      color: var(--white);
       font-size: 0.5rem;
       font-weight: 600;
       padding: 0 3px;
@@ -938,7 +939,7 @@
     .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
     .send-btn.stop { background: var(--error-text); }
-    .send-btn.stop:hover:not(:disabled) { background: #c53030; }
+    .send-btn.stop:hover:not(:disabled) { background: var(--error-text); }
 
     /* Action buttons bar */
     .actions-bar {
@@ -1017,7 +1018,7 @@
 
     .progress-fill {
       height: 100%;
-      background: linear-gradient(90deg, var(--indigo-500), #764ba2);
+      background: linear-gradient(90deg, var(--indigo-500), #b81848);
       border-radius: 8px;
       transition: width 0.3s ease;
       width: 0%;
@@ -1150,9 +1151,9 @@
     .api-log-row .t { color: var(--gray-500); }
     .api-log-row .m { color: var(--gray-800); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .api-log-row .dur { color: var(--gray-600); text-align: right; }
-    .api-log-row .ok { color: #2f855a; }
+    .api-log-row .ok { color: var(--success-border); }
     .api-log-row .err { color: var(--error-text); }
-    .api-log-row .busy { color: #975a16; }
+    .api-log-row .busy { color: var(--loading-text); }
 
     .settings-panel label {
       display: block;
@@ -1272,7 +1273,7 @@
 
     .msg-source-badge.web-enriched {
       background: rgba(16, 185, 129, 0.1);
-      color: #059669;
+      color: var(--success-border);
     }
 
     .source-links {
@@ -1414,7 +1415,7 @@
       cursor: pointer;
       flex-shrink: 0;
     }
-    .memory-source-del:hover { color: #ef4444; border-color: #ef4444; }
+    .memory-source-del:hover { color: var(--error-border); border-color: var(--error-border); }
 
     .memory-source-group .memory-item {
       border-radius: 0;
@@ -1462,7 +1463,7 @@
       flex-shrink: 0;
     }
 
-    .memory-item-del:hover { color: #ef4444; }
+    .memory-item-del:hover { color: var(--error-border); }
 
     /* Category badges */
     .mem-cat {
@@ -1566,7 +1567,7 @@
       flex-shrink: 0;
     }
 
-    .history-item-del:hover { color: #ef4444; }
+    .history-item-del:hover { color: var(--error-border); }
 
     /* History sidebar */
     .history-backdrop {
@@ -1620,7 +1621,7 @@
     }
 
     .btn-danger-text { color: var(--gray-400); }
-    .btn-danger-text:hover { color: #ef4444; }
+    .btn-danger-text:hover { color: var(--error-border); }
 
     /* Camera overlay */
     .camera-overlay {
@@ -1663,7 +1664,7 @@
 
     .cam-capture-btn {
       background: var(--indigo-500);
-      color: #fff;
+      color: var(--white);
     }
 
     .cam-cancel-btn {
@@ -1848,7 +1849,7 @@
       width: 160px;
     }
     .import-banner button {
-      background: white;
+      background: var(--white);
       color: var(--indigo-600);
       border: none;
       border-radius: 6px;

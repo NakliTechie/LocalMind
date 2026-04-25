@@ -225,6 +225,12 @@ Single HTML file. Five on-demand Web Workers (chat, embeddings, SAM, Whisper, Py
 
 Full details, worker topology, and resumable-download internals: **[ARCHITECTURE.md](./ARCHITECTURE.md)**.
 
+## Palette
+
+Coloured with **`westafrica-01 · BAOBAB`** — Senegalese baobab bark, savanna pale dawn. Warm grey-white body, near-black-navy action accent, hot-rose brand mark. The griot's oral tradition was the original AI assistant.
+
+Palette pulled from [**Rangrez**](https://github.com/NakliTechie/rangrez), the global colour-palette library that backs all NakliTechie projects.
+
 ## Browser support
 
 | Browser | Status |
