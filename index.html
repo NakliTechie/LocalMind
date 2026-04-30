@@ -1971,11 +1971,12 @@
                 <li><strong>Ternary Bonsai 1.7B</strong> (~470 MB, default) &mdash; text + agent (tool calling). Smallest download with tool calling. 1.58-bit ternary weights, Qwen3 backbone, Apache-2.0.</li>
                 <li><strong>Ternary Bonsai 4B</strong> (~1.1 GB) &mdash; same capabilities, better quality.</li>
                 <li><strong>Ternary Bonsai 8B</strong> (~2.2 GB) &mdash; best Bonsai quality, 65K context.</li>
+                <li><strong>Qwen3 4B</strong> (~2.8 GB) &mdash; text + agent (tool calling). Standard Qwen3-4B at q4f16, Apache-2.0, 32K context.</li>
                 <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; text-only, no tool calling. Fallback option.</li>
                 <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
                 <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
               </ul>
-              <h4>Agent Tools (Ternary Bonsai + Gemma 4)</h4>
+              <h4>Agent Tools (Ternary Bonsai + Qwen3 + Gemma 4)</h4>
               <ul>
                 <li><strong>calculate</strong> &mdash; math, percentages, conversions</li>
                 <li><strong>get_current_time</strong> &mdash; date/time with timezone</li>
@@ -2389,6 +2390,7 @@
           <option value="bonsai-ternary-1.7b" selected>Ternary Bonsai 1.7B &middot; Agent (~470 MB)</option>
           <option value="bonsai-ternary-4b">Ternary Bonsai 4B &middot; Agent (~1.1 GB)</option>
           <option value="bonsai-ternary-8b">Ternary Bonsai 8B &middot; Agent (~2.2 GB)</option>
+          <option value="qwen3-4b">Qwen3 4B &middot; Agent (~2.8 GB)</option>
           <option value="gemma3-1b">Gemma 3 1B &middot; Fast (~760 MB)</option>
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
@@ -2542,6 +2544,19 @@
         multimodal: false,
         agentCapable: true,
         contextSize: 65536,
+        genConfig: { temperature: 0.7, top_k: 20, top_p: 0.8, max_new_tokens: 2048, repetition_penalty: 1.05 },
+      },
+      'qwen3-4b': {
+        id: 'onnx-community/Qwen3-4B-ONNX',
+        label: 'Qwen3 4B',
+        dtype: 'q4f16',
+        size: '~2.8 GB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 32768,
+        // Qwen3 recommended sampling for non-thinking mode (temperature 0.7,
+        // top_p 0.8, top_k 20). Apache-2.0, native tool calling.
         genConfig: { temperature: 0.7, top_k: 20, top_p: 0.8, max_new_tokens: 2048, repetition_penalty: 1.05 },
       },
       'gemma3-1b': {
