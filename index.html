@@ -8,6 +8,13 @@
   <meta name="description" content="Private AI chatbot running Gemma entirely in your browser. No server, no API keys, no data leaves your device.">
   <title>LocalMind — Private AI Chat in Your Browser</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
+  <!-- PWA: installable as an app. The manifest is injected at runtime as a
+       same-origin Blob URL (keeps LocalMind a single HTML file — no manifest.json
+       or service-worker.js). See setupPWA() below. -->
+  <meta name="theme-color" content="#08184a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="LocalMind">
   <!-- KaTeX for inline math ($…$) and display math ($$…$$) in assistant
        responses. Loaded from jsdelivr with defer to avoid blocking parse.
        TODO: add SRI hashes alongside the transformers@4 SRI work. -->
@@ -104,6 +111,20 @@
       border-color: var(--indigo-500);
       color: var(--indigo-500);
     }
+
+    .install-btn {
+      padding: 4px 11px;
+      border-radius: 999px;
+      border: 1.5px solid var(--indigo-500);
+      background: var(--white);
+      color: var(--indigo-500);
+      font-size: 0.74rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .install-btn:hover { background: var(--indigo-500); color: var(--white); }
+    .install-btn[hidden] { display: none; }
 
     .help-popover {
       display: none;
@@ -1948,6 +1969,7 @@
     <div class="header">
       <h1>LocalMind</h1>
       <div class="header-right">
+        <button class="install-btn" id="installBtn" title="Install LocalMind as an app" aria-label="Install LocalMind as an app" hidden>&#x2913; Install</button>
         <div class="help-wrap">
           <button class="help-btn" id="helpBtn" aria-label="Help">?</button>
           <div class="help-popover" id="helpPopover">
@@ -2616,6 +2638,68 @@
         genConfig: { temperature: 0.7, top_k: 40, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.1 },
       },
     };
+
+    // ── PWA: single-file installability (Blob manifest + canvas-rendered icons) ──
+    // No service worker / extra files (LocalMind stays one HTML file). The manifest
+    // is a same-origin Blob URL; icons are the 🧠 emoji rasterised to PNG on a canvas
+    // so installability criteria (192 + 512 PNG) are met without shipping image files.
+    (function setupPWA() {
+      try {
+        const makeIcon = (size) => {
+          const c = document.createElement('canvas');
+          c.width = c.height = size;
+          const ctx = c.getContext('2d');
+          ctx.fillStyle = '#f6f3ec';
+          ctx.fillRect(0, 0, size, size);
+          ctx.font = Math.floor(size * 0.7) + 'px serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('🧠', size / 2, size * 0.55);
+          return c.toDataURL('image/png');
+        };
+        const icon192 = makeIcon(192), icon512 = makeIcon(512);
+        const manifest = {
+          name: 'LocalMind — Private AI Chat',
+          short_name: 'LocalMind',
+          description: 'Private AI chat that runs entirely in your browser via WebGPU. No server, no data leaves your device.',
+          start_url: location.pathname + location.search,
+          scope: location.pathname.replace(/[^/]*$/, ''),
+          display: 'standalone',
+          background_color: '#f6f3ec',
+          theme_color: '#08184a',
+          icons: [
+            { src: icon192, sizes: '192x192', type: 'image/png', purpose: 'any' },
+            { src: icon512, sizes: '512x512', type: 'image/png', purpose: 'any' },
+            { src: icon512, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          ],
+        };
+        const url = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' }));
+        const link = document.createElement('link');
+        link.rel = 'manifest';
+        link.href = url;
+        document.head.appendChild(link);
+      } catch (e) { console.warn('PWA manifest setup failed:', e); }
+
+      // Install affordance — only revealed when the browser actually offers install.
+      let deferredPrompt = null;
+      const installBtn = document.getElementById('installBtn');
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        if (installBtn) installBtn.hidden = false;
+      });
+      installBtn?.addEventListener('click', async () => {
+        if (!deferredPrompt) return;
+        deferredPrompt.prompt();
+        try { await deferredPrompt.userChoice; } catch {}
+        deferredPrompt = null;
+        installBtn.hidden = true;
+      });
+      window.addEventListener('appinstalled', () => {
+        deferredPrompt = null;
+        if (installBtn) installBtn.hidden = true;
+      });
+    })();
 
     // ── State ───────────────────────────────────────────────────
     let messages = [];
@@ -5269,7 +5353,20 @@
       const caps = LocalMind.runtime.capabilities();
       const isMultimodal = !!(caps && (caps.image || caps.audio || caps.video));
       const isAgent = !!(caps && caps.toolCalling);
-      inputAffordances.classList.toggle('visible', isMultimodal && modelReady);
+      // The affordances bar shows whenever a model is ready. The 📎 attach
+      // button works for EVERY model: documents (PDF/DOCX/TXT/MD/CSV) are
+      // extracted to text and embedded into RAG memory, which is model-agnostic.
+      // The 📷 camera and 🎤 audio buttons need a multimodal (Gemma 4) model.
+      inputAffordances.classList.toggle('visible', modelReady);
+      cameraBtn.style.display = isMultimodal ? '' : 'none';
+      micBtn.style.display = isMultimodal ? '' : 'none';
+      // Text-only models: restrict the picker to documents (no image/audio/video).
+      fileInput.setAttribute('accept', isMultimodal
+        ? 'image/*,audio/*,video/mp4,.txt,.md,.json,.csv,.pdf,.docx'
+        : '.txt,.md,.json,.csv,.pdf,.docx');
+      attachBtn.title = isMultimodal
+        ? 'Attach an image, audio, video, or document'
+        : 'Attach a document (PDF, DOCX, TXT, MD, CSV) → memory';
       thinkingRow.classList.toggle('hidden', !isMultimodal);
       plannerRow.classList.toggle('hidden', !isAgent);
       searchSettingsSection.style.display = isAgent ? '' : 'none';
@@ -5361,7 +5458,18 @@
     });
 
     function handleFiles(files) {
+      const caps = LocalMind.runtime.capabilities();
+      const canMedia = !!(caps && (caps.image || caps.audio || caps.video));
       for (const file of files) {
+        const isMedia = file.type.startsWith('image/') || file.type.startsWith('audio/')
+          || file.type === 'video/mp4' || /\.mp4$/i.test(file.name);
+        if (isMedia && !canMedia) {
+          // Text-only model: it can't consume image/audio/video. Documents still
+          // pass through below (they're embedded into RAG memory, not sent to the
+          // model). Guards against media picked via an "all files" override.
+          showToast('This model is text-only — attach a document (PDF, DOCX, TXT, MD, CSV), or switch to a Gemma 4 model for images/audio.');
+          continue;
+        }
         if (file.type.startsWith('image/')) {
           addAttachment({
             type: 'image',
