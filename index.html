@@ -2005,6 +2005,7 @@
                 <li><strong>get_current_time</strong> &mdash; date/time with timezone</li>
                 <li><strong>store_memory</strong> &mdash; save facts to persistent memory</li>
                 <li><strong>search_memory</strong> &mdash; recall from stored memories</li>
+                <li><strong>save_skill</strong> &mdash; teach the agent a reusable approach; learned skills auto-apply in later chats (Memory panel &rarr; <em>skill</em>)</li>
                 <li><strong>web_search</strong> &mdash; search the web (requires API key)</li>
                 <li><strong>fetch_page</strong> &mdash; read a web page&rsquo;s content</li>
                 <li><strong>set_reminder</strong> &mdash; browser notification after N minutes</li>
@@ -3572,6 +3573,40 @@
       const vec = await LocalMind.runtime.embed(query);
       return searchByVector(vec, topK);
     }
+
+    // ── Self-improving skills ───────────────────────────────────
+    // A skill is a named, reusable instruction-recipe stored as a 'skill'
+    // memory chunk. The agent saves one (save_skill tool); relevant skills are
+    // auto-retrieved and injected as instructions before each agent turn (see
+    // sendMessage), and they show in the Memory panel under the "skill"
+    // category. Saving with an existing name upserts — refine = re-save, which
+    // is the "improves over time" loop.
+    async function deleteSkillByName(name) {
+      const all = await getAllChunks();
+      for (const c of all) {
+        if (c.category === 'skill' && c.source === name) await deleteChunk(c.id);
+      }
+    }
+    TOOL_REGISTRY.save_skill = {
+      description: 'Save a reusable skill: a short, named set of instructions for how to do a recurring kind of task well. Use it when you discover an approach worth reusing. Skills are auto-retrieved by relevance and applied in later chats, so phrase the instructions as DIRECT COMMANDS ("Cite each claim with [n].") rather than conditionals ("When asked to cite, ...") — relevance is handled for you. Saving with an existing name updates that skill.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Short skill name, e.g. "cite sources" or "summarise meeting notes".' },
+          instructions: { type: 'string', description: 'The reusable approach as a direct command to follow, e.g. "Answer in at most 3 sentences." Avoid "when X" conditionals.' },
+        },
+        required: ['name', 'instructions'],
+      },
+      async execute(args) {
+        const name = String((args && args.name) || '').trim();
+        const instructions = String((args && args.instructions) || '').trim();
+        if (!name || !instructions) return { error: 'save_skill needs a name and instructions' };
+        try { await deleteSkillByName(name); } catch {}
+        try { await embedAndStore(instructions, 'skill', name); }
+        catch (e) { return { error: 'Could not save skill: ' + (e && e.message ? e.message : e) }; }
+        return { saved: true, name };
+      },
+    };
 
     // ── DOM refs ────────────────────────────────────────────────
     const chatArea = document.getElementById('chatArea');
@@ -8693,10 +8728,23 @@ self.addEventListener('message', async (e) => {
         try {
           const userText = typeof userContent === 'string' ? userContent : text;
           if (userText) {
-            const ragResults = await searchMemory(userText, 3);
-            if (ragResults.length > 0) {
-              const ragBlock = ragResults.map(r => `[${r.category}] ${r.text}`).join('\n\n');
-              sysPrompt += `\n\n[Retrieved from memory — use if relevant]\n${ragBlock}`;
+            const qVec = await LocalMind.runtime.embed(userText);
+            const hits = await searchByVector(qVec, 12, 0.3);
+            // Learned skills → injected as instructions (auto-apply; self-improving loop).
+            // Retrieval already filtered to skills relevant to THIS request, so the
+            // wrapper commands rather than suggests (a soft "apply if relevant" wrapper
+            // gets treated as optional by small models).
+            const skillHits = hits.filter(r => r.category === 'skill').slice(0, 3);
+            if (skillHits.length > 0) {
+              sysPrompt = `Apply these learned skills to your answer for this request:\n` +
+                skillHits.map(s => `- ${s.text}`).join('\n') +
+                (sysPrompt ? `\n\n${sysPrompt}` : '');
+            }
+            // Other memory → injected as context (skills excluded so they don't double-inject)
+            const memHits = hits.filter(r => r.category !== 'skill').slice(0, 3);
+            if (memHits.length > 0) {
+              sysPrompt += `\n\n[Retrieved from memory — use if relevant]\n` +
+                memHits.map(r => `[${r.category}] ${r.text}`).join('\n\n');
             }
           }
         } catch (e) {
