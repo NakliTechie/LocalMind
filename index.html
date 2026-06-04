@@ -2397,6 +2397,22 @@
         </div>
       </div>
 
+      <!-- Compare panel (council) -->
+      <div class="batch-panel" id="comparePanel">
+        <div class="memory-header">
+          <strong>Compare models &middot; council</strong>
+          <span class="memory-count" id="compareCount">0 selected</span>
+        </div>
+        <textarea class="batch-textarea" id="compareQuestion" placeholder="Your question — sent to each selected model, then a judge picks the best answer." style="min-height:56px"></textarea>
+        <div id="compareModelList" style="display:flex;flex-direction:column;gap:3px;max-height:160px;overflow:auto"></div>
+        <div style="font-size:0.72rem;color:var(--gray-400);margin:8px 0 0">Pick 2&ndash;3 models. They run one at a time (each loads, answers, then the next) &mdash; uncached models download first, so this can take a while. The last model loaded acts as judge.</div>
+        <div class="batch-controls">
+          <span class="batch-progress" id="compareProgress"></span>
+          <button class="btn-icon" id="compareStopBtn" disabled>Stop</button>
+          <button class="btn-run" id="compareRunBtn" disabled>Compare</button>
+        </div>
+      </div>
+
       <!-- Actions bar -->
       <div class="actions-bar">
         <button class="btn-icon" id="newChatBtn" disabled title="Archive and start new chat">New Chat</button>
@@ -2407,6 +2423,7 @@
         <button class="btn-icon" id="historyBtn" title="Past conversations">History</button>
         <button class="btn-icon" id="shareBtn" title="Share conversation (encrypted link)">Share</button>
         <button class="btn-icon" id="batchBtn" title="Batch prompts — run a list of questions sequentially">Batch</button>
+        <button class="btn-icon" id="compareBtn" title="Compare models — run one prompt through 2–3 models, then a judge picks the best">Compare</button>
         <span style="flex:1"></span>
         <span class="api-chip" id="apiChip" title="window.localmind API is enabled — click to view activity log">API</span>
         <select class="model-select" id="modelSelect" title="Choose model">
@@ -9353,6 +9370,167 @@ self.addEventListener('message', async (e) => {
       batchProgress.textContent = wasStopped ? `Stopped at ${ran}/${prompts.length}.` : `Done (${prompts.length} prompts)`;
       showToast(wasStopped ? 'Batch stopped' : 'Batch complete');
     });
+
+    // ── Compare models (council): one prompt → 2–3 models → judge ──
+    // Sequential: load model A → answer → swap to B → answer …, because WebGPU
+    // can't hold several multi-GB models at once. The last model loaded then
+    // judges. Mirrors the Deep-Research discipline: currentAssistantEl stays
+    // null while driving runPlannerChatTurn (legacy worker handler dormant); we
+    // own the bubble and render labelled cards.
+    const compareBtn       = document.getElementById('compareBtn');
+    const comparePanel     = document.getElementById('comparePanel');
+    const compareQuestion  = document.getElementById('compareQuestion');
+    const compareModelList = document.getElementById('compareModelList');
+    const compareCount     = document.getElementById('compareCount');
+    const compareProgress  = document.getElementById('compareProgress');
+    const compareRunBtn    = document.getElementById('compareRunBtn');
+    const compareStopBtn   = document.getElementById('compareStopBtn');
+
+    const selectedCompareKeys = () =>
+      [...compareModelList.querySelectorAll('input.compare-cb:checked')].map(c => c.value);
+    function updateCompareRunBtn() {
+      const n = selectedCompareKeys().length;
+      compareCount.textContent = n + ' selected';
+      compareRunBtn.disabled = !(n >= 2 && n <= 3 && compareQuestion.value.trim() && !generating);
+    }
+    function onCompareSelectionChange() {
+      const checked = selectedCompareKeys();
+      compareModelList.querySelectorAll('input.compare-cb').forEach(cb => {
+        cb.disabled = (checked.length >= 3 && !cb.checked); // cap at 3
+      });
+      updateCompareRunBtn();
+    }
+    (function populateCompareModels() {
+      for (const [key, mdl] of Object.entries(MODELS)) {
+        const lab = document.createElement('label');
+        lab.style.cssText = 'display:flex;align-items:center;gap:7px;font-size:0.8rem;color:var(--gray-700);cursor:pointer;padding:2px 0';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.value = key; cb.className = 'compare-cb';
+        cb.addEventListener('change', onCompareSelectionChange);
+        const span = document.createElement('span');
+        span.innerHTML = escapeHtml(mdl.label) + ' <span style="color:var(--gray-400)">· ' + escapeHtml(mdl.size) + (mdl.agentCapable ? '' : ' · no tools') + '</span>';
+        lab.appendChild(cb); lab.appendChild(span);
+        compareModelList.appendChild(lab);
+      }
+    })();
+    compareBtn.addEventListener('click', () => {
+      batchPanel.classList.remove('open');
+      comparePanel.classList.toggle('open');
+      updateCompareRunBtn();
+    });
+    compareQuestion.addEventListener('input', updateCompareRunBtn);
+    compareStopBtn.addEventListener('click', () => {
+      if (generating) { try { worker.postMessage({ type: 'stop' }); } catch {} generating = false; compareProgress.textContent = 'Stopping…'; }
+    });
+    compareRunBtn.addEventListener('click', () => {
+      const q = compareQuestion.value.trim();
+      const keys = selectedCompareKeys();
+      if (!q || keys.length < 2 || generating) return;
+      runCompare(q, keys);
+    });
+
+    async function runCompare(question, modelKeys) {
+      comparePanel.classList.remove('open');
+      compareProgress.textContent = '';
+      compareQuestion.value = '';
+
+      messages.push({ role: 'user', content: question });
+      addUserMessage(question, false);
+      saveChat();
+
+      const el = addAssistantPlaceholder();
+      const bubble = el.bubble;
+      generating = true;
+      sendBtn.innerHTML = '&#9632;'; sendBtn.classList.add('stop');
+      chatInput.disabled = true; modelSelect.disabled = true;
+      compareRunBtn.disabled = true; compareStopBtn.disabled = false;
+      currentAssistantEl = null; // keep null: legacy worker handler stays dormant
+
+      const labelOf = k => (MODELS[k] && MODELS[k].label) || k;
+      const answers = [];
+      const aborted = () => !generating;
+
+      const card = (label, text, accent) =>
+        '<div style="border:1px solid ' + (accent ? 'var(--indigo-500)' : 'var(--gray-200)') +
+        ';border-radius:8px;padding:8px 10px;margin-bottom:8px;background:' + (accent ? 'var(--indigo-100)' : 'var(--white)') + '">' +
+        '<div style="font-weight:600;color:' + (accent ? 'var(--indigo-600)' : 'var(--gray-700)') + ';margin-bottom:4px">' + label + '</div>' +
+        '<div>' + (text ? renderMarkdown(text) : '<span style="color:var(--gray-400)">…</span>') + '</div></div>';
+      const render = (status, verdict) => {
+        let html = '<div style="font-size:0.85rem">';
+        if (status) html += '<div style="font-weight:600;color:var(--indigo-500);margin-bottom:8px">' + escapeHtml(status) + '</div>';
+        for (const a of answers) html += card(escapeHtml(a.label), a.text, false);
+        if (verdict) html += card('⚖️ Judge · ' + escapeHtml(labelOf(activeModelKey)), verdict, true);
+        html += '</div>';
+        bubble.innerHTML = html;
+        postProcessBubble(bubble);
+        chatArea.scrollTop = chatArea.scrollHeight;
+      };
+      const reassertLock = () => {
+        chatInput.disabled = true; modelSelect.disabled = true;
+        sendBtn.innerHTML = '&#9632;'; sendBtn.classList.add('stop');
+        compareStopBtn.disabled = false;
+      };
+      const finish = (commitText) => {
+        generating = false;
+        if (commitText) { messages.push({ role: 'assistant', content: commitText }); saveChat(); }
+        currentAssistantEl = null;
+        sendBtn.innerHTML = '&#9654;'; sendBtn.classList.remove('stop');
+        sendBtn.disabled = false; searchSendBtn.disabled = false;
+        chatInput.disabled = false; modelSelect.disabled = false;
+        compareStopBtn.disabled = true;
+        try { modelSelect.value = activeModelKey; } catch {}
+        updateCompareRunBtn();
+        chatInput.focus();
+      };
+
+      try {
+        for (let i = 0; i < modelKeys.length; i++) {
+          if (aborted()) { render('Stopped.'); finish(); return; }
+          const key = modelKeys[i];
+          render('Running ' + (i + 1) + ' of ' + modelKeys.length + ' — loading ' + labelOf(key) + '…');
+          try { await loadModelViaApi(key); }
+          catch (e) { answers.push({ key, label: labelOf(key), text: '_(failed to load: ' + (e && e.message ? e.message : e) + ')_' }); render(); continue; }
+          if (aborted()) { render('Stopped.'); finish(); return; }
+          reassertLock(); // the load 'ready' handler re-enabled the chat UI
+          answers.push({ key, label: labelOf(key), text: '' });
+          render('Running ' + (i + 1) + ' of ' + modelKeys.length + ' — ' + labelOf(key) + ' answering…');
+          const sys = systemPrompt.value.trim();
+          const msgs = sys ? [{ role: 'system', content: sys }, { role: 'user', content: question }] : [{ role: 'user', content: question }];
+          let turn;
+          try { turn = await runPlannerChatTurn(msgs, false, null, MODELS[key].genConfig); }
+          catch { turn = { fullText: '' }; }
+          answers[answers.length - 1].text = stripToolCallTags(turn.fullText) || '_(no answer)_';
+          render();
+        }
+        if (aborted()) { finish(); return; }
+
+        // Judge with the currently-loaded (last) model
+        let verdict = '';
+        const valid = answers.filter(a => a.text && !a.text.startsWith('_('));
+        if (valid.length >= 2 && modelReady) {
+          render('Judging…');
+          try {
+            const judgeSys = 'You are an impartial judge. Below are answers from different AI models to the same question. ' +
+              'Evaluate them for accuracy, completeness, and clarity. Pick the single best (name the model) or synthesise a ' +
+              'better combined answer if clearly better. Give 2–4 sentences of reasoning, then a verdict line starting "**Winner:**".';
+            const judgeUser = 'Question: ' + question + '\n\n' + answers.map(a => '### ' + a.label + '\n' + a.text).join('\n\n');
+            const jt = await runPlannerChatTurn([{ role: 'system', content: judgeSys }, { role: 'user', content: judgeUser }], false, null, MODELS[activeModelKey].genConfig);
+            verdict = stripToolCallTags(jt.fullText) || '';
+          } catch {}
+        }
+        render('', verdict);
+
+        const commit = '**Model comparison** — ' + question + '\n\n' +
+          answers.map(a => '### ' + a.label + '\n' + a.text).join('\n\n') +
+          (verdict ? '\n\n### ⚖️ Judge verdict (' + labelOf(activeModelKey) + ')\n' + verdict : '');
+        finish(commit);
+        showToast('Compare done · now on ' + labelOf(activeModelKey));
+      } catch (e) {
+        console.error('Compare failed:', e);
+        bubble.innerHTML = renderMarkdown('Comparison failed: ' + (e && e.message ? e.message : e));
+        finish();
+      }
+    }
 
     // ── Encrypted share links ───────────────────────────────────
     // URL format:
