@@ -1703,6 +1703,20 @@
     }
     .batch-panel.open { display: block; }
 
+    /* Unified input: mode chips + per-mode strips */
+    .mode-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 6px 16px 0; }
+    .mode-chip {
+      padding: 3px 10px; border-radius: 999px; border: 1.5px solid var(--gray-200);
+      background: var(--white); color: var(--gray-600); font-size: 0.74rem; font-weight: 600;
+      cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .mode-chip:hover { border-color: var(--indigo-500); color: var(--indigo-500); }
+    .mode-chip.active { background: var(--indigo-500); color: #fff; border-color: var(--indigo-500); }
+    .mode-hint { font-size: 0.72rem; color: var(--gray-400); margin-left: 4px; }
+    .mode-extra { display: none; padding: 8px 16px 0; }
+    .mode-extra.open { display: block; }
+    .mode-extra-head { font-size: 0.78rem; color: var(--gray-600); margin-bottom: 4px; }
+
     .batch-textarea {
       width: 100%;
       min-height: 96px;
@@ -2390,39 +2404,7 @@
         </div>
       </div>
 
-      <!-- Batch panel -->
-      <div class="batch-panel" id="batchPanel">
-        <div class="memory-header">
-          <strong>Batch Prompts</strong>
-          <span class="memory-count" id="batchCount">0 prompts</span>
-        </div>
-        <textarea class="batch-textarea" id="batchTextarea" placeholder="One prompt per line.&#10;Use {{previous}} to insert the previous response into the next prompt.&#10;&#10;Example:&#10;Summarise the history of WebGPU&#10;Now translate this to French: {{previous}}"></textarea>
-        <div class="batch-controls">
-          <label class="batch-chain-label">
-            <input type="checkbox" id="batchChainToggle" checked>
-            Auto-inject {{previous}}
-          </label>
-          <span class="batch-progress" id="batchProgress"></span>
-          <button class="btn-icon" id="batchStopBtn" disabled>Stop</button>
-          <button class="btn-run" id="batchRunBtn" disabled>Run</button>
-        </div>
-      </div>
-
-      <!-- Compare panel (council) -->
-      <div class="batch-panel" id="comparePanel">
-        <div class="memory-header">
-          <strong>Compare models &middot; council</strong>
-          <span class="memory-count" id="compareCount">0 selected</span>
-        </div>
-        <textarea class="batch-textarea" id="compareQuestion" placeholder="Your question — sent to each selected model, then a judge picks the best answer." style="min-height:56px"></textarea>
-        <div id="compareModelList" style="display:flex;flex-direction:column;gap:3px;max-height:160px;overflow:auto"></div>
-        <div style="font-size:0.72rem;color:var(--gray-400);margin:8px 0 0">Pick 2&ndash;3 models. They run one at a time (each loads, answers, then the next) &mdash; uncached models download first, so this can take a while. The last model loaded acts as judge.</div>
-        <div class="batch-controls">
-          <span class="batch-progress" id="compareProgress"></span>
-          <button class="btn-icon" id="compareStopBtn" disabled>Stop</button>
-          <button class="btn-run" id="compareRunBtn" disabled>Compare</button>
-        </div>
-      </div>
+      <!-- Batch + Compare moved into the unified mode strip just above the input bar. -->
 
       <!-- Actions bar -->
       <div class="actions-bar">
@@ -2433,8 +2415,8 @@
         <button class="btn-icon" id="folderBtn" title="Open folder — ingest all .md/.txt/.pdf files into memory">Folder</button>
         <button class="btn-icon" id="historyBtn" title="Past conversations">History</button>
         <button class="btn-icon" id="shareBtn" title="Share conversation (encrypted link)">Share</button>
-        <button class="btn-icon" id="batchBtn" title="Batch prompts — run a list of questions sequentially">Batch</button>
-        <button class="btn-icon" id="compareBtn" title="Compare models — run one prompt through 2–3 models, then a judge picks the best">Compare</button>
+        <button class="btn-icon" id="batchBtn" style="display:none" title="Batch (now in the mode chips above the input)">Batch</button>
+        <button class="btn-icon" id="compareBtn" style="display:none" title="Compare (now in the mode chips above the input)">Compare</button>
         <span style="flex:1"></span>
         <span class="api-chip" id="apiChip" title="window.localmind API is enabled — click to view activity log">API</span>
         <select class="model-select" id="modelSelect" title="Choose model">
@@ -2447,6 +2429,31 @@
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
         </select>
+      </div>
+
+      <!-- Unified mode chips + per-mode controls — all drive the main input below -->
+      <div class="mode-row" id="modeRow">
+        <button class="mode-chip" id="chipSearch" title="Web-enrich this message with a live search">&#127760; Search</button>
+        <button class="mode-chip" id="chipResearch" title="Deep research &rarr; multi-source cited report">&#128300; Research</button>
+        <button class="mode-chip" id="chipCompare" title="Run the prompt through 2&ndash;3 models, then a judge">&#9878; Compare</button>
+        <button class="mode-chip" id="chipBatch" title="Run one prompt per line, in sequence">&#8801; Batch</button>
+        <span class="mode-hint" id="modeHint"></span>
+      </div>
+      <div class="mode-extra" id="comparePanel">
+        <div class="mode-extra-head">Pick 2&ndash;3 models <span class="memory-count" id="compareCount">0 selected</span></div>
+        <div id="compareModelList" style="display:flex;flex-direction:column;gap:3px;max-height:150px;overflow:auto"></div>
+        <span class="batch-progress" id="compareProgress" style="display:none"></span>
+        <textarea id="compareQuestion" style="display:none"></textarea>
+        <button id="compareStopBtn" style="display:none"></button>
+        <button id="compareRunBtn" style="display:none"></button>
+      </div>
+      <div class="mode-extra" id="batchPanel">
+        <label class="batch-chain-label"><input type="checkbox" id="batchChainToggle" checked> Auto-inject {{previous}} into each next prompt</label>
+        <span class="batch-progress" id="batchProgress"></span>
+        <span id="batchCount" style="display:none"></span>
+        <textarea id="batchTextarea" style="display:none"></textarea>
+        <button id="batchStopBtn" style="display:none"></button>
+        <button id="batchRunBtn" style="display:none"></button>
       </div>
 
       <!-- Input -->
@@ -4972,8 +4979,9 @@
       const m = MODELS[activeModelKey];
       const isAgent = m && m.agentCapable;
       const configured = isSearchConfigured();
-      searchSendBtn.style.display = (configured && isAgent) ? '' : 'none';
-      researchBtn.style.display = (configured && isAgent) ? '' : 'none';
+      // The old 🌐/🔬 send buttons are superseded by the mode chips above the input.
+      searchSendBtn.style.display = 'none';
+      researchBtn.style.display = 'none';
     }
 
     searchProvider.addEventListener('change', () => {
@@ -9508,6 +9516,77 @@ self.addEventListener('message', async (e) => {
       }
     }
 
+    // ── Unified input modes — chips drive the main input + Send ──
+    const chipSearch   = document.getElementById('chipSearch');
+    const chipResearch = document.getElementById('chipResearch');
+    const chipCompare  = document.getElementById('chipCompare');
+    const chipBatch    = document.getElementById('chipBatch');
+    const modeHint     = document.getElementById('modeHint');
+    let activeMode = 'chat';   // 'chat' | 'research' | 'compare' | 'batch'
+    let searchOn = false;      // modifier, applies in chat mode
+
+    function refreshModeUI() {
+      chipSearch.classList.toggle('active', searchOn);
+      chipResearch.classList.toggle('active', activeMode === 'research');
+      chipCompare.classList.toggle('active', activeMode === 'compare');
+      chipBatch.classList.toggle('active', activeMode === 'batch');
+      comparePanel.classList.toggle('open', activeMode === 'compare');
+      batchPanel.classList.toggle('open', activeMode === 'batch');
+      if (activeMode === 'batch') chatInput.placeholder = 'One prompt per line — Shift+Enter for newlines, then Send…';
+      else if (activeMode === 'compare') chatInput.placeholder = 'Ask once — every ticked model answers, then a judge picks…';
+      else if (activeMode === 'research') chatInput.placeholder = 'Ask a research question…';
+      else chatInput.placeholder = 'Type a message…';
+      modeHint.textContent =
+        activeMode === 'batch' ? 'Each line runs as its own prompt, in sequence.' :
+        activeMode === 'research' ? 'Searches the web, reads sources, writes a cited report.' :
+        (activeMode === 'chat' && searchOn) ? 'This message will be web-enriched.' : '';
+    }
+    function setExclusiveMode(mode) { activeMode = (activeMode === mode) ? 'chat' : mode; refreshModeUI(); }
+    function needsSearchOrConfigure(what) {
+      if (isSearchConfigured()) return true;
+      if (confirm(what + ' needs a web search provider. Open Settings to set one up?')) {
+        memoryPanel.classList.remove('open');
+        settingsPanel.classList.add('open');
+      }
+      return false;
+    }
+    chipResearch.addEventListener('click', () => { if (generating) return; if (activeMode !== 'research' && !needsSearchOrConfigure('Deep Research')) return; setExclusiveMode('research'); });
+    chipCompare.addEventListener('click', () => { if (!generating) setExclusiveMode('compare'); });
+    chipBatch.addEventListener('click', () => { if (!generating) setExclusiveMode('batch'); });
+    chipSearch.addEventListener('click', () => { if (generating) return; if (!searchOn && !needsSearchOrConfigure('Web search')) return; searchOn = !searchOn; refreshModeUI(); });
+
+    async function runBatchInline() {
+      const prompts = chatInput.value.split('\n').map(l => l.trim()).filter(Boolean);
+      if (!prompts.length) { showToast('Type one prompt per line'); return; }
+      let last = '';
+      for (let i = 0; i < prompts.length; i++) {
+        if (!modelReady) break;
+        let p = prompts[i];
+        if (i > 0 && last) p = p.replace(/\{\{previous\}\}/g, last);
+        if (batchChainToggle.checked && i > 0 && last && !prompts[i].includes('{{previous}}')) p = `${p}\n\n[Previous response for context:\n${last}\n]`;
+        batchProgress.textContent = `${i + 1} / ${prompts.length}`;
+        chatInput.value = p;
+        await sendMessage();
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg && lastMsg.role === 'assistant') last = typeof lastMsg.content === 'string' ? lastMsg.content : '';
+      }
+      batchProgress.textContent = `Done (${prompts.length})`;
+    }
+
+    function dispatchSend() {
+      const q = chatInput.value.trim();
+      if (activeMode === 'research') { if (!q) { showToast('Type a research question'); return; } runDeepResearch(q); return; }
+      if (activeMode === 'compare') {
+        const keys = selectedCompareKeys();
+        if (keys.length < 2) { showToast('Tick 2–3 models to compare'); return; }
+        if (!q) { showToast('Type a question to compare'); return; }
+        runCompare(q, keys); return;
+      }
+      if (activeMode === 'batch') { runBatchInline(); return; }
+      if (searchOn) webEnrichedMode = true;
+      sendMessage();
+    }
+
     sendBtn.addEventListener('click', () => {
       if (generating) {
         // Stop generation — interrupt worker, let complete handler resolve the promise.
@@ -9515,14 +9594,14 @@ self.addEventListener('message', async (e) => {
         worker.postMessage({ type: 'stop' });
         generating = false;
       } else {
-        sendMessage();
+        dispatchSend();
       }
     });
 
     chatInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        if (!generating) sendMessage();
+        if (!generating && activeMode !== 'batch') dispatchSend();
       }
     });
 
