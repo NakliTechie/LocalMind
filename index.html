@@ -1972,11 +1972,12 @@
                 <li><strong>Ternary Bonsai 4B</strong> (~1.1 GB) &mdash; same capabilities, better quality.</li>
                 <li><strong>Ternary Bonsai 8B</strong> (~2.2 GB) &mdash; best Bonsai quality, 65K context.</li>
                 <li><strong>Qwen3 4B</strong> (~2.8 GB) &mdash; text + agent (tool calling). Standard Qwen3-4B at q4f16, Apache-2.0, 32K context.</li>
+                <li><strong>LFM2 8B A1B</strong> (~4.8 GB) &mdash; text + agent (tool calling). Liquid AI sparse-MoE (8B total / ~1B active) at q4f16, 32K context. WebGPU-only and large &mdash; needs a capable GPU (Chrome/Edge, ~8 GB+ RAM recommended).</li>
                 <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; text-only, no tool calling. Fallback option.</li>
                 <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
                 <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
               </ul>
-              <h4>Agent Tools (Ternary Bonsai + Qwen3 + Gemma 4)</h4>
+              <h4>Agent Tools (Ternary Bonsai + Qwen3 + LFM2 + Gemma 4)</h4>
               <ul>
                 <li><strong>calculate</strong> &mdash; math, percentages, conversions</li>
                 <li><strong>get_current_time</strong> &mdash; date/time with timezone</li>
@@ -2391,6 +2392,7 @@
           <option value="bonsai-ternary-4b">Ternary Bonsai 4B &middot; Agent (~1.1 GB)</option>
           <option value="bonsai-ternary-8b">Ternary Bonsai 8B &middot; Agent (~2.2 GB)</option>
           <option value="qwen3-4b">Qwen3 4B &middot; Agent (~2.8 GB)</option>
+          <option value="lfm2-8b-a1b">LFM2 8B A1B &middot; Agent (~4.8 GB)</option>
           <option value="gemma3-1b">Gemma 3 1B &middot; Fast (~760 MB)</option>
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
@@ -2558,6 +2560,27 @@
         // Qwen3 recommended sampling for non-thinking mode (temperature 0.7,
         // top_p 0.8, top_k 20). Apache-2.0, native tool calling.
         genConfig: { temperature: 0.7, top_k: 20, top_p: 0.8, max_new_tokens: 2048, repetition_penalty: 1.05 },
+      },
+      'lfm2-8b-a1b': {
+        id: 'onnx-community/LFM2-8B-A1B-ONNX',
+        label: 'LFM2 8B A1B',
+        dtype: 'q4f16',
+        size: '~4.8 GB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 32768,
+        // Liquid AI's LFM2-8B-A1B sparse MoE (8B total / ~1B active, 32 experts,
+        // 4 per token), stock onnx-community export. Runs in-browser on WebGPU
+        // because this build is SYMMETRIC QMoE — onnxruntime-web's WebGPU EP
+        // cannot run asymmetric (zero-point) QMoE yet, which is why the
+        // LiquidAI/LFM2.5-8B-A1B-ONNX 2.5 export fails to load here. Needs
+        // transformers.js >=4.2.0 for model_type lfm2_moe (the pinned @4 has it).
+        // WebGPU-only + ~4.8 GB, so it wants a capable GPU / 8 GB+ RAM. Proven
+        // in-browser at gandhi.naklitechie.com (site/llm/browser-rag.js Best tier).
+        // Liquid recommends temperature 0.3 / min_p 0.15 / rep 1.05; min_p isn't
+        // exposed by Transformers.js generate(), so top_p approximates.
+        genConfig: { temperature: 0.3, top_k: 20, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.05 },
       },
       'gemma3-1b': {
         id: 'onnx-community/gemma-3-1b-it-ONNX-GQA',
@@ -6309,12 +6332,31 @@ Rules:
 - If you don't need tools, just answer directly.
 - Never fabricate tool results.
 - Always use the exact <tool_call> XML format shown above. Do not invent other formats like "tool.call:" or function-call syntax.
+- The "name" field is REQUIRED in every <tool_call> block — set it to the exact function name from <tools>. A block with only arguments and no "name" is invalid.
 - You can translate text between 140+ languages directly in your response — no tool needed for translation.`;
       if (userPrompt) prompt += '\n\n' + userPrompt;
       return prompt;
     }
 
-    function _adapterParseToolCalls(text, knownToolNames) {
+    // Some tool-tuned models (notably LFM2) emit the arguments inside a
+    // <tool_call> block but drop the {"name","arguments"} wrapper — e.g.
+    // <tool_call>{"timezone":"UTC"}</tool_call>. Recover the tool when the
+    // emitted argument keys uniquely match exactly one available tool's
+    // declared parameters; return null when ambiguous/unknowable so we never
+    // guess. Only consulted when the name is absent, so models that DO emit a
+    // name (Bonsai, Qwen3, Gemma) are unaffected.
+    function _adapterInferToolFromArgs(args, toolDefs) {
+      if (!args || typeof args !== 'object' || !Array.isArray(toolDefs) || !toolDefs.length) return null;
+      const keys = Object.keys(args);
+      if (!keys.length) return null;
+      const matches = toolDefs.filter(t => {
+        const props = (t && t.parameters && t.parameters.properties) || {};
+        return keys.every(k => k in props);
+      });
+      return matches.length === 1 ? matches[0].name : null;
+    }
+
+    function _adapterParseToolCalls(text, knownToolNames, toolDefs) {
       const toolCalls = [];
       let cleanText = text;
 
@@ -6326,6 +6368,12 @@ Rules:
         const tcName = parsed && (parsed.name || parsed.function);
         if (tcName) {
           toolCalls.push({ name: tcName, arguments: parsed.arguments || {} });
+        } else if (parsed && typeof parsed === 'object') {
+          // Name-less tool_call (LFM2-style): the block holds bare arguments.
+          // Infer the tool from the argument signature; skip if ambiguous.
+          const argObj = (parsed.arguments && typeof parsed.arguments === 'object') ? parsed.arguments : parsed;
+          const inferred = _adapterInferToolFromArgs(argObj, toolDefs);
+          if (inferred) toolCalls.push({ name: inferred, arguments: argObj });
         }
         cleanText = cleanText.replace(match[0], '');
       }
@@ -6806,7 +6854,7 @@ ${JSON.stringify({ name, result })}
               // text and we don't want phantom calls from regex hits.
               let reason = aborted ? 'abort' : 'stop';
               if (toolsEnabled && !aborted && typeof fullText === 'string' && fullText.length) {
-                const { toolCalls } = _adapterParseToolCalls(fullText, knownToolNames);
+                const { toolCalls } = _adapterParseToolCalls(fullText, knownToolNames, tools);
                 if (toolCalls.length > 0) {
                   reason = 'tool_calls';
                   for (const tc of toolCalls) {

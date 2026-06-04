@@ -8,7 +8,7 @@ A private AI research agent that runs entirely inside your browser. Tool calling
 
 LocalMind runs Google's Gemma models directly in your browser tab using WebGPU. Models download once, are cached locally, and run offline from that point on. Your conversations, reasoning, and memories never leave your device. Only web search queries touch the network — and only when you explicitly choose to.
 
-**Seven models, your choice:**
+**Eight models, your choice:**
 
 | Model | Size | Capabilities | Best for |
 |---|---|---|---|
@@ -16,13 +16,14 @@ LocalMind runs Google's Gemma models directly in your browser tab using WebGPU. 
 | **Ternary Bonsai 4B** | ~1.1 GB | Text + agent | Same capabilities, better quality |
 | **Ternary Bonsai 8B** | ~2.2 GB | Text + agent | Best Bonsai quality; 65K context |
 | **Qwen3 4B** | ~2.8 GB | Text + agent (tool calling) | Standard Qwen3 at q4f16; 32K context, native tool calling |
+| **LFM2 8B A1B** | ~4.8 GB | Text + agent (tool calling) | Liquid AI sparse-MoE (8B total / ~1B active) at q4f16; 32K context. WebGPU-only, ~8 GB+ RAM |
 | **Gemma 3 1B** | ~760 MB | Text chat only | Fallback if Bonsai doesn't suit |
 | **Gemma 4 E2B** | ~1.5 GB | Text + image + audio + agent | Multimodal on any device |
 | **Gemma 4 E4B** | ~4.9 GB | Text + image + audio + agent | Best multimodal quality |
 
-The Bonsai family are 1.58-bit ternary-weight LLMs from Prism ML (Apache-2.0, Qwen3 backbone). They benchmark materially higher than Gemma 3 1B on reasoning/code/tool-calling at roughly half the download size. Qwen3 4B is the standard 4-bit-quantized Qwen3-4B from Alibaba (Apache-2.0) — heavier than Bonsai 4B but trades the ternary-quantization quality cost for stock-recipe weights. Multimodal input (images/audio) still goes through Gemma 4.
+The Bonsai family are 1.58-bit ternary-weight LLMs from Prism ML (Apache-2.0, Qwen3 backbone). They benchmark materially higher than Gemma 3 1B on reasoning/code/tool-calling at roughly half the download size. Qwen3 4B is the standard 4-bit-quantized Qwen3-4B from Alibaba (Apache-2.0) — heavier than Bonsai 4B but trades the ternary-quantization quality cost for stock-recipe weights. LFM2 8B A1B is Liquid AI's sparse mixture-of-experts (8B total parameters, ~1B active per token) at q4f16, using the stock `onnx-community/LFM2-8B-A1B-ONNX` export — its **symmetric** QMoE quantization is what lets onnxruntime-web's WebGPU backend run it (the asymmetric/zero-point exports, including the LiquidAI 2.5 build, don't load yet). It's WebGPU-only and ~4.8 GB, so it wants a capable GPU and ~8 GB+ RAM. Multimodal input (images/audio) still goes through Gemma 4.
 
-## Agent tools (Ternary Bonsai + Qwen3 + Gemma 4 models)
+## Agent tools (Ternary Bonsai + Qwen3 + LFM2 + Gemma 4 models)
 
 Tool-capable models have built-in tool calling. The model decides when to use tools based on your question.
 
