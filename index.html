@@ -2433,6 +2433,7 @@
         <div class="send-group">
           <button class="send-btn" id="sendBtn" disabled aria-label="Send" title="Send (offline)">&#9654;</button>
           <button class="search-send-btn" id="searchSendBtn" disabled aria-label="Search and Send" title="Search web + Send (makes an external API call)" style="display:none">&#127760;</button>
+          <button class="search-send-btn" id="researchBtn" aria-label="Deep Research" title="Deep Research — multi-source cited report (makes external API calls)" style="display:none">&#128300;</button>
         </div>
       </div>
     </div>
@@ -4719,6 +4720,7 @@
     const searxngUrlRow = document.getElementById('searxngUrlRow');
     const searchSettingsSection = document.getElementById('searchSettingsSection');
     const searchSendBtn = document.getElementById('searchSendBtn');
+    const researchBtn = document.getElementById('researchBtn');
     let webEnrichedMode = false;
 
     // Restore saved settings
@@ -4734,6 +4736,7 @@
       const isAgent = m && m.agentCapable;
       const configured = isSearchConfigured();
       searchSendBtn.style.display = (configured && isAgent) ? '' : 'none';
+      researchBtn.style.display = (configured && isAgent) ? '' : 'none';
     }
 
     searchProvider.addEventListener('change', () => {
@@ -4757,6 +4760,14 @@
       if (generating) return;
       webEnrichedMode = true;
       sendMessage();
+    });
+
+    // Deep Research button — multi-query → read → cited report
+    researchBtn.addEventListener('click', () => {
+      if (generating) return;
+      const q = chatInput.value.trim();
+      if (!q) { showToast('Type a research question first'); return; }
+      runDeepResearch(q);
     });
 
     updateSearchUI();
@@ -9076,6 +9087,152 @@ self.addEventListener('message', async (e) => {
       chatInput.disabled = false;
       modelSelect.disabled = false;
       chatInput.focus();
+    }
+
+    // ── Deep Research: multi-query web search → read → cited report ──
+    // Self-contained agentic flow (not the single-pass chat path). Mirrors the
+    // planner's proven approach: keep currentAssistantEl null while driving
+    // runPlannerChatTurn so the legacy worker 'token' handler stays dormant and
+    // 'complete' just resolves the runtime promise (no state reset). We own a
+    // bubble for the live trace, then hand the finished report to
+    // finishGeneration() for the source badge + Save-as-MD + history commit.
+    async function runDeepResearch(question) {
+      if (!question || !modelReady || generating) return;
+      if (!isSearchConfigured()) { showToast('Configure a web search provider in Settings first'); return; }
+      const m = MODELS[activeModelKey];
+      if (!m || !m.agentCapable) { showToast('Deep Research needs an agent-capable model'); return; }
+
+      const SUBQUERIES = 4, PER_QUERY = 3, MAX_SOURCES = 10, CONTENT_CHARS = 1000;
+
+      messages.push({ role: 'user', content: question });
+      addUserMessage(question, false);
+      saveChat();
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+
+      const researchEl = addAssistantPlaceholder();
+      const bubble = researchEl.bubble;
+      generating = true;
+      sendBtn.innerHTML = '&#9632;';
+      sendBtn.classList.add('stop');
+      chatInput.disabled = true;
+      modelSelect.disabled = true;
+      researchBtn.disabled = true; searchSendBtn.disabled = true;
+      currentAssistantEl = null; // keep null: legacy worker handler stays dormant
+
+      const genConfig = m.genConfig;
+      const trace = [];
+      const renderTrace = (status) => {
+        bubble.innerHTML =
+          '<div style="font-size:0.85rem">' +
+          '<div style="font-weight:600;color:var(--indigo-500);margin-bottom:6px">' + escapeHtml(status) + '</div>' +
+          (trace.length ? '<ul style="margin:0;padding-left:18px;color:var(--gray-700);line-height:1.7">' +
+            trace.map(t => '<li>' + t + '</li>').join('') + '</ul>' : '') +
+          '</div>';
+        chatArea.scrollTop = chatArea.scrollHeight;
+      };
+      const aborted = () => !generating;
+      const resetUI = () => {
+        generating = false;
+        currentAssistantEl = null;
+        sendBtn.innerHTML = '&#9654;'; sendBtn.classList.remove('stop');
+        sendBtn.disabled = false; searchSendBtn.disabled = false;
+        chatInput.disabled = false; modelSelect.disabled = false; chatInput.focus();
+      };
+
+      try {
+        // 1. Plan sub-queries
+        renderTrace('Planning research…');
+        const planSys = 'You are a research planner. Break the user\'s question into ' + SUBQUERIES +
+          ' focused, diverse web-search queries that together cover it. Return ONLY a JSON array of ' +
+          SUBQUERIES + ' short query strings (3–8 words each). No prose, no numbering.';
+        const planTurn = await runPlannerChatTurn(
+          [{ role: 'system', content: planSys }, { role: 'user', content: question }], false, null, genConfig);
+        if (aborted()) { bubble.innerHTML = renderMarkdown('_Research stopped._'); resetUI(); return; }
+        let queries = [];
+        try {
+          const mt = planTurn.fullText.match(/\[[\s\S]*\]/);
+          if (mt) queries = JSON.parse(mt[0]).filter(q => typeof q === 'string' && q.trim()).map(q => q.trim());
+        } catch {}
+        if (queries.length === 0) queries = [question];
+        queries = queries.slice(0, SUBQUERIES);
+
+        // 2. Search each sub-query, dedup by URL
+        const seen = new Set();
+        const sources = [];
+        for (const q of queries) {
+          if (aborted()) { bubble.innerHTML = renderMarkdown('_Research stopped._'); resetUI(); return; }
+          trace.push('🔍 ' + escapeHtml(q));
+          renderTrace('Searching the web…');
+          let results = [];
+          try { results = await executeWebSearch(q); }
+          catch (e) { trace[trace.length - 1] += ' <span style="color:var(--gray-400)">· failed</span>'; renderTrace('Searching the web…'); continue; }
+          let added = 0;
+          for (const r of results) {
+            if (added >= PER_QUERY || sources.length >= MAX_SOURCES) break;
+            if (!r.url || seen.has(r.url)) continue;
+            seen.add(r.url);
+            sources.push({ title: r.title || r.url, url: r.url, snippet: r.snippet || '', content: r.content || '' });
+            added++;
+          }
+          trace[trace.length - 1] = '🔍 ' + escapeHtml(q) +
+            ' <span style="color:var(--gray-400)">· ' + added + ' result' + (added !== 1 ? 's' : '') + '</span>';
+          renderTrace('Searching the web…');
+        }
+        if (sources.length === 0) {
+          const msg = 'I couldn\'t find any web sources for that — check your search provider in Settings, or try rephrasing.';
+          updateAssistantBubble(bubble, msg);
+          currentAssistantEl = researchEl;
+          finishGeneration(msg, [], true);
+          return;
+        }
+
+        // 3. Read the top source per query for depth (best-effort, parallel)
+        if (aborted()) { bubble.innerHTML = renderMarkdown('_Research stopped._'); resetUI(); return; }
+        renderTrace('Reading sources…');
+        await Promise.all(sources.slice(0, queries.length).map(async (s) => {
+          try {
+            const ext = await fetchAndExtract(s.url, question);
+            if (ext && ext.content && ext.content.length > (s.snippet || '').length) s.content = ext.content;
+          } catch {}
+        }));
+        if (aborted()) { bubble.innerHTML = renderMarkdown('_Research stopped._'); resetUI(); return; }
+
+        // Cache findings in RAG for future offline use (best-effort)
+        if (LocalMind.runtime.embeddingsReady) {
+          embedAndStore(sources.map(s => (s.title || '') + ': ' + (s.snippet || '')).join('\n'), 'finding', 'deep-research').catch(() => {});
+        }
+
+        // 4. Synthesize a cited report
+        renderTrace('Writing the report…');
+        const numbered = sources.map((s, i) =>
+          '[' + (i + 1) + '] ' + (s.title || s.url) + '\nURL: ' + s.url + '\n' +
+          (s.content || s.snippet || '').replace(/\s+/g, ' ').slice(0, CONTENT_CHARS)).join('\n\n');
+        const synthSys =
+          'You are a research analyst. Using ONLY the numbered sources below, write a clear, well-structured ' +
+          'report (markdown headings + bullets where useful) answering the user\'s question. Cite every claim ' +
+          'with its source number like [1], [2]. Do not invent anything not in the sources; if they are ' +
+          'insufficient, say so. End with a short "## Key takeaways" section.\n\nQuestion: ' + question +
+          '\n\nSources:\n' + numbered;
+        const synthTurn = await runPlannerChatTurn(
+          [{ role: 'system', content: synthSys }, { role: 'user', content: 'Write the cited research report now.' }],
+          false, null, genConfig);
+        if (aborted()) { bubble.innerHTML = renderMarkdown('_Research stopped._'); resetUI(); return; }
+        let report = stripToolCallTags(synthTurn.fullText) || '';
+        if (!report.trim()) report = 'The model returned an empty report; the sources are listed below.';
+
+        // 5. Render + commit (finishGeneration adds the "N sources" badge, links, Save-as-MD)
+        updateAssistantBubble(bubble, report);
+        currentAssistantEl = researchEl;
+        finishGeneration(report, sources, true);
+      } catch (e) {
+        console.error('Deep research failed:', e);
+        updateAssistantBubble(bubble, 'Research failed: ' + (e && e.message ? e.message : String(e)));
+        currentAssistantEl = researchEl;
+        finishGeneration(null, [], true);
+      } finally {
+        researchBtn.disabled = false;
+      }
     }
 
     sendBtn.addEventListener('click', () => {
