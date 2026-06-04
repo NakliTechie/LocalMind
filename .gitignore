@@ -8,6 +8,10 @@
 !.gitignore
 !.github
 !.github/**
+!guide/
+!guide/**
+!demo/
+!demo/capture.py
 
 # wrangler files
 .wrangler

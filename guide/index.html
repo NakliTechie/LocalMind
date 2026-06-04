@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="author" content="Chirag Patnaik">
+<title>LocalMind — User guide</title>
+<meta name="description" content="How to use LocalMind: private, in-browser AI with model council, deep research, skills, memory, and on-disk sync.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --ink:#1a1408; --body:#f6f3ec; --panel:#fdfbf4; --row:#ece8de;
+    --line:#ddd6c0; --muted:#7a5a28; --soft:#b89a68; --act:#08184a; --act-hi:#050f30; --act-bg:#d8dceb;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:var(--body); color:var(--ink); font-size:15px; line-height:1.65; padding:28px 16px 90px; }
+  .container { max-width:780px; margin:0 auto; }
+  h1 { font-size:2rem; letter-spacing:-0.03em; font-weight:800; }
+  .lede { font-size:1.05rem; color:var(--muted); margin:6px 0 8px; }
+  .priv { display:inline-block; font-size:0.8rem; font-weight:600; color:var(--act); background:var(--act-bg); border-radius:999px; padding:3px 12px; margin-bottom:26px; }
+  h2 { font-size:1.3rem; margin:38px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+  h3 { font-size:1rem; margin:20px 0 4px; }
+  p { margin:8px 0; }
+  ul { margin:8px 0 8px 22px; } li { margin:3px 0; }
+  code { background:var(--row); padding:1px 6px; border-radius:5px; font-size:0.86em; }
+  kbd { background:var(--panel); border:1px solid var(--line); border-bottom-width:2px; border-radius:5px; padding:1px 6px; font-size:0.82em; font-family:inherit; }
+  figure { margin:14px 0 4px; }
+  figure img { width:100%; border:1px solid var(--line); border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,0.06); display:block; }
+  figcaption { font-size:0.8rem; color:var(--soft); margin-top:6px; text-align:center; }
+  .toc { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 18px; margin:8px 0 4px; }
+  .toc strong { font-size:0.82rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted); }
+  .toc ul { columns:2; margin:8px 0 0 18px; }
+  .toc a { color:var(--act); text-decoration:none; } .toc a:hover { text-decoration:underline; }
+  .note { background:var(--act-bg); border-radius:8px; padding:10px 14px; font-size:0.9rem; margin:12px 0; }
+  a.back { color:var(--act); font-weight:600; text-decoration:none; }
+  footer { margin-top:48px; padding-top:18px; border-top:1px solid var(--line); font-size:0.85rem; color:var(--soft); }
+</style>
+</head>
+<body>
+<div class="container">
+  <p><a class="back" href="../index.html">&larr; Open LocalMind</a></p>
+  <h1>LocalMind &mdash; User guide</h1>
+  <p class="lede">A private AI workspace that runs entirely inside your browser tab.</p>
+  <span class="priv">No server &middot; no API keys required &middot; nothing leaves your device</span>
+
+  <div class="toc">
+    <strong>On this page</strong>
+    <ul>
+      <li><a href="#start">Getting started</a></li>
+      <li><a href="#models">Choosing a model</a></li>
+      <li><a href="#modes">The mode chips</a></li>
+      <li><a href="#compare">Compare (council)</a></li>
+      <li><a href="#research">Deep Research</a></li>
+      <li><a href="#batch">Batch</a></li>
+      <li><a href="#skills">Self-improving skills</a></li>
+      <li><a href="#memory">Memory &amp; documents</a></li>
+      <li><a href="#sync">Sync to a folder</a></li>
+      <li><a href="#privacy">Privacy</a></li>
+    </ul>
+  </div>
+
+  <h2 id="start">Getting started</h2>
+  <p>Open LocalMind and pick a model from the dropdown &mdash; it downloads once (over WebGPU), is cached locally, and from then on runs offline. Type a message and hit <kbd>Enter</kbd>. Everything &mdash; the model, your chats, your memory &mdash; stays on your device.</p>
+  <figure><img src="img/01-overview.jpg" alt="LocalMind chat" loading="lazy"><figcaption>A normal chat &mdash; answers are generated on-device (note the &ldquo;On-device&rdquo; tag).</figcaption></figure>
+
+  <h2 id="models">Choosing a model</h2>
+  <p>Eight models span three trade-offs &mdash; download size, quality, and capability:</p>
+  <ul>
+    <li><strong>Ternary Bonsai 1.7B / 4B / 8B</strong> &mdash; smallest tool-calling models (1.58-bit ternary weights).</li>
+    <li><strong>Qwen3 4B</strong> &mdash; stock 4-bit Qwen3, strong tool calling.</li>
+    <li><strong>LFM2 8B A1B</strong> &mdash; Liquid AI&rsquo;s 8B sparse mixture-of-experts (runs on WebGPU via the symmetric-QMoE export).</li>
+    <li><strong>Gemma 3 1B</strong> &mdash; fast, text-only fallback.</li>
+    <li><strong>Gemma 4 E2B / E4B</strong> &mdash; multimodal (image + audio) + agent.</li>
+  </ul>
+
+  <h2 id="modes">The mode chips</h2>
+  <p>Above the message box is a row of mode chips. They all use the <em>same</em> input and Send button:</p>
+  <ul>
+    <li><strong>🌐 Search</strong> &mdash; web-enrich this one message (a modifier you can combine with chat).</li>
+    <li><strong>🔬 Research</strong>, <strong>⚖ Compare</strong>, <strong>≣ Batch</strong> &mdash; mutually-exclusive actions; tap one, then Send.</li>
+  </ul>
+  <figure><img src="img/02-mode-chips.jpg" alt="Mode chips with Compare selected" loading="lazy"><figcaption>Compare is on, revealing the model picker. Tapping Research/Compare/Batch switches the action.</figcaption></figure>
+
+  <h2 id="compare">Compare &mdash; the model council</h2>
+  <p>Tap <strong>⚖ Compare</strong>, tick 2&ndash;3 models, type one question, and Send. LocalMind loads each model in turn (one at a time &mdash; WebGPU can&rsquo;t hold several at once), collects every answer, then the last model loaded acts as <strong>judge</strong> and picks the best.</p>
+  <figure><img src="img/04-compare.jpg" alt="Model council comparison with a judge verdict" loading="lazy"><figcaption>Two models answer; the indigo card is the judge&rsquo;s verdict.</figcaption></figure>
+
+  <h2 id="research">Deep Research</h2>
+  <p>Tap <strong>🔬 Research</strong> and ask a question. LocalMind drafts several sub-queries, searches the web, reads the top sources, and writes a <strong>cited report</strong> with a sources list. It needs a web-search provider (set one in <a href="#sync">Settings</a>); tapping the chip will offer to open Settings if you haven&rsquo;t.</p>
+  <figure><img src="img/05-research.jpg" alt="Deep Research cited report" loading="lazy"><figcaption>A cited report &mdash; only the search queries touch the network.</figcaption></figure>
+
+  <h2 id="batch">Batch</h2>
+  <p>Tap <strong>≣ Batch</strong> and put one prompt per line (use <kbd>Shift</kbd>+<kbd>Enter</kbd> for new lines). Send runs them in sequence. Turn on <em>Auto-inject {{previous}}</em> to chain each answer into the next prompt.</p>
+
+  <h2 id="skills">Self-improving skills</h2>
+  <p>The agent can save reusable <strong>skills</strong> &mdash; named recipes like &ldquo;cite sources&rdquo; or &ldquo;be concise.&rdquo; Once saved, a relevant skill is retrieved and applied automatically in later chats, so the assistant gets better the more you use it. Skills live in the Memory panel under the <strong>skill</strong> filter.</p>
+  <figure><img src="img/06-skills.jpg" alt="Saved skills in the Memory panel" loading="lazy"><figcaption>Saved skills, auto-applied when relevant.</figcaption></figure>
+
+  <h2 id="memory">Memory &amp; documents</h2>
+  <p>LocalMind keeps a private, on-device memory (a local vector store). The agent can store facts; you can attach <strong>documents</strong> (PDF / DOCX / TXT) via the 📎 button or ingest a whole <strong>Folder</strong>, and they become searchable context. Open <strong>Memory</strong> to browse, filter, search, or clear it.</p>
+  <figure><img src="img/07-memory.jpg" alt="Memory panel" loading="lazy"><figcaption>Everything the assistant remembers &mdash; filterable and fully under your control.</figcaption></figure>
+
+  <h2 id="sync">Sync to a folder (permanent, cross-device)</h2>
+  <p>By default all data lives in this browser. In <strong>Settings &rarr; Data folder sync</strong>, connect a folder and LocalMind mirrors everything &mdash; skills, memory, documents, conversations &mdash; to it as plain files. Point that folder at a git / iCloud / Dropbox directory and your data follows you across devices. <strong>API keys stay in the browser</strong> and are never written to the folder.</p>
+  <figure><img src="img/08-settings.jpg" alt="Settings: web search and data folder sync" loading="lazy"><figcaption>Settings &mdash; web search provider and data-folder sync.</figcaption></figure>
+
+  <h2 id="privacy">Privacy</h2>
+  <p>Models run on your device via WebGPU. Your conversations, memory, and documents never leave your machine. The only thing that touches the network is a <strong>web search</strong> &mdash; and only when you choose Search or Research, using a provider you configure. LocalMind can also be <strong>installed as an app</strong> (look for your browser&rsquo;s install button) and works offline once a model is cached.</p>
+
+  <footer>
+    LocalMind is part of the <a class="back" href="https://naklitechie.github.io/">NakliTechie</a> single-file series. Built by Chirag Patnaik.
+  </footer>
+</div>
+</body>
+</html>

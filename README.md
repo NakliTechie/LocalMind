@@ -2,11 +2,22 @@
 
 A private AI research agent that runs entirely inside your browser. Tool calling, persistent memory, web search, multimodal input — all on-device via WebGPU. No server, no API keys required, no data leaving your device.
 
-**[Try it live](https://naklitechie.github.io/LocalMind)**
+**[Try it live](https://naklitechie.github.io/LocalMind)** · **[User guide](https://naklitechie.github.io/LocalMind/guide/)**
+
+![LocalMind running a chat on-device](guide/img/01-overview.jpg)
 
 ## What it does
 
-LocalMind runs Google's Gemma models directly in your browser tab using WebGPU. Models download once, are cached locally, and run offline from that point on. Your conversations, reasoning, and memories never leave your device. Only web search queries touch the network — and only when you explicitly choose to.
+LocalMind runs open models — **Ternary Bonsai, Qwen3, LFM2, and Gemma** — directly in your browser tab using WebGPU. Models download once, are cached locally, and run offline from that point on. Your conversations, reasoning, and memories never leave your device. Only web search queries touch the network — and only when you explicitly choose to.
+
+**Highlights** — see the **[full guide](https://naklitechie.github.io/LocalMind/guide/)** for screenshots:
+
+- **Model council** — run one prompt through 2–3 models, then a judge picks the best.
+- **Deep Research** — sub-queries → web search → read sources → a cited report, on-device.
+- **Self-improving skills** — the agent saves reusable skills that auto-apply in later chats.
+- **Folder sync** — mirror all data (skills, memory, documents, chats) to a folder you own; syncs across devices, API keys stay local.
+- **Unified input** — Search / Research / Compare / Batch as mode chips on one input.
+- **Installable PWA** — add it to your dock or home screen; works offline.
 
 **Eight models, your choice:**
 

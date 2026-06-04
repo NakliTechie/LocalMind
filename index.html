@@ -1995,11 +1995,11 @@
               <button class="help-tab" data-tab="try">Things to Try</button>
             </div>
             <div class="help-tab-content active" data-tab="about">
-              <p>A private AI research agent running <strong>Gemma</strong> entirely in your browser via WebGPU. Tool calling, persistent memory, and web search &mdash; all on-device.</p>
-              <p>Only your search queries touch the network (and only when you choose to). All reasoning stays on your device.</p>
-              <p>Models are cached after first download &mdash; future visits load instantly.</p>
-              <p><strong>Requirements:</strong> Chrome 113+, Edge 113+, or Firefox 130+ with WebGPU.</p>
-              <div class="help-note">v2.0.0 &middot; Powered by Transformers.js + Google Gemma (Apache 2.0).</div>
+              <p>A private AI workspace running open models (<strong>Bonsai, Qwen3, LFM2, Gemma</strong>) entirely in your browser via WebGPU &mdash; chat, a model council, deep research, skills, memory, and tool calling, all on-device.</p>
+              <p><a href="guide/index.html" target="_blank" rel="noopener"><strong>&#128214; New here? Read the User guide &rarr;</strong></a></p>
+              <p>Only your search queries touch the network (and only when you choose to). All reasoning stays on your device. Models are cached after first download &mdash; future visits load instantly.</p>
+              <p><strong>Requirements:</strong> Chrome 113+ or Edge 113+ (WebGPU).</p>
+              <div class="help-note">v2.0.0 &middot; Powered by Transformers.js &middot; models from Prism ML, Alibaba, Liquid AI &amp; Google.</div>
             </div>
             <div class="help-tab-content" data-tab="models">
               <h4>Available Models</h4>
@@ -5122,7 +5122,7 @@
         for (const c of all) catCounts[c.category] = (catCounts[c.category] || 0) + 1;
 
         // Render pills
-        const CAT_ORDER = ['all', 'fact', 'preference', 'finding', 'document', 'document_summary', 'conversation'];
+        const CAT_ORDER = ['all', 'skill', 'fact', 'preference', 'finding', 'document', 'document_summary', 'conversation'];
         const cats = ['all', ...CAT_ORDER.slice(1).filter(c => catCounts[c])];
         memoryCatPills.innerHTML = '';
         for (const cat of cats) {
