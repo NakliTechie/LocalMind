@@ -2236,6 +2236,16 @@
           <input type="checkbox" id="plannerToggle">
           Multi-step planning <span style="font-weight:400;color:var(--gray-500)">(experimental &mdash; slower but handles complex research tasks better)</span>
         </label>
+        <div class="settings-divider">
+          <label>Data folder sync</label>
+          <div style="font-size:0.72rem;color:var(--gray-500);margin-bottom:6px">Mirror all data (skills, memory, documents, conversations) to a folder on disk &mdash; point it at a git / iCloud / Dropbox folder to keep it permanent and synced across devices. API keys stay in this browser only.</div>
+          <div id="syncFolderStatus" style="font-size:0.8rem;color:var(--gray-700);margin-bottom:6px">Not connected &mdash; data is stored in this browser only.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn-icon" id="syncFolderBtn">Choose folder&hellip;</button>
+            <button class="btn-icon" id="syncFolderReconnect" style="display:none">Reconnect</button>
+            <button class="btn-icon" id="syncFolderDisconnect" style="display:none">Disconnect</button>
+          </div>
+        </div>
         <div class="settings-divider" id="searchSettingsSection" style="display:none">
           <label for="searchProvider">Web search provider</label>
           <select id="searchProvider" class="settings-select">
@@ -3370,6 +3380,7 @@
       const tx = db.transaction('chunks', 'readwrite');
       const store = tx.objectStore('chunks');
       for (const chunk of chunks) store.put(chunk);
+      scheduleSync();
       return new Promise((resolve, reject) => {
         tx.oncomplete = resolve;
         tx.onerror = () => reject(tx.error);
@@ -3390,6 +3401,7 @@
       const db = await openRAGDB();
       const tx = db.transaction('chunks', 'readwrite');
       tx.objectStore('chunks').delete(id);
+      scheduleSync();
       return new Promise((resolve, reject) => {
         tx.oncomplete = resolve;
         tx.onerror = () => reject(tx.error);
@@ -3400,6 +3412,7 @@
       const db = await openRAGDB();
       const tx = db.transaction('chunks', 'readwrite');
       tx.objectStore('chunks').clear();
+      scheduleSync();
       return new Promise((resolve, reject) => {
         tx.oncomplete = resolve;
         tx.onerror = () => reject(tx.error);
@@ -3437,6 +3450,7 @@
         created: now,
         updated: now,
       });
+      scheduleSync();
       return new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
     }
 
@@ -3464,6 +3478,7 @@
       const db = await openRAGDB();
       const tx = db.transaction('conversations', 'readwrite');
       tx.objectStore('conversations').delete(id);
+      scheduleSync();
       return new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
     }
 
@@ -3495,6 +3510,175 @@
       return dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-8);
     }
 
+    // ── Data-folder sync: mirror everything to a user-picked folder ──────
+    // Default = IndexedDB only. If the user connects a folder, LocalMind mirrors
+    // ALL data — memory chunks (skills/facts/docs/conversation memory), chat
+    // conversations, profile, and NON-SECRET settings — into that folder as JSON
+    // snapshots, debounced on every change. Point the folder at a git / iCloud /
+    // Dropbox dir and the learning follows you across devices (SansadSaar's
+    // data-as-files model). API keys stay browser-only (never written to disk).
+    // The handle is persisted so it survives reloads; on startup we re-check
+    // permission and hydrate FROM the folder (folder is the source of truth).
+    let dataFolderHandle = null;     // connected + permission granted
+    let pendingFolderHandle = null;  // stored but needs a click to re-grant permission
+    let suppressSync = false;        // true while hydrating, so restore writes don't re-sync
+    const SYNC_DB = 'localmind_sync';
+    // Non-secret settings to mirror — API keys (lm_search_key) deliberately excluded.
+    const SYNC_SETTINGS_KEYS = ['lm_search_provider', 'lm_searxng_url', 'lm_planner_enabled',
+      'lm_resumable_downloads', 'lm_auto_backup', 'lm_sam_model', 'lm_voice_language', 'lm_api_enabled'];
+
+    function openSyncDB() {
+      return new Promise((resolve, reject) => {
+        const r = indexedDB.open(SYNC_DB, 1);
+        r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains('kv')) r.result.createObjectStore('kv'); };
+        r.onsuccess = () => resolve(r.result);
+        r.onerror = () => reject(r.error);
+      });
+    }
+    async function syncKvSet(key, val) {
+      const db = await openSyncDB();
+      const tx = db.transaction('kv', 'readwrite');
+      tx.objectStore('kv').put(val, key);
+      return new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+    }
+    async function syncKvGet(key) {
+      const db = await openSyncDB();
+      return new Promise((res, rej) => {
+        const rq = db.transaction('kv', 'readonly').objectStore('kv').get(key);
+        rq.onsuccess = () => res(rq.result || null);
+        rq.onerror = () => rej(rq.error);
+      });
+    }
+    async function fsVerifyPermission(handle, readWrite) {
+      const opts = { mode: readWrite ? 'readwrite' : 'read' };
+      if ((await handle.queryPermission(opts)) === 'granted') return true;
+      if ((await handle.requestPermission(opts)) === 'granted') return true;
+      return false;
+    }
+    async function fsWriteFile(dir, name, text) {
+      const fh = await dir.getFileHandle(name, { create: true });
+      const w = await fh.createWritable();
+      await w.write(text);
+      await w.close();
+    }
+    async function fsReadJson(dir, name) {
+      try {
+        const fh = await dir.getFileHandle(name);
+        const t = await (await fh.getFile()).text();
+        return t ? JSON.parse(t) : null;
+      } catch { return null; } // missing/unreadable file → null
+    }
+    function collectSyncSettings() {
+      const s = {};
+      for (const k of SYNC_SETTINGS_KEYS) { const v = localStorage.getItem(k); if (v != null) s[k] = v; }
+      return s;
+    }
+    function applySyncSettings(s) {
+      if (!s) return;
+      for (const k of SYNC_SETTINGS_KEYS) { if (s[k] != null) { try { localStorage.setItem(k, s[k]); } catch {} } }
+    }
+
+    let _syncTimer = null, _syncing = false;
+    function scheduleSync() {
+      if (!dataFolderHandle || suppressSync) return;
+      clearTimeout(_syncTimer);
+      _syncTimer = setTimeout(() => { syncToFolder().catch(e => console.warn('Folder sync failed:', e)); }, 1500);
+    }
+    async function syncToFolder() {
+      if (!dataFolderHandle || _syncing) return;
+      _syncing = true;
+      try {
+        const data = await exportAllData(); // { version, exported, memories, conversations, profile }
+        await fsWriteFile(dataFolderHandle, 'chunks.json', JSON.stringify(data.memories || []));
+        await fsWriteFile(dataFolderHandle, 'conversations.json', JSON.stringify(data.conversations || []));
+        await fsWriteFile(dataFolderHandle, 'profile.json', JSON.stringify(data.profile || {}));
+        await fsWriteFile(dataFolderHandle, 'settings.json', JSON.stringify(collectSyncSettings()));
+        await fsWriteFile(dataFolderHandle, 'localmind.json', JSON.stringify({ app: 'LocalMind', schema: 1, updated: new Date().toISOString() }));
+        try { updateSyncStatus(); } catch {}
+      } finally { _syncing = false; }
+    }
+    async function hydrateFromFolder() {
+      if (!dataFolderHandle) return false;
+      const [chunks, convs, profile, settings] = await Promise.all([
+        fsReadJson(dataFolderHandle, 'chunks.json'),
+        fsReadJson(dataFolderHandle, 'conversations.json'),
+        fsReadJson(dataFolderHandle, 'profile.json'),
+        fsReadJson(dataFolderHandle, 'settings.json'),
+      ]);
+      if (chunks == null && convs == null && profile == null) return false; // empty folder
+      suppressSync = true;
+      try {
+        const db = await openRAGDB();
+        await new Promise((res, rej) => {
+          const tx = db.transaction(['chunks', 'conversations', 'profile'], 'readwrite');
+          tx.objectStore('chunks').clear();
+          tx.objectStore('conversations').clear();
+          for (const c of (chunks || [])) tx.objectStore('chunks').put(c);
+          for (const c of (convs || [])) tx.objectStore('conversations').put(c);
+          if (profile) tx.objectStore('profile').put({ ...profile, key: 'user' });
+          tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+        });
+        applySyncSettings(settings);
+      } finally { suppressSync = false; }
+      return true;
+    }
+    async function connectDataFolder() {
+      if (!window.showDirectoryPicker) { showToast('Folder sync needs a Chromium browser (File System Access API)'); return; }
+      let handle;
+      try { handle = await window.showDirectoryPicker({ mode: 'readwrite', id: 'localmind-data' }); }
+      catch { return; } // user cancelled the picker
+      if (!(await fsVerifyPermission(handle, true))) { showToast('Write permission denied'); return; }
+      const existing = await fsReadJson(handle, 'chunks.json');
+      dataFolderHandle = handle;
+      pendingFolderHandle = null;
+      if (existing != null) {
+        if (!confirm(`"${handle.name}" already has LocalMind data. Load it into this browser? This replaces your current in-browser data.`)) {
+          dataFolderHandle = null; return;
+        }
+        await hydrateFromFolder();
+        showToast(`Loaded data from ${handle.name}`);
+        try { refreshMemoryPanel(); } catch {}
+      } else {
+        await syncToFolder();
+        showToast(`Now mirroring all data to ${handle.name}`);
+      }
+      try { await syncKvSet('dataFolderHandle', handle); } catch {}
+      updateSyncStatus();
+    }
+    async function reconnectDataFolder() {
+      if (!pendingFolderHandle) return;
+      if (!(await fsVerifyPermission(pendingFolderHandle, true))) { showToast('Permission denied'); return; }
+      dataFolderHandle = pendingFolderHandle;
+      pendingFolderHandle = null;
+      await hydrateFromFolder();
+      try { refreshMemoryPanel(); } catch {}
+      updateSyncStatus();
+      showToast(`Reconnected to ${dataFolderHandle.name}`);
+    }
+    async function disconnectDataFolder() {
+      dataFolderHandle = null;
+      pendingFolderHandle = null;
+      try { await syncKvSet('dataFolderHandle', null); } catch {}
+      updateSyncStatus();
+      showToast('Folder sync off — data stays in this browser');
+    }
+    // Restore a persisted folder handle on startup (called from init below).
+    async function initDataFolderSync() {
+      let handle;
+      try { handle = await syncKvGet('dataFolderHandle'); } catch { return; }
+      if (!handle) return;
+      try {
+        if ((await handle.queryPermission({ mode: 'readwrite' })) === 'granted') {
+          dataFolderHandle = handle;
+          await hydrateFromFolder();
+          try { refreshMemoryPanel(); } catch {}
+        } else {
+          pendingFolderHandle = handle; // needs a user click to re-grant
+        }
+      } catch (e) { console.warn('Data-folder restore failed:', e); }
+      try { updateSyncStatus(); } catch {}
+    }
+
     async function searchByVector(queryVec, topK = 5, threshold = 0.3) {
       const chunks = await getAllChunks();
       const scored = chunks.map(c => ({
@@ -3520,6 +3704,7 @@
       const db = await openRAGDB();
       const tx = db.transaction('profile', 'readwrite');
       tx.objectStore('profile').put({ ...profile, key: 'user' });
+      scheduleSync();
       return new Promise((resolve, reject) => {
         tx.oncomplete = resolve;
         tx.onerror = () => reject(tx.error);
@@ -4797,6 +4982,29 @@
     });
     searchApiKey.addEventListener('input', () => localStorage.setItem('lm_search_key', searchApiKey.value));
     searxngUrl.addEventListener('input', () => localStorage.setItem('lm_searxng_url', searxngUrl.value));
+
+    // ── Data-folder sync UI ──────────────────────────────────────
+    const syncFolderStatus     = document.getElementById('syncFolderStatus');
+    const syncFolderBtn        = document.getElementById('syncFolderBtn');
+    const syncFolderReconnect  = document.getElementById('syncFolderReconnect');
+    const syncFolderDisconnect = document.getElementById('syncFolderDisconnect');
+    function updateSyncStatus() {
+      if (!syncFolderStatus) return;
+      if (dataFolderHandle) {
+        syncFolderStatus.innerHTML = `✓ Mirroring all data to <strong>${escapeHtml(dataFolderHandle.name)}</strong> — survives reloads &amp; syncs across devices.`;
+        syncFolderBtn.style.display = 'none'; syncFolderReconnect.style.display = 'none'; syncFolderDisconnect.style.display = '';
+      } else if (pendingFolderHandle) {
+        syncFolderStatus.innerHTML = `Folder <strong>${escapeHtml(pendingFolderHandle.name)}</strong> needs permission again — click Reconnect.`;
+        syncFolderBtn.style.display = 'none'; syncFolderReconnect.style.display = ''; syncFolderDisconnect.style.display = '';
+      } else {
+        syncFolderStatus.textContent = 'Not connected — data is stored in this browser only.';
+        syncFolderBtn.style.display = ''; syncFolderReconnect.style.display = 'none'; syncFolderDisconnect.style.display = 'none';
+      }
+    }
+    syncFolderBtn.addEventListener('click', connectDataFolder);
+    syncFolderReconnect.addEventListener('click', reconnectDataFolder);
+    syncFolderDisconnect.addEventListener('click', disconnectDataFolder);
+    initDataFolderSync();
 
     // SAM model selector
     const samModelSelect = document.getElementById('samModelSelect');
