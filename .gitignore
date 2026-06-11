@@ -12,6 +12,7 @@
 !guide/**
 !demo/
 !demo/capture.py
+!demo/capture-gif.py
 !demo/make-montage.py
 
 # wrangler files
