@@ -18,11 +18,11 @@ ACCENT = (8, 24, 74)       # --act  indigo
 # Panels: (file, caption) — narrative order: how you drive it -> council -> research -> skills -> memory -> settings
 PANELS = [
     ("02-mode-chips.jpg", "Unified input · mode chips"),
+    ("10-image.jpg",      "On-device image generation"),
+    ("11-diffuse.jpg",    "Text diffusion · watch it denoise"),
     ("04-compare.jpg",    "Model council + judge"),
     ("05-research.jpg",   "Deep Research (cited)"),
-    ("06-skills.jpg",     "Self-improving skills"),
     ("07-memory.jpg",     "On-device memory"),
-    ("08-settings.jpg",   "Web search & folder sync"),
 ]
 
 # Layout
@@ -70,7 +70,7 @@ f_cap   = font(True, 27)
 
 d.text((MARGIN, MARGIN - 2), "LocalMind", font=f_title, fill=ACCENT)
 d.text((MARGIN, MARGIN + 78),
-       "Private, in-browser AI — model council · deep research · skills · memory · on-disk sync",
+       "Private, in-browser AI — chat · image generation · text diffusion · research · council · memory",
        font=f_sub, fill=MUTED)
 # privacy pill (right-aligned)
 pill = "No server · no API keys · nothing leaves your device"

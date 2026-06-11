@@ -17,7 +17,7 @@ the screenshots look exactly like the live app.
 Outputs: guide/img/NN-slug.jpg  +  guide/CAPTURE-LOG.md
 """
 
-import time
+import os, time
 from datetime import datetime
 from pathlib import Path
 from playwright.sync_api import sync_playwright, ConsoleMessage
@@ -25,7 +25,7 @@ from playwright.sync_api import sync_playwright, ConsoleMessage
 ROOT     = Path(__file__).resolve().parent.parent
 IMG_DIR  = ROOT / "guide" / "img"
 LOG_PATH = ROOT / "guide" / "CAPTURE-LOG.md"
-BASE_URL = "http://localhost:8081/"
+BASE_URL = os.environ.get("LM_URL", "http://localhost:8081/")
 VIEWPORT = {"width": 1280, "height": 860}
 
 # --- Make the shell look model-ready (no model actually loads headless) -------
@@ -115,6 +115,37 @@ RESEARCH_JS = r"""
 }
 """
 
+DIFFUSE_JS = r"""
+() => {
+  const c = document.getElementById('chipDiffuse'); if (c) { c.disabled = false; c.click(); }
+  const m = s => '<span class="tok-mask">' + '▒'.repeat(s) + '</span> ';
+  const t = (w, fresh) => '<span' + (fresh ? ' class="tok-fresh"' : '') + '>' + w + ' </span>';
+  const fog =
+    m(3) + m(4) + m(2) + t('rest,') + '<br>' +
+    t('the') + t('sun') + m(5) + t('over') + t('the') + t('swell') + '<br>' +
+    t('light') + t('learns', true) + t('the') + t('cold') + m(3);
+  document.getElementById('chatArea').insertAdjacentHTML('beforeend',
+    '<div class="msg user"><div class="msg-bubble"><span>Write a haiku about the ocean at dawn.</span></div></div>' +
+    '<div class="msg assistant"><div class="msg-bubble"><div class="fog">' + fog + '</div></div></div>');
+  const p = document.getElementById('diffuseProgressText'); if (p) p.textContent = 'Denoising — block 2/3 · forward 10';
+}
+"""
+
+IMAGE_JS = r"""
+() => {
+  const c = document.getElementById('chipImage'); if (c) { c.disabled = false; c.click(); }
+  const src = '/guide/img/sample-gen.jpg';
+  const prompt = 'a red panda reading by a window, soft morning light, watercolor';
+  document.getElementById('chatArea').insertAdjacentHTML('beforeend',
+    '<div class="msg user"><div class="msg-bubble"><span>' + prompt + '</span></div></div>' +
+    '<div class="msg assistant"><div class="msg-bubble"><img class="gen-image" src="' + src + '" alt="">' +
+    '<div class="gen-image-meta">512×512 · seed 481523903 · 12.0s · “' + prompt + '”</div></div></div>');
+  const g = document.getElementById('imageGallery'); if (g) g.innerHTML = '<img src="' + src + '">';
+  const m = document.getElementById('imageModelMeta'); if (m) m.textContent = '1 image this session';
+  const p = document.getElementById('imageProgressText'); if (p) p.textContent = 'Done in 12.0s. Adjust controls and Send again, or re-roll for a new seed.';
+}
+"""
+
 CHIPS_JS = r"""
 () => { document.getElementById('chipCompare').click();
   const cbs=[...document.querySelectorAll('#compareModelList input.compare-cb')];
@@ -141,6 +172,8 @@ VIEWS = [
     ("07", "memory",     MEMORY_JS,   500, True),
     ("08", "settings",   SETTINGS_JS, 400, True),
     ("09", "help",       HELP_JS,     400, True),
+    ("10", "image",      IMAGE_JS,    800, True),
+    ("11", "diffuse",    DIFFUSE_JS,  500, True),
 ]
 
 CHECK_JS = "() => ({ ok: document.body.innerText.trim().length > 40, len: document.body.innerText.trim().length })"
