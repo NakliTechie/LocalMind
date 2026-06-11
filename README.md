@@ -15,8 +15,9 @@ LocalMind runs open models — **Ternary Bonsai, Qwen3, LFM2, and Gemma** — di
 - **Model council** — run one prompt through 2–3 models, then a judge picks the best.
 - **Deep Research** — sub-queries → web search → read sources → a cited report, on-device.
 - **Self-improving skills** — the agent saves reusable skills that auto-apply in later chats.
+- **Image generation** — text-to-image diffusion in the tab (FLUX.2-Klein 4B, ternary/1-bit, via WebGPU). The chat model is freed while it runs; one click brings it back. No server, no API key.
 - **Folder sync** — mirror all data (skills, memory, documents, chats) to a folder you own; syncs across devices, API keys stay local.
-- **Unified input** — Search / Research / Compare / Batch as mode chips on one input.
+- **Unified input** — Search / Research / Compare / Batch / Image as mode chips on one input.
 - **Installable PWA** — add it to your dock or home screen; works offline.
 
 **Eight models, your choice:**
