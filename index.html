@@ -1728,6 +1728,10 @@
     .image-btn { font: inherit; font-size: 0.78rem; padding: 4px 12px; border: 1px solid var(--gray-200); border-radius: 9999px; background: var(--white); color: var(--gray-800); cursor: pointer; }
     .image-btn:hover:not(:disabled) { border-color: var(--indigo-500); color: var(--indigo-500); }
     .image-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    /* Diffuse mode — the "fog lifting" reveal */
+    .fog { font-family: ui-monospace, 'SF Mono', monospace; font-size: 0.92rem; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+    .fog .tok-mask { color: var(--gray-400); opacity: 0.5; }
+    .fog .tok-fresh { color: var(--indigo-500); background: rgba(8,24,74,0.10); border-radius: 3px; }
 
     .batch-textarea {
       width: 100%;
@@ -2450,6 +2454,7 @@
         <button class="mode-chip" id="chipCompare" title="Run the prompt through 2&ndash;3 models, then a judge">&#9878; Compare</button>
         <button class="mode-chip" id="chipBatch" title="Run one prompt per line, in sequence">&#8801; Batch</button>
         <button class="mode-chip" id="chipImage" title="Generate an image from a prompt — on-device diffusion (WebGPU)">&#127912; Image</button>
+        <button class="mode-chip" id="chipDiffuse" title="Experimental: masked-diffusion text generation — watch the answer denoise (WebGPU)">&#127787;&#65039; Diffuse</button>
         <span class="mode-hint" id="modeHint"></span>
       </div>
       <div class="mode-extra" id="comparePanel">
@@ -2496,6 +2501,21 @@
           <div class="progress-text" id="imageProgressText">Type a prompt below and Send. First run downloads the model (~3&nbsp;GB, cached after). Best on Chrome/Edge.</div>
         </div>
         <div class="image-gallery" id="imageGallery"></div>
+      </div>
+      <div class="mode-extra" id="diffusePanel">
+        <div class="mode-extra-head">Masked-diffusion text &middot; <span class="memory-count">Qwen3 0.6B (~1.4&nbsp;GB)</span></div>
+        <div class="image-controls">
+          <label>New tokens <input type="number" id="diffMaxNew" value="128" min="16" step="32" style="width:72px"></label>
+          <label>Steps <input type="number" id="diffSteps" value="128" min="4" step="16" style="width:72px"></label>
+          <label>Block <input type="number" id="diffBlock" value="32" min="8" step="8" style="width:64px"></label>
+          <label title="Fast-dLLM: unmask every token above this confidence per step (0 = off, use the fixed step count)">Conf&ge; <input type="number" id="diffConf" value="0" min="0" max="1" step="0.05" style="width:64px"></label>
+        </div>
+        <div class="progress-section visible" id="diffuseProgressSection" style="border-top:none;background:transparent;padding:8px 0 0">
+          <div class="progress-bar">
+            <div class="progress-fill" id="diffuseProgressFill" style="background:linear-gradient(90deg,#3b4261,#7aa2f7)"></div>
+          </div>
+          <div class="progress-text" id="diffuseProgressText">Type a prompt below and Send. First run downloads ~1.4&nbsp;GB (cached after). Watch the answer denoise out of the fog. Best on Chrome/Edge.</div>
+        </div>
       </div>
 
       <!-- Input -->
@@ -6685,6 +6705,337 @@ self.onmessage = async (ev) => {
   }
 };
 reply({ type: 'worker-ready' });
+</script>
+  <!-- On-device masked-diffusion TEXT engine (kohra: Qwen3-0.6B MDLM via ORT-web WebGPU).
+       Inlined verbatim from NakliTechie/kohra (kohra.js). Inert text block —
+       createDiffusionWorker() reads it into a Blob module worker on demand. -->
+  <script type="text/worker" id="kohraEngineSrc">// kohra — masked-diffusion text generation in the browser, transformers.js-style.
+//
+// Drop-in usage (this is the whole snippet):
+//
+//   import { pipeline } from './kohra.js';
+//   const gen = await pipeline('text-diffusion', {
+//     model: '../models/qwen3-0.6b-mdlm-onnx/model_fp16_fused.onnx',
+//     tokenizer: 'dllm-hub/Qwen3-0.6B-diffusion-mdlm-v0.1',
+//   });
+//   const { text } = await gen('Lily runs 12 km/h for 4 hours. How far in 8 hours?');
+//
+// Or the class form, with a per-step callback for the "fog lifting" visualization:
+//
+//   import { DiffusionLM } from './kohra.js';
+//   const lm = await DiffusionLM.from_pretrained({ model, tokenizer });
+//   const out = await lm.generate(prompt, { steps: 128, onStep: s => render(s) });
+//
+// The model graph is a loop-free Qwen3-MDLM ONNX export (input_ids -> logits over the
+// full canvas); the whole denoising loop lives here in JS. Algorithm spec + the export
+// recipe (fused fp16 for WebGPU) are in reference/MDLM-algorithm.md.
+
+import * as ortDefault from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.26.0/dist/ort.webgpu.min.mjs';
+import { AutoTokenizer } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+
+// Tiny-A2D Qwen3-0.6B MDLM token ids (tokenizer.mask_token_id / <|im_end|>).
+export const MASK_ID = 151669n;
+export const EOS_ID = 151645n;
+
+const GEN_DEFAULTS = {
+  maxNewTokens: 128,
+  steps: 128,
+  blockSize: 32,
+  temperature: 0,        // 0 => deterministic argmax (the verified path)
+  remasking: 'low_confidence', // or 'random'
+  threshold: null,       // Fast-dLLM: if set (e.g. 0.9), unmask ALL block positions with
+                         // confidence >= threshold per step (min 1) instead of a fixed
+                         // count → fewer forwards when the model is confident. null = use `steps`.
+  chatTemplate: true,    // wrap prompt in Qwen3 ChatML + generation prompt
+  stripThink: false,     // drop a leading empty <think>…</think> block from the result
+  onStep: null,          // ({ x, P, fresh, block, numBlocks, forward, elapsedMs }) => void
+  yieldEvery: 1,         // await a frame every N forwards (keeps the UI responsive)
+};
+
+// Cooperative yield that releases the event loop so the UI can paint, WITHOUT blocking
+// on the compositor. requestAnimationFrame stalls when the tab is hidden or the
+// compositor isn't ticking (and would freeze the whole denoise loop); a MessageChannel
+// macrotask always fires and isn't background-throttled like setTimeout.
+const yieldToEventLoop = (() => {
+  if (typeof MessageChannel === 'undefined') {
+    return () => new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const ch = new MessageChannel();
+  const queue = [];
+  ch.port1.onmessage = () => { queue.shift()?.(); };
+  return () => new Promise((resolve) => { queue.push(resolve); ch.port2.postMessage(0); });
+})();
+
+// Per-block reveal counts for the linear-alpha (MDLM) scheduler: deterministically
+// round remaining/(steps-i) per step, skip zero entries. Mirrors dllm
+// get_num_transfer_tokens and scripts/sample_onnx.py.
+function transferSchedule(nMasked, steps) {
+  const ks = [];
+  let remaining = nMasked;
+  for (let i = 0; i < steps && remaining > 0; i++) {
+    const k = Math.min(Math.round(remaining / (steps - i)), remaining);
+    if (k > 0) { ks.push(k); remaining -= k; }
+  }
+  return ks;
+}
+
+export class DiffusionLM {
+  constructor({ session, tokenizer, ort, maskId = MASK_ID, eosId = EOS_ID }) {
+    this.session = session;
+    this.tokenizer = tokenizer;
+    this.ort = ort;
+    this.maskId = maskId;
+    this.eosId = eosId;
+  }
+
+  // transformers.js-style loader. `model` is a URL to the .onnx graph; external data
+  // (<name>.onnx.data / _data) is auto-detected. `tokenizer` is an HF id or local path.
+  static async from_pretrained({
+    model,
+    tokenizer,
+    ort,                       // explicit onnxruntime-web instance (optional)
+    ortVersion,                // …or an npm version string to dynamic-import (optional)
+    executionProviders = ['webgpu'],
+    // The fused-fp16 graph keeps boundary casts that trip ORT-web's runtime
+    // SimplifiedLayerNormFusion, so default to disabled (see reference doc).
+    graphOptimizationLevel = 'disabled',
+    maskId = MASK_ID,
+    eosId = EOS_ID,
+  } = {}) {
+    if (!model) throw new Error('kohra: `model` URL is required');
+    if (!ort) ort = ortVersion
+      ? await import(`https://cdn.jsdelivr.net/npm/onnxruntime-web@${ortVersion}/dist/ort.webgpu.min.mjs`)
+      : ortDefault;
+    const tk = await AutoTokenizer.from_pretrained(tokenizer ?? model);
+
+    const opts = { executionProviders, graphOptimizationLevel };
+    // External-data path must match the location string recorded inside the proto,
+    // which is the file's basename + suffix.
+    const base = model.split('/').pop();
+    for (const suffix of ['.data', '_data']) {
+      try {
+        const dataUrl = model + suffix;
+        if ((await fetch(dataUrl, { method: 'HEAD' })).ok) {
+          opts.externalData = [{ path: base + suffix, data: dataUrl }];
+          break;
+        }
+      } catch { /* no external data at this suffix */ }
+    }
+
+    const session = await ort.InferenceSession.create(model, opts);
+    return new DiffusionLM({ session, tokenizer: tk, ort, maskId, eosId });
+  }
+
+  // Build prompt token ids. transformers.js doesn't fetch chat_template.jinja for this
+  // repo, so ChatML is constructed by hand (verified vs Python apply_chat_template).
+  encodePrompt(text, chatTemplate = true) {
+    const s = chatTemplate
+      ? `<|im_start|>user\n${text}<|im_end|>\n<|im_start|>assistant\n`
+      : text;
+    return [...this.tokenizer(s, { add_special_tokens: false }).input_ids.data].map(Number);
+  }
+
+  decode(ids, { skip_special_tokens = true } = {}) {
+    return this.tokenizer.decode(ids.map(Number), { skip_special_tokens });
+  }
+
+  // Run the masked-diffusion denoising loop. `prompt` is a string or an array of token
+  // ids. Returns { text, tokenIds, tokens, forwards, seconds, tokensPerSecond, x, P }.
+  async generate(prompt, options = {}) {
+    const cfg = { ...GEN_DEFAULTS, ...options };
+    const ort = this.ort;
+    const MASK = this.maskId, EOS = this.eosId;
+
+    const promptIds = Array.isArray(prompt)
+      ? prompt.map(Number)
+      : this.encodePrompt(prompt, cfg.chatTemplate);
+    const P = promptIds.length;
+    const T = P + cfg.maxNewTokens;
+
+    const x = new BigInt64Array(T).fill(EOS);
+    promptIds.forEach((t, i) => { x[i] = BigInt(t); });
+    for (let i = P; i < T; i++) x[i] = MASK;
+
+    const numBlocks = Math.ceil(cfg.maxNewTokens / cfg.blockSize);
+    const stepsPerBlock = Math.ceil(cfg.steps / numBlocks);
+
+    let forward = 0;
+    const t0 = performance.now();
+
+    const inBlockMasked = (start, end) => {
+      let n = 0; for (let i = start; i < end; i++) if (x[i] === MASK) n++; return n;
+    };
+
+    for (let b = 0; b < numBlocks; b++) {
+      const start = P + b * cfg.blockSize;
+      const end = Math.min(start + cfg.blockSize, T);
+      const nMasked = inBlockMasked(start, end);
+      if (nMasked === 0) continue;
+
+      // Fixed-steps mode precomputes per-step reveal counts; threshold (Fast-dLLM) mode
+      // loops until the block is clear, revealing however many clear the bar each step.
+      const schedule = cfg.threshold == null ? transferSchedule(nMasked, stepsPerBlock) : null;
+      let step = 0;
+
+      while (inBlockMasked(start, end) > 0) {
+        if (schedule && step >= schedule.length) break;
+        const out = await this.session.run({
+          input_ids: new ort.Tensor('int64', x.slice(), [1, T]),
+        });
+        forward++;
+        const logits = out.logits.data;       // Float32Array, [T * V] (ORT upcasts fp16)
+        const V = out.logits.dims[2];
+
+        // Score every masked position in the current block. temperature 0 = plain argmax;
+        // >0 = Gumbel-max (f64). Confidence is always softmax(logits)[token].
+        const cand = [];
+        for (let p = start; p < end; p++) {
+          if (x[p] !== MASK) continue;
+          const off = p * V;
+          let maxL = -Infinity;
+          for (let v = 0; v < V; v++) { const l = logits[off + v]; if (l > maxL) maxL = l; }
+          let best = 0, bestScore = -Infinity, sumExp = 0;
+          for (let v = 0; v < V; v++) {
+            const l = logits[off + v];
+            sumExp += Math.exp(l - maxL);
+            const score = cfg.temperature > 0
+              ? l - cfg.temperature * Math.log(-Math.log(Math.random() + 1e-12) + 1e-12)
+              : l;
+            if (score > bestScore) { bestScore = score; best = v; }
+          }
+          const conf = cfg.remasking === 'random'
+            ? Math.random()
+            : Math.exp(logits[off + best] - maxL) / sumExp;
+          cand.push({ p, tok: best, conf });
+        }
+
+        // Pick which positions to commit this step.
+        let commit;
+        if (cfg.threshold == null) {
+          cand.sort((a, b2) => b2.conf - a.conf);
+          commit = cand.slice(0, schedule[step]);
+        } else {
+          commit = cand.filter((c) => c.conf >= cfg.threshold);
+          if (commit.length === 0) {        // guarantee progress: take the single best
+            let top = cand[0];
+            for (const c of cand) if (c.conf > top.conf) top = c;
+            commit = [top];
+          }
+        }
+        step++;
+
+        const fresh = new Set();
+        for (const { p, tok } of commit) { x[p] = BigInt(tok); fresh.add(p); }
+
+        cfg.onStep?.({
+          x, P, fresh, block: b, numBlocks, forward,
+          elapsedMs: performance.now() - t0,
+        });
+        if (cfg.yieldEvery && forward % cfg.yieldEvery === 0) {
+          await yieldToEventLoop();
+        }
+      }
+    }
+
+    const seconds = (performance.now() - t0) / 1000;
+
+    // Trim at the first EOS after the prompt.
+    let genEnd = T;
+    for (let i = P; i < T; i++) if (x[i] === EOS) { genEnd = i; break; }
+    const tokenIds = [...x.slice(P, genEnd)].map(Number);
+    let text = this.decode(tokenIds, { skip_special_tokens: true });
+    if (cfg.stripThink) text = stripThinkBlock(text);
+
+    return {
+      text,
+      tokenIds,
+      tokens: tokenIds.length,
+      forwards: forward,
+      seconds,
+      tokensPerSecond: tokenIds.length / seconds,
+      x,
+      P,
+    };
+  }
+}
+
+// Drop a leading Qwen3 <think>…</think> block (often empty) from generated text.
+function stripThinkBlock(text) {
+  return text.replace(/^\s*<think>[\s\S]*?<\/think>\s*/, '');
+}
+
+// transformers.js-style convenience factory.
+export async function pipeline(task, options = {}) {
+  if (task !== 'text-diffusion') {
+    throw new Error(`kohra: unsupported task '${task}' (only 'text-diffusion')`);
+  }
+  const lm = await DiffusionLM.from_pretrained(options);
+  const fn = (prompt, genOptions) => lm.generate(prompt, genOptions);
+  fn.model = lm;
+  return fn;
+}
+
+export default DiffusionLM;
+
+/* === LocalMind <-> kohra (masked-diffusion text) worker protocol ===
+ * kohra.js above exports DiffusionLM (ORT-web WebGPU + a Transformers.js
+ * tokenizer, both from CDN). This drives it and streams the "fog lifting"
+ * reveal back over postMessage. */
+let __lm = null, __busy = false;
+function __reply(m){ self.postMessage(m); }
+function __esc(s){ return String(s).replace(/[&<>]/g, function(c){ return c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'; }); }
+function __fogHtml(lm, x, P, fresh){
+  var html = '';
+  for (var i = P; i < x.length; i++){
+    var t = x[i];
+    if (t === lm.maskId){ html += '<span class="tok-mask">▒</span>'; continue; }
+    var s = '';
+    try { s = __esc(lm.tokenizer.decode([Number(t)])); } catch (e) { s = ''; }
+    html += fresh.has(i) ? ('<span class="tok-fresh">' + s + '</span>') : ('<span>' + s + '</span>');
+  }
+  return html;
+}
+self.onmessage = async function(ev){
+  var m = ev.data || {};
+  try {
+    if (m.type === 'probe'){
+      var webgpu = !!(self.navigator && self.navigator.gpu), adapter = false;
+      if (webgpu){ try { adapter = !!(await navigator.gpu.requestAdapter()); } catch (e) { adapter = false; } }
+      __reply({ type: 'probe:result', webgpu: webgpu, adapter: adapter });
+    } else if (m.type === 'load'){
+      if (__lm){ __reply({ type: 'loaded', already: true }); return; }
+      __lm = await DiffusionLM.from_pretrained({ model: m.model, tokenizer: m.tokenizer });
+      __reply({ type: 'loaded' });
+    } else if (m.type === 'generate'){
+      if (!__lm) throw new Error('diffusion model not loaded');
+      if (__busy) throw new Error('a generation is already in progress');
+      __busy = true;
+      var res = await __lm.generate(m.prompt, {
+        maxNewTokens: Number(m.maxNewTokens || 128),
+        steps: Number(m.steps || 128),
+        blockSize: Number(m.blockSize || 32),
+        temperature: 0,
+        threshold: (m.threshold && m.threshold > 0) ? Number(m.threshold) : null,
+        chatTemplate: true,
+        stripThink: true,
+        onStep: function(s){
+          __reply({ type: 'diffusion-step', html: __fogHtml(__lm, s.x, s.P, s.fresh), forward: s.forward, block: s.block, numBlocks: s.numBlocks, elapsedMs: s.elapsedMs });
+        }
+      });
+      __busy = false;
+      __reply({ type: 'diffusion-done', text: res.text, tokens: res.tokens, forwards: res.forwards, seconds: res.seconds, tps: res.tokensPerSecond });
+    } else if (m.type === 'destroy'){
+      __lm = null; __busy = false;
+      __reply({ type: 'destroyed' });
+    } else {
+      __reply({ type: 'error', message: 'unknown message type: ' + m.type });
+    }
+  } catch (err) {
+    __busy = false;
+    __reply({ type: 'error', message: String((err && err.message) || err) });
+  }
+};
+__reply({ type: 'worker-ready' });
 </script>
   <script type="module">
     // ── WebGPU check ────────────────────────────────────────────
@@ -11224,6 +11575,61 @@ ${JSON.stringify({ name, result })}
         this._imageActiveModel = null;
       },
 
+      // --- diffusion text generation (kohra, separate WebGPU worker) ---
+      // Masked-diffusion LM. Like the image engine: independent worker, one
+      // WebGPU-heavy worker resident at a time, terminate() frees its device.
+      _diffusionWorker: null,
+      _diffusionActiveModel: null,
+      loadDiffusionModel(cfg) {
+        if (this._diffusionWorker && this._diffusionActiveModel === cfg.model) return Promise.resolve();
+        this.unloadDiffusion();
+        const w = createDiffusionWorker();
+        this._diffusionWorker = w;
+        return new Promise((resolve, reject) => {
+          const onMsg = (e) => {
+            const d = e.data || {};
+            if (d.type === 'loaded') {
+              w.removeEventListener('message', onMsg);
+              this._diffusionActiveModel = cfg.model;
+              resolve();
+            } else if (d.type === 'error') {
+              w.removeEventListener('message', onMsg);
+              reject(new Error(d.message || 'Diffusion model load failed'));
+            }
+          };
+          w.addEventListener('message', onMsg);
+          w.addEventListener('error', (ev) => { reject(new Error(ev.message || 'Diffusion worker startup failed')); });
+          w.postMessage({ type: 'load', model: cfg.model, tokenizer: cfg.tokenizer });
+        });
+      },
+      generateDiffusion(opts) {
+        const w = this._diffusionWorker;
+        if (!w) return Promise.reject(new Error('Diffusion model not loaded'));
+        return new Promise((resolve, reject) => {
+          const onMsg = (e) => {
+            const d = e.data || {};
+            if (d.type === 'diffusion-step') {
+              if (typeof opts.onStep === 'function') { try { opts.onStep(d); } catch {} }
+            } else if (d.type === 'diffusion-done') {
+              w.removeEventListener('message', onMsg);
+              resolve(d);
+            } else if (d.type === 'error') {
+              w.removeEventListener('message', onMsg);
+              reject(new Error(d.message || 'Diffusion generation failed'));
+            }
+          };
+          w.addEventListener('message', onMsg);
+          w.postMessage({ type: 'generate', prompt: opts.prompt, maxNewTokens: opts.maxNewTokens, steps: opts.steps, blockSize: opts.blockSize, threshold: opts.threshold });
+        });
+      },
+      unloadDiffusion() {
+        if (this._diffusionWorker) {
+          try { this._diffusionWorker.terminate(); } catch {}
+          this._diffusionWorker = null;
+        }
+        this._diffusionActiveModel = null;
+      },
+
       // --- chat ---------------------------------------------------
       // Returns an async iterator that yields:
       //   { type: 'token', text }
@@ -11743,6 +12149,22 @@ self.addEventListener('message', async (e) => {
       const w = new Worker(url, { type: 'module' });
       w.addEventListener('error', (e) => {
         console.error('Image worker error:', e.message);
+      });
+      return w;
+    }
+
+    // ── Diffusion-text worker factory (kohra / Qwen3-0.6B MDLM, ORT-web WebGPU) ──
+    // Reads the inert #kohraEngineSrc block (kohra.js + its postMessage protocol).
+    // It imports onnxruntime-web + the Transformers.js tokenizer from CDN itself.
+    function createDiffusionWorker() {
+      const src = document.getElementById('kohraEngineSrc');
+      const code = src ? src.textContent : '';
+      if (!code) throw new Error('diffusion engine source missing');
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url, { type: 'module' });
+      w.addEventListener('error', (e) => {
+        console.error('Diffusion worker error:', e.message);
       });
       return w;
     }
@@ -13753,8 +14175,22 @@ self.addEventListener('message', async (e) => {
     const imageReroll       = document.getElementById('imageReroll');
     let lastImagePrompt = '';   // remembered for the re-roll button
     let imageCount = 0;         // images generated this session
-    let imageBusy = false;        // a diffusion run is in flight (no mid-step interrupt)
-    let lastChatModelKey = null;  // chat model suspended to free VRAM for the diffusion model
+    let imageBusy = false;        // an image run is in flight (no mid-step interrupt)
+    let lastChatModelKey = null;  // chat model suspended to free VRAM for a gen-mode model
+    // Diffuse-mode refs + state (masked-diffusion text via a separate WebGPU worker)
+    const chipDiffuse         = document.getElementById('chipDiffuse');
+    const diffusePanel        = document.getElementById('diffusePanel');
+    const diffMaxNew          = document.getElementById('diffMaxNew');
+    const diffSteps           = document.getElementById('diffSteps');
+    const diffBlock           = document.getElementById('diffBlock');
+    const diffConf            = document.getElementById('diffConf');
+    const diffuseProgressFill = document.getElementById('diffuseProgressFill');
+    const diffuseProgressText = document.getElementById('diffuseProgressText');
+    let diffuseBusy = false;
+    const DIFFUSION_MODEL = {
+      model: 'https://huggingface.co/naklitechie/Qwen3-0.6B-diffusion-mdlm-ONNX/resolve/main/onnx/model_fp16_fused.onnx',
+      tokenizer: 'naklitechie/Qwen3-0.6B-diffusion-mdlm-ONNX',
+    };
 
     function refreshModeUI() {
       chipSearch.classList.toggle('active', searchOn);
@@ -13762,24 +14198,29 @@ self.addEventListener('message', async (e) => {
       chipCompare.classList.toggle('active', activeMode === 'compare');
       chipBatch.classList.toggle('active', activeMode === 'batch');
       chipImage.classList.toggle('active', activeMode === 'image');
+      chipDiffuse.classList.toggle('active', activeMode === 'diffuse');
       comparePanel.classList.toggle('open', activeMode === 'compare');
       batchPanel.classList.toggle('open', activeMode === 'batch');
       imagePanel.classList.toggle('open', activeMode === 'image');
+      diffusePanel.classList.toggle('open', activeMode === 'diffuse');
       if (activeMode === 'batch') chatInput.placeholder = 'One prompt per line — Shift+Enter for newlines, then Send…';
       else if (activeMode === 'compare') chatInput.placeholder = 'Ask once — every ticked model answers, then a judge picks…';
       else if (activeMode === 'research') chatInput.placeholder = 'Ask a research question…';
       else if (activeMode === 'image') chatInput.placeholder = 'Describe an image to generate…';
+      else if (activeMode === 'diffuse') chatInput.placeholder = 'Ask — watch the answer denoise…';
       else chatInput.placeholder = 'Type a message…';
       modeHint.textContent =
         activeMode === 'batch' ? 'Each line runs as its own prompt, in sequence.' :
         activeMode === 'research' ? 'Searches the web, reads sources, writes a cited report.' :
         activeMode === 'image' ? 'On-device diffusion — frees the chat model while active.' :
+        activeMode === 'diffuse' ? 'Masked-diffusion text — the answer fills in non-linearly. Frees the chat model.' :
         (activeMode === 'chat' && searchOn) ? 'This message will be web-enriched.' : '';
     }
     function setExclusiveMode(mode) {
       const prev = activeMode;
       activeMode = (activeMode === mode) ? 'chat' : mode;
       if (prev === 'image' && activeMode !== 'image') onLeaveImageMode();
+      if (prev === 'diffuse' && activeMode !== 'diffuse') onLeaveDiffuseMode();
       refreshModeUI();
     }
     function needsSearchOrConfigure(what) {
@@ -13794,17 +14235,20 @@ self.addEventListener('message', async (e) => {
     chipCompare.addEventListener('click', () => { if (!generating) setExclusiveMode('compare'); });
     chipBatch.addEventListener('click', () => { if (!generating) setExclusiveMode('batch'); });
     chipImage.addEventListener('click', () => { if (!generating) setExclusiveMode('image'); });
+    chipDiffuse.addEventListener('click', () => { if (!generating) setExclusiveMode('diffuse'); });
     imageStepsInput.addEventListener('input', () => { imageStepsVal.textContent = imageStepsInput.value; });
     imageReroll.addEventListener('click', () => { if (generating || !lastImagePrompt) return; imageSeedInput.value = ''; runImageGen(lastImagePrompt); });
-    // Image mode needs WebGPU — disable the chip gracefully where it's unavailable.
+    // Image + Diffuse modes need WebGPU — disable the chips gracefully where it's unavailable.
     (async () => {
       let ok = !!(navigator.gpu);
       if (ok) { try { ok = !!(await navigator.gpu.requestAdapter()); } catch (e) { ok = false; } }
       if (!ok) {
-        chipImage.disabled = true;
-        chipImage.style.opacity = '0.45';
-        chipImage.style.cursor = 'not-allowed';
-        chipImage.title = 'Image generation needs WebGPU — use Chrome or Edge (chrome://flags/#enable-unsafe-webgpu).';
+        for (const chip of [chipImage, chipDiffuse]) {
+          chip.disabled = true;
+          chip.style.opacity = '0.45';
+          chip.style.cursor = 'not-allowed';
+          chip.title = 'Needs WebGPU — use Chrome or Edge (chrome://flags/#enable-unsafe-webgpu).';
+        }
       }
     })();
     chipSearch.addEventListener('click', () => { if (generating) return; if (!searchOn && !needsSearchOrConfigure('Web search')) return; searchOn = !searchOn; refreshModeUI(); });
@@ -13914,7 +14358,79 @@ self.addEventListener('message', async (e) => {
       try { LocalMind.runtime.unloadImage(); } catch {}
       imageProgressFill.style.width = '0%';
       imageProgressText.textContent = 'Type a prompt below and Send. First run downloads the model (~3GB, cached after). Best on Chrome/Edge.';
+      maybeRestoreChat();
+    }
+
+    // Restore the chat model that a gen mode suspended — but not when hopping
+    // straight between the two gen modes (image <-> diffuse), to avoid churn.
+    function maybeRestoreChat() {
+      if (activeMode === 'image' || activeMode === 'diffuse') return;
       if (lastChatModelKey && !modelReady) { const k = lastChatModelKey; lastChatModelKey = null; loadModel(k); }
+    }
+
+    // ── Diffuse: masked-diffusion text generation (kohra) ───────
+    async function ensureDiffusionModel() {
+      if (LocalMind.runtime._diffusionWorker && LocalMind.runtime._diffusionActiveModel === DIFFUSION_MODEL.model) return;
+      if (activeModelKey) lastChatModelKey = activeModelKey;
+      try { LocalMind.runtime.unload(); } catch {}
+      worker = null; modelReady = false;
+      try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch {}
+      diffuseProgressFill.style.width = '35%';
+      diffuseProgressText.textContent = 'Loading diffusion LM… first run downloads ~1.4GB + compiles WebGPU shaders (cached after).';
+      await LocalMind.runtime.loadDiffusionModel(DIFFUSION_MODEL);
+      diffuseProgressFill.style.width = '100%';
+      diffuseProgressText.textContent = 'Model ready.';
+    }
+
+    async function runDiffuseGen(prompt) {
+      if (generating) return;
+      generating = true; diffuseBusy = true;
+      sendBtn.innerHTML = '&#9632;'; sendBtn.classList.add('stop');
+      addUserMessage(prompt, false);
+      chatInput.value = '';
+      const ph = addAssistantPlaceholder();
+      ph.bubble.innerHTML = '<span class="gen-image-meta">Preparing…</span>';
+      try {
+        await ensureDiffusionModel();
+        const res = await LocalMind.runtime.generateDiffusion({
+          prompt,
+          maxNewTokens: parseInt(diffMaxNew.value, 10) || 128,
+          steps: parseInt(diffSteps.value, 10) || 128,
+          blockSize: parseInt(diffBlock.value, 10) || 32,
+          threshold: parseFloat(diffConf.value) || 0,
+          onStep: (s) => {
+            ph.bubble.innerHTML = '<div class="fog">' + s.html + '</div>';
+            diffuseProgressText.textContent = `Denoising — block ${s.block + 1}/${s.numBlocks} · forward ${s.forward} · ${(s.elapsedMs / 1000).toFixed(1)}s`;
+            chatArea.scrollTop = chatArea.scrollHeight;
+          },
+        });
+        updateAssistantBubble(ph.bubble, res.text || '(empty)');
+        const meta = document.createElement('div');
+        meta.className = 'gen-image-meta';
+        meta.textContent = `${res.tokens} tokens · ${res.forwards} forwards · ${res.seconds.toFixed(1)}s · ${res.tps.toFixed(1)} tok/s`;
+        ph.bubble.appendChild(meta);
+        chatArea.scrollTop = chatArea.scrollHeight;
+        diffuseProgressText.textContent = `Done — ${res.tps.toFixed(1)} tok/s. Ask again.`;
+      } catch (e) {
+        const emsg = (e && e.message) || String(e);
+        ph.bubble.innerHTML = '';
+        const er = document.createElement('div');
+        er.className = 'gen-image-meta';
+        er.textContent = 'Diffusion generation failed: ' + emsg;
+        ph.bubble.appendChild(er);
+        diffuseProgressText.textContent = 'Failed — ' + emsg;
+        showToast('Diffusion failed: ' + emsg);
+      } finally {
+        generating = false; diffuseBusy = false;
+        sendBtn.innerHTML = '&#9654;'; sendBtn.classList.remove('stop');
+      }
+    }
+
+    function onLeaveDiffuseMode() {
+      try { LocalMind.runtime.unloadDiffusion(); } catch {}
+      diffuseProgressFill.style.width = '0%';
+      diffuseProgressText.textContent = 'Type a prompt below and Send. First run downloads ~1.4GB (cached after). Watch the answer denoise out of the fog. Best on Chrome/Edge.';
+      maybeRestoreChat();
     }
 
     function dispatchSend() {
@@ -13928,13 +14444,14 @@ self.addEventListener('message', async (e) => {
       }
       if (activeMode === 'batch') { runBatchInline(); return; }
       if (activeMode === 'image') { if (!q) { showToast('Describe an image to generate'); return; } runImageGen(q); return; }
+      if (activeMode === 'diffuse') { if (!q) { showToast('Type a prompt'); return; } runDiffuseGen(q); return; }
       if (searchOn) webEnrichedMode = true;
       sendMessage();
     }
 
     sendBtn.addEventListener('click', () => {
       if (generating) {
-        if (imageBusy) return; // diffusion runs to completion (a few steps) — no mid-run stop
+        if (imageBusy || diffuseBusy) return; // gen runs to completion — no mid-run stop
         // Stop generation — interrupt worker, let complete handler resolve the promise.
         // Set generating=false so the agentic loop knows to exit after awaiting.
         worker.postMessage({ type: 'stop' });
