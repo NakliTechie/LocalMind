@@ -1713,6 +1713,9 @@
     .mode-chip:hover { border-color: var(--indigo-500); color: var(--indigo-500); }
     .mode-chip.active { background: var(--indigo-500); color: #fff; border-color: var(--indigo-500); }
     .mode-hint { font-size: 0.72rem; color: var(--gray-400); margin-left: 4px; }
+    /* Separates input modes (Search/Research/Compare/Batch) from on-device
+       generation engines (Image/Diffuse) — different kinds of thing. */
+    .mode-divider { width: 1px; height: 16px; background: var(--gray-200); margin: 0 4px; flex: none; align-self: center; }
     .mode-extra { display: none; padding: 8px 16px 0; }
     .mode-extra.open { display: block; }
     .mode-extra-head { font-size: 0.78rem; color: var(--gray-600); margin-bottom: 4px; }
@@ -2453,6 +2456,7 @@
         <button class="mode-chip" id="chipResearch" title="Deep research &rarr; multi-source cited report">&#128300; Research</button>
         <button class="mode-chip" id="chipCompare" title="Run the prompt through 2&ndash;3 models, then a judge">&#9878; Compare</button>
         <button class="mode-chip" id="chipBatch" title="Run one prompt per line, in sequence">&#8801; Batch</button>
+        <span class="mode-divider" aria-hidden="true"></span>
         <button class="mode-chip" id="chipImage" title="Generate an image from a prompt — on-device diffusion (WebGPU)">&#127912; Image</button>
         <button class="mode-chip" id="chipDiffuse" title="Experimental: masked-diffusion text generation — watch the answer denoise (WebGPU)">&#127787;&#65039; Diffuse</button>
         <span class="mode-hint" id="modeHint"></span>
