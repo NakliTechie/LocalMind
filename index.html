@@ -1085,6 +1085,12 @@
     }
 
     .settings-panel.open { display: block; }
+    /* Settings sub-tabs */
+    .settings-tabs { display: flex; gap: 2px; margin-bottom: 12px; border-bottom: 1px solid var(--gray-200); }
+    .settings-tab-btn { background: transparent; border: none; border-bottom: 2px solid transparent; padding: 7px 13px; margin-bottom: -1px; font: inherit; font-size: 0.82rem; color: var(--gray-500); cursor: pointer; }
+    .settings-tab-btn:hover { color: var(--gray-800); }
+    .settings-tab-btn.active { color: var(--indigo-500); border-bottom-color: var(--indigo-500); font-weight: 600; }
+    .s-tab-hidden { display: none !important; }
 
     /* API chip next to the model selector — only visible when the
        window.localmind API is enabled in Settings. Flashes on each call. */
@@ -2259,6 +2265,13 @@
 
       <!-- Settings (system prompt + thinking toggle) -->
       <div class="settings-panel" id="settingsPanel">
+        <div class="settings-tabs" id="settingsTabs">
+          <button class="settings-tab-btn active" data-tab="general" type="button">General</button>
+          <button class="settings-tab-btn" data-tab="models" type="button">Models</button>
+          <button class="settings-tab-btn" data-tab="tools" type="button">Tools</button>
+          <button class="settings-tab-btn" data-tab="data" type="button">Data</button>
+        </div>
+        <div class="settings-group" data-tab="general">
         <label for="systemPrompt">System prompt (optional)</label>
         <textarea id="systemPrompt" placeholder="e.g. You are a helpful coding assistant."></textarea>
         <label class="toggle-row hidden" id="thinkingRow">
@@ -2269,7 +2282,8 @@
           <input type="checkbox" id="plannerToggle">
           Multi-step planning <span style="font-weight:400;color:var(--gray-500)">(experimental &mdash; slower but handles complex research tasks better)</span>
         </label>
-        <div class="settings-divider">
+        </div>
+        <div class="settings-divider" data-tab="data">
           <label>Data folder sync</label>
           <div style="font-size:0.72rem;color:var(--gray-500);margin-bottom:6px">Mirror all data (skills, memory, documents, conversations) to a folder on disk &mdash; point it at a git / iCloud / Dropbox folder to keep it permanent and synced across devices. API keys stay in this browser only.</div>
           <div id="syncFolderStatus" style="font-size:0.8rem;color:var(--gray-700);margin-bottom:6px">Not connected &mdash; data is stored in this browser only.</div>
@@ -2279,7 +2293,7 @@
             <button class="btn-icon" id="syncFolderDisconnect" style="display:none">Disconnect</button>
           </div>
         </div>
-        <div class="settings-divider" id="searchSettingsSection" style="display:none">
+        <div class="settings-divider" id="searchSettingsSection" data-tab="tools" style="display:none">
           <label for="searchProvider">Web search provider</label>
           <select id="searchProvider" class="settings-select">
             <option value="none">None (offline only)</option>
@@ -2296,7 +2310,7 @@
             <input type="text" id="searxngUrl" class="settings-input" placeholder="https://searx.example.com">
           </div>
         </div>
-        <div class="settings-divider" id="samSettingsSection" style="display:none">
+        <div class="settings-divider" id="samSettingsSection" data-tab="models" style="display:none">
           <label for="samModelSelect">Segmentation model (SAM)</label>
           <select id="samModelSelect" class="settings-select">
             <option value="Xenova/slimsam-50-uniform">SlimSAM 50 &middot; ~10 MB (fastest)</option>
@@ -2308,11 +2322,11 @@
             Loaded on first use. Gemma calls this when you ask it to segment, outline, or identify objects in attached images.
           </div>
         </div>
-        <label class="toggle-row" style="border-top:1px solid var(--gray-200);padding-top:10px;margin-top:10px">
+        <label class="toggle-row" data-tab="data" style="border-top:1px solid var(--gray-200);padding-top:10px;margin-top:10px">
           <input type="checkbox" id="autoBackupToggle">
           Auto-download backup on New Chat
         </label>
-        <div class="settings-divider">
+        <div class="settings-divider" data-tab="models">
           <label>Model cache</label>
           <div id="cacheInfo" style="font-size:0.75rem;color:var(--gray-500);margin-top:4px">Loading...</div>
           <label class="toggle-row" style="padding-top:8px">
@@ -2320,7 +2334,7 @@
             Resumable downloads <span style="font-weight:400;color:var(--gray-500)">(5 MB chunks cached in IndexedDB; interrupted downloads resume from the last chunk)</span>
           </label>
         </div>
-        <div class="settings-divider">
+        <div class="settings-divider" data-tab="general">
           <label for="voiceLanguageSelect">Voice to text language <span style="font-weight:400;color:var(--gray-500)">(Whisper &mdash; leaving as English improves accuracy on short clips)</span></label>
           <select id="voiceLanguageSelect" class="settings-select">
             <option value="en">English</option>
@@ -2337,7 +2351,7 @@
             <option value="ko">Korean</option>
           </select>
         </div>
-        <div class="settings-divider">
+        <div class="settings-divider" data-tab="models">
           <label>Custom models <span style="font-weight:400;color:var(--gray-500)">(causal LMs with ONNX exports on Hugging Face)</span></label>
           <div style="display:flex;gap:6px;margin-top:4px">
             <input type="text" id="customModelInput" class="settings-input" placeholder="owner/repo e.g. onnx-community/Llama-3.2-1B-Instruct" style="flex:1">
@@ -2350,7 +2364,7 @@
             custom models are not yet supported. Added models appear in the model selector.
           </div>
         </div>
-        <div class="settings-divider">
+        <div class="settings-divider" data-tab="tools">
           <label>Custom tools <span style="font-weight:400;color:var(--gray-500)">(agent-capable models; HTTP POST to your endpoint)</span></label>
           <textarea id="customToolInput" class="settings-input" rows="6" placeholder='{
   "name": "my_tool",
@@ -2370,7 +2384,7 @@
             collide with a built-in.
           </div>
         </div>
-        <div class="settings-divider">
+        <div class="settings-divider" data-tab="models">
           <label>Local model endpoint <span style="font-weight:400;color:var(--gray-500)">(OpenAI-compatible local server — Ollama, LM Studio, llama.cpp, Atomic Chat)</span></label>
           <div style="display:flex;gap:6px;margin-top:4px">
             <input type="text" id="endpointUrlInput" class="settings-input" placeholder="http://localhost:11434/v1" style="flex:1">
@@ -2382,7 +2396,7 @@
             Presets: Ollama <code>:11434/v1</code> &middot; LM Studio <code>:1234/v1</code> &middot; llama.cpp <code>:8080/v1</code> &middot; Atomic <code>:1337/v1</code>.
           </div>
         </div>
-        <div class="settings-divider">
+        <div class="settings-divider" data-tab="tools">
           <label>MCP servers <span style="font-weight:400;color:var(--gray-500)">(Streamable HTTP transport; tools discovered via JSON-RPC <code>tools/list</code>)</span></label>
           <div style="display:flex;gap:6px;margin-top:4px">
             <input type="text" id="mcpUrlInput" class="settings-input" placeholder="https://mcp.example.com" style="flex:1">
@@ -2397,7 +2411,7 @@
             accept JSON-RPC 2.0 requests at the given URL. Connections re-established on page load.
           </div>
         </div>
-        <div class="settings-divider">
+        <div class="settings-divider" data-tab="tools">
           <label>JavaScript API <span style="font-weight:400;color:var(--gray-500)">(experimental)</span></label>
           <label class="toggle-row" style="padding-top:4px">
             <input type="checkbox" id="apiEnabledToggle">
@@ -8308,6 +8322,21 @@ __reply({ type: 'worker-ready' });
     const clearBtn = document.getElementById('clearBtn');
     const settingsBtn = document.getElementById('settingsBtn');
     const settingsPanel = document.getElementById('settingsPanel');
+    // ── Settings sub-tabs ──────────────────────────────────────
+    // Each settings section (direct child of #settingsPanel) carries data-tab;
+    // showing a tab toggles `.s-tab-hidden` (display:none !important) on the rest.
+    // The !important lets the conditional sections (search/SAM) keep their own
+    // inline-display show/hide logic WITHIN their tab.
+    let activeSettingsTab = 'general';
+    function setSettingsTab(tab) {
+      activeSettingsTab = tab;
+      settingsPanel.querySelectorAll('#settingsTabs .settings-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+      settingsPanel.querySelectorAll(':scope > [data-tab]').forEach(el => el.classList.toggle('s-tab-hidden', el.dataset.tab !== tab));
+    }
+    settingsPanel.querySelectorAll('#settingsTabs .settings-tab-btn').forEach(b => {
+      b.addEventListener('click', () => setSettingsTab(b.dataset.tab));
+    });
+    setSettingsTab('general');
     const systemPrompt = document.getElementById('systemPrompt');
     const statusBadge = document.getElementById('statusBadge');
     const statusSpinner = document.getElementById('statusSpinner');
