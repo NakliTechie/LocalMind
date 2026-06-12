@@ -2522,6 +2522,9 @@
           <option value="gemma3-1b">Gemma 3 1B &middot; Fast (~760 MB)</option>
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
+          <option value="smollm2-360m-gguf">SmolLM2 360M &middot; GGUF (~270 MB)</option>
+          <option value="llama32-1b-gguf">Llama 3.2 1B &middot; GGUF (~810 MB)</option>
+          <option value="qwen25-1.5b-gguf">Qwen2.5 1.5B &middot; GGUF (~1.1 GB)</option>
         </select>
       </div>
 
@@ -7116,6 +7119,84 @@ self.onmessage = async function(ev){
 };
 __reply({ type: 'worker-ready' });
 </script>
+
+  <!-- wllama worker: in-browser GGUF inference (llama.cpp → WASM). Speaks the
+       SAME postMessage protocol as the ONNX chat worker (progress/ready/token/
+       complete/error) so the runtime adapter + attachWorkerHandlers() +
+       generateOnce()'s default path drive it unchanged. WebGPU when available
+       (~48 tok/s on a 360M), single-thread CPU/WASM otherwise (~2 tok/s but
+       needs no WebGPU / SharedArrayBuffer — the "works everywhere" path). -->
+  <script type="text/worker" id="wllamaWorkerSrc">
+import { Wllama } from 'https://cdn.jsdelivr.net/npm/@wllama/wllama@3.4.1/esm/index.js';
+
+// wllama reads document.baseURI during model load; a Web Worker has no
+// `document`. Stub the single property it needs (set at module-eval time,
+// before any onmessage handler runs, so it's present when load is called).
+if (typeof self.document === 'undefined') self.document = { baseURI: self.location.href };
+
+const WASM = { 'default': 'https://cdn.jsdelivr.net/npm/@wllama/wllama@3.4.1/esm/wasm/wllama.wasm' };
+let wllama = null;
+let abortController = null;
+let stopFlag = false;
+
+const post = (m) => self.postMessage(m);
+
+self.onmessage = async (e) => {
+  const d = e.data || {};
+  try {
+    if (d.type === 'load') {
+      wllama = new Wllama(WASM, { logger: { debug() {}, log() {}, warn() {}, error(m) { console.error('[wllama]', m); } } });
+      let gpu = false;
+      try { gpu = await wllama.isSupportWebGPU(); } catch (_) { gpu = false; }
+      post({ type: 'progress', data: { status: 'initiate', file: 'model.gguf' } });
+      await wllama.loadModelFromUrl(d.modelId, {
+        n_ctx: d.contextSize || 4096,
+        n_gpu_layers: gpu ? 999 : 0,
+        progressCallback: ({ loaded, total }) => post({ type: 'progress', data: { status: 'progress_total', file: 'model.gguf', loaded, total } }),
+      });
+      post({ type: 'ready', backend: gpu ? 'webgpu' : 'cpu' });
+    } else if (d.type === 'generate') {
+      if (!wllama) { post({ type: 'error', message: 'wllama model not loaded' }); return; }
+      stopFlag = false;
+      const cfg = d.generationConfig || {};
+      const msgs = (d.messages || []).map((m) => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content
+          : Array.isArray(m.content) ? m.content.filter((b) => b && b.type === 'text').map((b) => b.text).join('\n')
+          : String(m.content == null ? '' : m.content),
+      }));
+      abortController = new AbortController();
+      try {
+        const stream = await wllama.createChatCompletion({
+          messages: msgs,
+          stream: true,
+          max_tokens: cfg.max_new_tokens || cfg.max_tokens || 1024,
+          temperature: cfg.temperature != null ? cfg.temperature : 0.7,
+          top_p: cfg.top_p != null ? cfg.top_p : 0.9,
+          top_k: cfg.top_k != null ? cfg.top_k : 40,
+          abortSignal: abortController.signal,
+        });
+        for await (const chunk of stream) {
+          if (stopFlag) break;
+          const t = chunk && chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content;
+          if (t) post({ type: 'token', token: t });
+        }
+      } catch (err) {
+        const s = String((err && err.message) || err);
+        if (!(stopFlag || s.toLowerCase().includes('abort'))) throw err;
+      }
+      post({ type: 'complete' });
+    } else if (d.type === 'stop') {
+      stopFlag = true;
+      if (abortController) { try { abortController.abort(); } catch (_) {} }
+    } else if (d.type === 'unload') {
+      if (wllama) { try { await wllama.exit(); } catch (_) {} wllama = null; }
+    }
+  } catch (err) {
+    post({ type: 'error', message: (err && err.message) || String(err) });
+  }
+};
+  </script>
   <script type="module">
     // ── WebGPU check ────────────────────────────────────────────
     const hasWebGPU = !!navigator.gpu;
@@ -7236,6 +7317,47 @@ __reply({ type: 'worker-ready' });
         agentCapable: true,
         contextSize: 12288,
         genConfig: { temperature: 0.7, top_k: 40, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.1 },
+      },
+
+      // ── In-browser GGUF (wllama / llama.cpp compiled to WASM) ───
+      // backend:'wllama' → loaded by the wllama worker, not the ONNX path.
+      // `id` is a direct GGUF URL. WebGPU-accelerated when available
+      // (~48 tok/s on a 360M), single-thread CPU/WASM otherwise (~2 tok/s,
+      // but needs no WebGPU). Small instruct models the GGUF ecosystem ships
+      // without ONNX exports. genConfig keys map to wllama's
+      // max_tokens/temperature/top_p/top_k in the worker.
+      'smollm2-360m-gguf': {
+        id: 'https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf',
+        label: 'SmolLM2 360M · GGUF',
+        backend: 'wllama',
+        size: '~270 MB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 4096,
+        genConfig: { temperature: 0.3, top_k: 40, top_p: 0.9, max_new_tokens: 1024 },
+      },
+      'llama32-1b-gguf': {
+        id: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf',
+        label: 'Llama 3.2 1B · GGUF',
+        backend: 'wllama',
+        size: '~810 MB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 8192,
+        genConfig: { temperature: 0.6, top_k: 40, top_p: 0.9, max_new_tokens: 1024 },
+      },
+      'qwen25-1.5b-gguf': {
+        id: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf',
+        label: 'Qwen2.5 1.5B · GGUF',
+        backend: 'wllama',
+        size: '~1.1 GB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 8192,
+        genConfig: { temperature: 0.7, top_k: 20, top_p: 0.8, max_new_tokens: 1024 },
       },
     };
 
@@ -11649,10 +11771,15 @@ ${JSON.stringify({ name, result })}
           this._worker = null;
         }
 
-        const w = createWorker();
+        // wllama (in-browser GGUF) uses its own worker but speaks the same
+        // protocol, so everything below — the ready/progress/error promise,
+        // _getWorker(), attachWorkerHandlers(), generateOnce() — is shared.
+        const isWllama = options.backend === 'wllama';
+        const w = isWllama ? createWllamaWorker() : createWorker();
         this._worker = w;
         this._activeModelId = modelId;
         this._activeCaps = caps;
+        this._backend = isWllama ? 'wllama' : 'webgpu';
 
         const promise = new Promise((resolve, reject) => {
           let settled = false;
@@ -11679,8 +11806,12 @@ ${JSON.stringify({ name, result })}
             cleanup();
             reject(new Error(ev.message || 'Worker startup failed'));
           });
-          const resumable = localStorage.getItem('lm_resumable_downloads') !== '0';
-          w.postMessage({ type: 'load', modelId, dtype, modelType, resumable });
+          if (isWllama) {
+            w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0 });
+          } else {
+            const resumable = localStorage.getItem('lm_resumable_downloads') !== '0';
+            w.postMessage({ type: 'load', modelId, dtype, modelType, resumable });
+          }
         });
 
         return promise;
@@ -12357,6 +12488,23 @@ self.addEventListener('message', async (e) => {
       const w = new Worker(url, { type: 'module' });
       w.addEventListener('error', (e) => {
         console.error('Image worker error:', e.message);
+      });
+      return w;
+    }
+
+    // ── wllama worker factory (in-browser GGUF via llama.cpp WASM) ──
+    // Reads the inert #wllamaWorkerSrc block (it imports wllama from CDN
+    // itself). Speaks the ONNX chat worker protocol, so it slots straight
+    // into the runtime adapter + attachWorkerHandlers() with no special path.
+    function createWllamaWorker() {
+      const src = document.getElementById('wllamaWorkerSrc');
+      const code = src ? src.textContent : '';
+      if (!code) throw new Error('wllama worker source missing');
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url, { type: 'module' });
+      w.addEventListener('error', (e) => {
+        console.error('wllama worker error:', e.message);
       });
       return w;
     }
@@ -13282,6 +13430,8 @@ self.addEventListener('message', async (e) => {
       LocalMind.runtime.loadModel(m.id, {
         dtype: m.dtype,
         modelType: m.type,
+        backend: m.backend,          // 'wllama' → adapter uses the wllama worker
+        contextSize: m.contextSize,  // n_ctx for the GGUF load
         capabilities: {
           text: true,
           image: !!m.multimodal,
