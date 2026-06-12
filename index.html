@@ -1089,6 +1089,7 @@
     .settings-tabs { display: flex; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--gray-200); }
     .settings-tab-btn.active { background: var(--indigo-100); color: var(--indigo-600); font-weight: 600; }
     .s-tab-hidden { display: none !important; }
+    .mobile-tip { display: none; }
 
     /* API chip next to the model selector — only visible when the
        window.localmind API is enabled in Settings. Flashes on each call. */
@@ -1997,6 +1998,14 @@
       .attachment-chip { width: 48px; height: 48px; }
       .attachment-chip.video-chip { width: 80px; height: 52px; }
       .attachment-chip.audio-chip { width: 150px; height: 44px; }
+      /* Toolbar: model picker to its own full-width row, buttons wrap, bigger taps */
+      .actions-bar { flex-wrap: wrap; gap: 6px; }
+      .actions-bar .model-select { order: -1; flex: 1 1 100%; max-width: 100%; }
+      .actions-bar .flex-spacer { display: none; }
+      .btn-icon { padding: 7px 10px; font-size: 0.8rem; }
+      .mode-chip { padding: 6px 11px; }
+      .settings-tab-btn { padding: 7px 12px; }
+      .mobile-tip { display: block; }
     }
   </style>
 </head>
@@ -2239,6 +2248,7 @@
           <h2>Private AI, right in your browser</h2>
           <p>Models run entirely on your device via WebGPU. Nothing is sent to any server.</p>
           <p style="font-size:0.78rem;color:var(--gray-400);margin-top:4px">Pick a Ternary Bonsai or Qwen3 model for tool calling and memory; pick a Gemma 4 model for multimodal (image + audio) input.<br>Web search requires an API key (Tavily, Brave) or a self-hosted SearXNG instance.</p>
+          <p class="mobile-tip" style="font-size:0.8rem;color:var(--indigo-600);margin:10px auto 0;max-width:340px;padding:9px 12px;background:var(--indigo-100);border-radius:8px;line-height:1.5">&#128241; On a phone, big models won&rsquo;t fit. Point LocalMind at your computer&rsquo;s <strong>Ollama / LM&nbsp;Studio</strong> (Settings &rarr; Models &rarr; Local endpoint) and use any model over your network.</p>
         </div>
       </div>
 
@@ -2460,7 +2470,7 @@
         <button class="btn-icon" id="shareBtn" title="Share conversation (encrypted link)">Share</button>
         <button class="btn-icon" id="batchBtn" style="display:none" title="Batch (now in the mode chips above the input)">Batch</button>
         <button class="btn-icon" id="compareBtn" style="display:none" title="Compare (now in the mode chips above the input)">Compare</button>
-        <span style="flex:1"></span>
+        <span class="flex-spacer" style="flex:1"></span>
         <span class="api-chip" id="apiChip" title="window.localmind API is enabled — click to view activity log">API</span>
         <select class="model-select" id="modelSelect" title="Choose model">
           <option value="bonsai-ternary-1.7b" selected>Ternary Bonsai 1.7B &middot; Agent (~470 MB)</option>
@@ -13277,10 +13287,25 @@ self.addEventListener('message', async (e) => {
     }
 
     // ── Model selector ──────────────────────────────────────────
+    // On phones, warn before loading a model too big for typical mobile memory.
+    function modelSizeGB(m) {
+      const match = m && m.size && String(m.size).match(/([\d.]+)\s*(GB|MB)/i);
+      if (!match) return 0;
+      const n = parseFloat(match[1]);
+      return /gb/i.test(match[2]) ? n : n / 1024;
+    }
+    function maybeWarnMobileModel(key) {
+      const m = MODELS[key];
+      if (!m || m.backend === 'endpoint' || !isMobileDevice()) return;
+      if (modelSizeGB(m) > 1.5) {
+        showToast('Large model (' + m.size + ') — may not fit in phone memory. A smaller model or a local endpoint (Settings → Models) is more reliable on mobile.');
+      }
+    }
     modelSelect.addEventListener('change', () => {
       if (generating) return;
       const key = modelSelect.value;
       if (key === activeModelKey && modelReady) return;
+      maybeWarnMobileModel(key);
       loadModel(key);
     });
 
@@ -14500,16 +14525,24 @@ self.addEventListener('message', async (e) => {
     chipDiffuse.addEventListener('click', () => { if (!generating) setExclusiveMode('diffuse'); });
     imageStepsInput.addEventListener('input', () => { imageStepsVal.textContent = imageStepsInput.value; });
     imageReroll.addEventListener('click', () => { if (generating || !lastImagePrompt) return; imageSeedInput.value = ''; runImageGen(lastImagePrompt); });
-    // Image + Diffuse modes need WebGPU — disable the chips gracefully where it's unavailable.
+    // Phone/tablet check (touch + small viewport) — used to gate heavy capabilities.
+    function isMobileDevice() {
+      return window.matchMedia('(pointer: coarse)').matches && window.matchMedia('(max-width: 820px)').matches;
+    }
+    // Image + Diffuse need WebGPU AND a desktop-class GPU + memory (3.3 / 1.4 GB models).
+    // Disable the chips where WebGPU is unavailable, or on a phone (won't realistically run).
     (async () => {
       let ok = !!(navigator.gpu);
       if (ok) { try { ok = !!(await navigator.gpu.requestAdapter()); } catch (e) { ok = false; } }
-      if (!ok) {
+      const mob = isMobileDevice();
+      if (!ok || mob) {
         for (const chip of [chipImage, chipDiffuse]) {
           chip.disabled = true;
           chip.style.opacity = '0.45';
           chip.style.cursor = 'not-allowed';
-          chip.title = 'Needs WebGPU — use Chrome or Edge (chrome://flags/#enable-unsafe-webgpu).';
+          chip.title = mob
+            ? 'Needs a desktop GPU + memory (multi-GB model) — open LocalMind on a computer.'
+            : 'Needs WebGPU — use Chrome or Edge (chrome://flags/#enable-unsafe-webgpu).';
         }
       }
     })();
