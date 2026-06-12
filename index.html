@@ -2371,6 +2371,18 @@
           </div>
         </div>
         <div class="settings-divider">
+          <label>Local model endpoint <span style="font-weight:400;color:var(--gray-500)">(OpenAI-compatible local server — Ollama, LM Studio, llama.cpp, Atomic Chat)</span></label>
+          <div style="display:flex;gap:6px;margin-top:4px">
+            <input type="text" id="endpointUrlInput" class="settings-input" placeholder="http://localhost:11434/v1" style="flex:1">
+            <button class="btn-icon" id="endpointConnectBtn">Connect</button>
+          </div>
+          <div id="endpointStatus" style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5;min-height:1em"></div>
+          <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
+            Run bigger / faster models without the WebGPU limit &mdash; inference runs on your machine, nothing leaves your device. Discovered models appear in the model menu above. The server must allow CORS for this origin (Ollama: set <code>OLLAMA_ORIGINS</code>; LM Studio: enable CORS).
+            Presets: Ollama <code>:11434/v1</code> &middot; LM Studio <code>:1234/v1</code> &middot; llama.cpp <code>:8080/v1</code> &middot; Atomic <code>:1337/v1</code>.
+          </div>
+        </div>
+        <div class="settings-divider">
           <label>MCP servers <span style="font-weight:400;color:var(--gray-500)">(Streamable HTTP transport; tools discovered via JSON-RPC <code>tools/list</code>)</span></label>
           <div style="display:flex;gap:6px;margin-top:4px">
             <input type="text" id="mcpUrlInput" class="settings-input" placeholder="https://mcp.example.com" style="flex:1">
@@ -9081,6 +9093,65 @@ __reply({ type: 'worker-ready' });
       }
     }
 
+    // ── Local model endpoint (OpenAI-compatible: Ollama / LM Studio / llama.cpp / Atomic) ──
+    // Discover models from a local server and register each as an `endpoint` model.
+    // Inference streams over HTTP (no WebGPU, no download) but stays on-device.
+    function normalizeEndpointBase(input) {
+      let s = (input || '').trim().replace(/\/+$/, '');
+      if (!s) return '';
+      if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
+      return s;
+    }
+    async function discoverEndpointModels(input) {
+      const raw = normalizeEndpointBase(input);
+      if (!raw) throw new Error('Enter an endpoint URL');
+      const v1 = /\/v1$/.test(raw) ? raw : raw + '/v1';
+      // 1) OpenAI-shaped /v1/models
+      try {
+        const r = await fetch(v1 + '/models', { headers: { 'Accept': 'application/json' } });
+        if (r.ok) {
+          const j = await r.json();
+          const ids = (j.data || []).map(x => x.id).filter(Boolean);
+          if (ids.length) return { base: v1, models: ids };
+        }
+      } catch {}
+      // 2) Ollama native /api/tags (at the root, not /v1)
+      const root = raw.replace(/\/v1$/, '');
+      try {
+        const r = await fetch(root + '/api/tags', { headers: { 'Accept': 'application/json' } });
+        if (r.ok) {
+          const j = await r.json();
+          const ids = (j.models || []).map(x => x.name).filter(Boolean);
+          if (ids.length) return { base: root + '/v1', models: ids };
+        }
+      } catch {}
+      throw new Error('No models found — is the server running, and does it allow CORS for this origin?');
+    }
+    function registerEndpointModel(base, model) {
+      const id = 'endpoint:' + base + '::' + model;
+      MODELS[id] = {
+        id, label: model, size: 'endpoint', type: 'causal',
+        backend: 'endpoint', endpointBase: base, endpointModel: model,
+        agentCapable: true, multimodal: false, contextSize: 0,
+        genConfig: { temperature: 0.7, max_new_tokens: 2048, top_p: 1 },
+      };
+      if (!Array.from(modelSelect.options).some(o => o.value === id)) {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = model + ' · endpoint';
+        modelSelect.appendChild(opt);
+      }
+      return id;
+    }
+    function clearEndpointModels() {
+      for (const k of Object.keys(MODELS)) {
+        if (MODELS[k].backend !== 'endpoint' || k === activeModelKey) continue;
+        delete MODELS[k];
+        const opt = Array.from(modelSelect.options).find(o => o.value === k);
+        if (opt) opt.remove();
+      }
+    }
+
     function removeCustomModelFromRegistry(id) {
       if (!MODELS[id] || !MODELS[id].custom) return;
       // If this is the active model, we can't remove it — the worker is tied to it
@@ -9279,6 +9350,36 @@ __reply({ type: 'worker-ready' });
     // Discover tools on page load from each registered server and add them
     // to TOOL_REGISTRY with an mcp_ prefix. Tool execution POSTs a
     // tools/call JSON-RPC request back to the same URL.
+    // ── Local endpoint settings wiring ─────────────────────────
+    const endpointUrlInput = document.getElementById('endpointUrlInput');
+    const endpointConnectBtn = document.getElementById('endpointConnectBtn');
+    const endpointStatus = document.getElementById('endpointStatus');
+    function setEndpointStatus(msg, cls) {
+      if (!endpointStatus) return;
+      endpointStatus.textContent = msg;
+      endpointStatus.style.color = cls === 'err' ? 'var(--error-border)' : cls === 'ok' ? 'var(--success-border)' : 'var(--gray-500)';
+    }
+    async function connectEndpoint(input, silent) {
+      try {
+        if (!silent) setEndpointStatus('Connecting…', '');
+        const { base, models } = await discoverEndpointModels(input);
+        clearEndpointModels();
+        for (const mdl of models) registerEndpointModel(base, mdl);
+        try { localStorage.setItem('lm_endpoint_url', (input || '').trim()); } catch {}
+        setEndpointStatus('Connected · ' + models.length + ' model' + (models.length === 1 ? '' : 's') + ' — pick one in the model menu above.', 'ok');
+      } catch (e) {
+        if (!silent) setEndpointStatus((e && e.message) || 'Connection failed', 'err');
+      }
+    }
+    if (endpointConnectBtn) {
+      endpointConnectBtn.addEventListener('click', () => connectEndpoint(endpointUrlInput.value, false));
+      endpointUrlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); connectEndpoint(endpointUrlInput.value, false); } });
+      try {
+        const savedEp = localStorage.getItem('lm_endpoint_url');
+        if (savedEp) { endpointUrlInput.value = savedEp; connectEndpoint(savedEp, true); }
+      } catch {}
+    }
+
     const mcpUrlInput = document.getElementById('mcpUrlInput');
     const mcpAuthInput = document.getElementById('mcpAuthInput');
     const mcpAddBtn = document.getElementById('mcpAddBtn');
@@ -11435,6 +11536,8 @@ ${JSON.stringify({ name, result })}
       // --- internal state -----------------------------------------
       _worker: null,
       _activeModelId: null,
+      _backend: 'webgpu',   // 'webgpu' (in-browser worker) | 'endpoint' (local OpenAI-compatible server)
+      _endpoint: null,      // { base, model } when _backend === 'endpoint'
       _activeCaps: {
         text: true, image: false, audio: false, video: false,
         toolCalling: false, maxContextTokens: 0,
@@ -11512,11 +11615,32 @@ ${JSON.stringify({ name, result })}
           this._worker = null;
         }
         this._activeModelId = null;
+        this._backend = 'webgpu';
+        this._endpoint = null;
         this._activeCaps = {
           text: true, image: false, audio: false, video: false,
           toolCalling: false, maxContextTokens: 0,
         };
       },
+
+      // --- local endpoint backend (Ollama / LM Studio / llama.cpp / Atomic) ---
+      // An OpenAI-compatible server on the user's machine. No worker, no WebGPU —
+      // inference runs on the server; the browser just streams /v1/chat/completions.
+      // Still fully local: nothing leaves the device. Generation flows through the
+      // SAME generateOnce() seam, so the agent loop, tools, RAG, research and
+      // compare all work unchanged.
+      useEndpoint(m) {
+        if (this._worker) { try { this._worker.terminate(); } catch {} this._worker = null; }
+        this._backend = 'endpoint';
+        this._endpoint = { base: m.endpointBase, model: m.endpointModel };
+        this._activeModelId = m.id;
+        this._activeCaps = {
+          text: true, image: false, audio: false, video: false,
+          toolCalling: !!m.agentCapable, maxContextTokens: m.contextSize || 0,
+        };
+      },
+      isEndpoint() { return this._backend === 'endpoint'; },
+      getEndpoint() { return this._endpoint; },
 
       // --- image generation (separate WebGPU diffusion worker) ----
       // Independent of the chat worker. Only one WebGPU-heavy worker should be
@@ -13035,6 +13159,8 @@ self.addEventListener('message', async (e) => {
       const m = MODELS[key];
       if (!m) return;
 
+      if (m.backend === 'endpoint') { loadEndpointModel(key, m); return; }
+
       // Any in-flight API load promise is now stale — reject it before the
       // new load starts so the caller is notified and the new caller (if any)
       // can attach fresh resolvers right after this returns.
@@ -13095,6 +13221,34 @@ self.addEventListener('message', async (e) => {
       attachWorkerHandlers(worker);
     }
 
+    // Load a local-endpoint model: no worker, no download — the server already
+    // holds the model. Free any resident WebGPU worker, flip the adapter into
+    // endpoint mode, and mark ready immediately.
+    function loadEndpointModel(key, m) {
+      if (loadResolvers) { const r = loadResolvers; loadResolvers = null; try { r.reject(new Error('Load superseded')); } catch {} }
+      try { LocalMind.runtime.unload(); } catch {}   // free chat worker / VRAM
+      worker = null;
+      activeModelKey = key;
+      if (!m.multimodal) clearAttachments();
+      currentDownloadFile = '';
+      LocalMind.runtime.useEndpoint(m);
+      modelReady = true;
+      progressSection.classList.remove('visible');
+      statusBadge.className = 'status-badge ready';
+      statusSpinner.style.display = 'none';
+      statusText.textContent = m.label + ' · endpoint';
+      chatInput.disabled = false;
+      chatInput.placeholder = 'Type a message…';
+      sendBtn.disabled = false; if (searchSendBtn) searchSendBtn.disabled = false;
+      if (clearBtn) clearBtn.disabled = false;
+      if (newChatBtn) newChatBtn.disabled = false;
+      modelSelect.disabled = false;
+      updateModelUI();
+      updateBatchCount();
+      showToast('Using ' + m.endpointModel + ' via local endpoint');
+      if (loadResolvers) { const r = loadResolvers; loadResolvers = null; r.resolve(); }
+    }
+
     // ── Model selector ──────────────────────────────────────────
     modelSelect.addEventListener('change', () => {
       if (generating) return;
@@ -13134,7 +13288,84 @@ self.addEventListener('message', async (e) => {
     // in content-block form and the adapter handles the translation.
 
     // ── Send message ────────────────────────────────────────────
+    // ── Local-endpoint streaming (OpenAI-compatible /v1/chat/completions) ──
+    // Used when the active model is an `endpoint` model. Streams SSE deltas and
+    // drives the SAME token sink the worker path uses (currentAssistantText +
+    // bubble + currentInferenceContext.onToken), then resolves with the full
+    // text — so the agent loop, tools, RAG, research and compare work unchanged.
+    let endpointAbort = null;
+    function emitEndpointToken(token) {
+      currentAssistantText += token;
+      if (currentAssistantEl) updateAssistantBubble(currentAssistantEl.bubble, currentAssistantText);
+      if (currentInferenceContext && typeof currentInferenceContext.onToken === 'function') {
+        try { currentInferenceContext.onToken(token); } catch (e) { console.error('streaming onToken threw:', e); }
+      }
+    }
+    async function generateViaEndpoint(chatMessages, genConfig) {
+      const ep = LocalMind.runtime.getEndpoint();
+      const cfg = genConfig || {};
+      const msgs = chatMessages.map(mm => ({
+        role: mm.role,
+        content: typeof mm.content === 'string' ? mm.content
+          : Array.isArray(mm.content) ? mm.content.filter(b => b && b.type === 'text').map(b => b.text).join('\n')
+          : String(mm.content == null ? '' : mm.content),
+      }));
+      const body = {
+        model: ep.model, messages: msgs, stream: true,
+        temperature: cfg.temperature != null ? cfg.temperature : 0.7,
+        max_tokens: cfg.max_new_tokens || cfg.max_tokens || 2048,
+        top_p: cfg.top_p != null ? cfg.top_p : 1,
+      };
+      endpointAbort = new AbortController();
+      try {
+        const res = await fetch(ep.base + '/chat/completions', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body), signal: endpointAbort.signal,
+        });
+        if (!res.ok || !res.body) {
+          const t = res.ok ? '' : await res.text().catch(() => '');
+          throw new Error('endpoint HTTP ' + res.status + (t ? ': ' + t.slice(0, 200) : ''));
+        }
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        outer: for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let nl;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line || !line.startsWith('data:')) continue;
+            const payload = line.slice(5).trim();
+            if (payload === '[DONE]') break outer;
+            try {
+              const j = JSON.parse(payload);
+              const c = j.choices && j.choices[0];
+              const delta = c && c.delta && c.delta.content;
+              if (delta) emitEndpointToken(delta);
+            } catch (e) { /* keep-alive ping or a split line — ignore */ }
+          }
+        }
+      } catch (e) {
+        if (!(e && e.name === 'AbortError')) {
+          const msg = (e && e.message) || String(e);
+          if (currentAssistantEl) {
+            currentAssistantText += `\n\n*Error: ${msg}*`;
+            updateAssistantBubble(currentAssistantEl.bubble, currentAssistantText);
+          } else { showToast('Endpoint error: ' + msg); }
+        }
+      } finally {
+        endpointAbort = null;
+      }
+      return currentAssistantText;
+    }
+
     function generateOnce(chatMessages, attData, enableThinking, genConfig) {
+      if (LocalMind.runtime.isEndpoint && LocalMind.runtime.isEndpoint()) {
+        return generateViaEndpoint(chatMessages, genConfig);
+      }
       return new Promise((resolve) => {
         generateResolve = resolve;
         const id = ++msgIdCounter;
@@ -14456,6 +14687,11 @@ self.addEventListener('message', async (e) => {
     sendBtn.addEventListener('click', () => {
       if (generating) {
         if (imageBusy || diffuseBusy) return; // gen runs to completion — no mid-run stop
+        if (LocalMind.runtime.isEndpoint && LocalMind.runtime.isEndpoint()) {
+          if (endpointAbort) { try { endpointAbort.abort(); } catch {} }
+          generating = false;
+          return;
+        }
         // Stop generation — interrupt worker, let complete handler resolve the promise.
         // Set generating=false so the agentic loop knows to exit after awaiting.
         worker.postMessage({ type: 'stop' });
