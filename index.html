@@ -2008,32 +2008,45 @@
       .mobile-tip { display: block; }
     }
 
-    /* Desktop (≥1100px): dock conversation history as a persistent left rail
-       and widen the working area. The sidebar is normally an absolute
-       slide-over clipped inside .app (overflow:hidden, capped width); on wide
-       screens we promote it to position:fixed so it escapes that clip + cap,
-       then open a left gutter on <body> to seat it. The chat reading column
-       stays capped so long-form text stays legible — only the surrounding
-       chrome (toolbar, input, panels) gets the extra width. */
+    /* Desktop (≥1100px): an app-shell layout. A full-width top bar pulls the
+       LocalMind title across the whole top, and conversation history docks as
+       a flush left pane beneath it — so the rail reads as part of the app, not
+       a floating card. Both the header and the sidebar (normally an absolute
+       slide-over clipped inside .app) are promoted to position:fixed so they
+       escape .app's overflow clip + width cap; <body> gets top + left padding
+       to seat them. The chat reading column stays capped for legibility. */
     @media (min-width: 1100px) {
-      body { padding-left: 304px; }
+      /* Full-width top app-bar — the title spans over the rail + main area */
+      .header {
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        height: 56px;
+        margin: 0;
+        padding: 0 22px;
+        background: var(--white);
+        border-bottom: 1px solid var(--gray-200);
+        z-index: 50;
+      }
+      /* Clear the fixed bar (top) and seat the left pane (left gutter) */
+      body { padding-top: 80px; padding-left: 289px; }
+      /* History as a flush left pane hanging off the bar — not a floating card */
       .history-sidebar {
         position: fixed;
-        top: 24px;
-        left: 16px;
-        bottom: 16px;
+        top: 56px; left: 0; bottom: 0;
         width: 272px;
         transform: none !important;   /* always docked, not a slide-over */
-        border: 1px solid var(--gray-200);
-        border-radius: 16px;
-        box-shadow: 0 1px 8px rgba(0,0,0,0.05);
+        background: var(--white);
+        border: none;
+        border-right: 1px solid var(--gray-200);
+        border-radius: 0;
+        box-shadow: none;
         z-index: 30;
       }
       .history-backdrop { display: none !important; }
       #historyBtn { display: none; }              /* rail is always visible */
-      .app { max-width: 960px; }
+      .app { max-width: 960px; height: calc(100vh - 140px); }
       .msg { max-width: min(86%, 720px); }        /* keep chat legible */
-      .footer-nav { left: calc(50% + 144px); }    /* re-center over main area */
+      .footer-nav { left: calc(50% + 136px); }    /* re-center over main area */
     }
   </style>
 </head>
