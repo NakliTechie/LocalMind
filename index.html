@@ -1085,11 +1085,9 @@
     }
 
     .settings-panel.open { display: block; }
-    /* Settings sub-tabs */
-    .settings-tabs { display: flex; gap: 2px; margin-bottom: 12px; border-bottom: 1px solid var(--gray-200); }
-    .settings-tab-btn { background: transparent; border: none; border-bottom: 2px solid transparent; padding: 7px 13px; margin-bottom: -1px; font: inherit; font-size: 0.82rem; color: var(--gray-500); cursor: pointer; }
-    .settings-tab-btn:hover { color: var(--gray-800); }
-    .settings-tab-btn.active { color: var(--indigo-500); border-bottom-color: var(--indigo-500); font-weight: 600; }
+    /* Settings sub-tabs — a bottom bar that reuses the .btn-icon menu style */
+    .settings-tabs { display: flex; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--gray-200); }
+    .settings-tab-btn.active { background: var(--indigo-100); color: var(--indigo-600); font-weight: 600; }
     .s-tab-hidden { display: none !important; }
 
     /* API chip next to the model selector — only visible when the
@@ -2265,12 +2263,6 @@
 
       <!-- Settings (system prompt + thinking toggle) -->
       <div class="settings-panel" id="settingsPanel">
-        <div class="settings-tabs" id="settingsTabs">
-          <button class="settings-tab-btn active" data-tab="general" type="button">General</button>
-          <button class="settings-tab-btn" data-tab="models" type="button">Models</button>
-          <button class="settings-tab-btn" data-tab="tools" type="button">Tools</button>
-          <button class="settings-tab-btn" data-tab="data" type="button">Data</button>
-        </div>
         <div class="settings-group" data-tab="general">
         <label for="systemPrompt">System prompt (optional)</label>
         <textarea id="systemPrompt" placeholder="e.g. You are a helpful coding assistant."></textarea>
@@ -2423,6 +2415,12 @@
             memory access, or web search is exposed.
           </div>
           <button class="btn-icon" id="apiLogBtn" style="margin-top:8px">View activity log</button>
+        </div>
+        <div class="settings-tabs" id="settingsTabs">
+          <button class="btn-icon settings-tab-btn active" data-tab="general" type="button">General</button>
+          <button class="btn-icon settings-tab-btn" data-tab="models" type="button">Models</button>
+          <button class="btn-icon settings-tab-btn" data-tab="tools" type="button">Tools</button>
+          <button class="btn-icon settings-tab-btn" data-tab="data" type="button">Data</button>
         </div>
       </div>
 
