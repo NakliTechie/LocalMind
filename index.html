@@ -2007,6 +2007,34 @@
       .settings-tab-btn { padding: 7px 12px; }
       .mobile-tip { display: block; }
     }
+
+    /* Desktop (≥1100px): dock conversation history as a persistent left rail
+       and widen the working area. The sidebar is normally an absolute
+       slide-over clipped inside .app (overflow:hidden, capped width); on wide
+       screens we promote it to position:fixed so it escapes that clip + cap,
+       then open a left gutter on <body> to seat it. The chat reading column
+       stays capped so long-form text stays legible — only the surrounding
+       chrome (toolbar, input, panels) gets the extra width. */
+    @media (min-width: 1100px) {
+      body { padding-left: 304px; }
+      .history-sidebar {
+        position: fixed;
+        top: 24px;
+        left: 16px;
+        bottom: 16px;
+        width: 272px;
+        transform: none !important;   /* always docked, not a slide-over */
+        border: 1px solid var(--gray-200);
+        border-radius: 16px;
+        box-shadow: 0 1px 8px rgba(0,0,0,0.05);
+        z-index: 30;
+      }
+      .history-backdrop { display: none !important; }
+      #historyBtn { display: none; }              /* rail is always visible */
+      .app { max-width: 960px; }
+      .msg { max-width: min(86%, 720px); }        /* keep chat legible */
+      .footer-nav { left: calc(50% + 144px); }    /* re-center over main area */
+    }
   </style>
 </head>
 <body>
@@ -10163,6 +10191,7 @@ __reply({ type: 'worker-ready' });
       chatArea.appendChild(welcomeMsg);
       welcomeMsg.style.display = messages.length ? 'none' : '';
       renderRestoredMessages();
+      refreshHistoryPanel();   // keep the docked rail in sync after branching
       showToast('Branched to new conversation');
     }
 
@@ -10242,6 +10271,7 @@ __reply({ type: 'worker-ready' });
         }
       }
       resetChatUI();
+      refreshHistoryPanel();   // reflect the just-archived chat in the docked rail
     });
 
     // ── Auto-resize textarea ────────────────────────────────────
@@ -15223,6 +15253,7 @@ self.addEventListener('message', async (e) => {
 
     // ── Init ────────────────────────────────────────────────────
     renderRestoredMessages();
+    refreshHistoryPanel();   // populate the docked desktop history rail on load
     loadModel(modelSelect.value);
   </script>
 </body>
