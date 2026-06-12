@@ -1,10 +1,12 @@
 # LocalMind — Roadmap
 
-**Last updated:** April 11, 2026
+**Last updated:** June 12, 2026
 
 ## Current state
 
-Single-file (~5.8k lines) private AI research agent running entirely in-browser. Zero backend.
+Single-file (~15.3k lines, ~788 KB) private AI workbench running entirely in-browser. Zero backend by default — and now optionally able to drive a local OpenAI-compatible server (Ollama / LM Studio / llama.cpp) as a backend, for any model your own machine can run.
+
+Three generation paradigms live in the one file: **autoregressive chat** (ONNX + WebGPU), **🎨 image diffusion** (FLUX.2-Klein, on-device), and **🌫️ masked-diffusion text** (kohra). The UI reads well phone → desktop.
 
 **Tier 1 — shipped:**
 - 10 agent tools (calculate, time, memory CRUD, reminder, web_search, fetch_page, segment_image)
@@ -74,18 +76,30 @@ Single-file (~5.8k lines) private AI research agent running entirely in-browser.
 - **Voice to text (Whisper WebGPU)** — 🗣 button records mic, main thread decodes+resamples to 16 kHz mono PCM via OfflineAudioContext, transfers Float32Array to a Whisper-base worker (`onnx-community/whisper-base`, encoder fp16 + decoder q4, WebGPU). Transcribed text inserted into the input. Always visible, works on any model. Replaces the planned Web Speech API path (which phoned home).
 - **`run_python` agent tool (Pyodide)** — 11th tool. Model can execute Python in a sandboxed Pyodide worker; `loadPackagesFromImports` auto-installs numpy / pandas / matplotlib. Returns `{ stdout, stderr, result }`. Lazy-loaded on first call (~10 MB). Matplotlib image capture not yet shipped — stdout-only.
 
+**Tier 2 (cont.) — multi-paradigm workbench + endpoint backend + responsive (June 2026):**
+- **🎨 Image mode** — on-device text-to-image. The FLUX.2-Klein 4B engine (ternary/1-bit, Apache-2.0) was extracted from the `webml-community/bonsai-image-webgpu` HF Space — the DOM-free engine slice only (63 WGSL kernels + a safetensors range-loader + euler scheduler + VAE), inlined as an inert `<script type="text/worker">` blob-URL worker. Size / steps / seed controls, re-roll, session gallery. Unloads the chat model first (one WebGPU-heavy worker resident at a time).
+- **🌫️ Diffuse mode** — masked-diffusion TEXT, a genuinely different paradigm from autoregressive chat. Engine = **kohra** (a clean transformers.js-style module; model `Qwen3-0.6B-MDLM` on ORT-web WebGPU). The answer denoises out of a "fog" of masked tokens (live reveal via `onStep`). Honestly scoped as a paradigm showcase, not a daily-driver (0.6B rambles).
+- **Local-endpoint backend** — point LocalMind at a local OpenAI-compatible server (Ollama / LM Studio / llama.cpp / Atomic): `/v1/chat/completions` SSE streaming + `/v1/models` discovery (Ollama `/api/tags` fallback). A single branch point in `generateOnce()` → `generateViaEndpoint()`; text tool-calling, Deep Research, and Compare all route through it unchanged. Sidesteps the WebGPU bottleneck and unlocks any GGUF model the host can run. Local-first (localhost); cloud endpoints intentionally not encouraged (would break the no-data-leaves ethos).
+- **Settings sub-tabs** — General / Models / Tools / Data, with the tab bar at the bottom (the panel opens upward), so the now-large Settings surface stays navigable.
+- **Responsive pass.** Mobile: toolbar + model-picker reflow, bigger tap targets, the heavy WebGPU modes (Image/Diffuse) gated on touch devices, a memory warning for chat models >1.5 GB, and an endpoint-hero tip (use the phone as a thin client to a desktop Ollama). Desktop: an app-shell — a full-width top bar + a docked conversation-history left rail + a widened main area, with the chat reading column capped at 720 px for legibility.
+
 ## Status
 
 | Capability | Status |
 |-----------|--------|
 | Chat UI | Strong |
 | Model management | Strong (cache view/clear, custom HF ONNX loading) |
-| Multi-model | Strong (3 Gemma + custom HF ONNX + MiniLM sidecar + SAM sidecar) |
+| Multi-model | Strong (3 Gemma + LFM2/Qwen3/Bonsai + custom HF ONNX + MiniLM sidecar + SAM sidecar) |
 | RAG | Strong (PDF/DOCX/text, auto-summarize, audit) |
 | Tools | Strong (11 tools incl. SAM segmentation + Pyodide Python runtime) |
-| Agents | Partial (single-agent loop, no planning) |
+| Agents | Strong (single-agent loop + experimental multi-step planner) |
 | JavaScript API | Strong (v1.0 — chat completions with streaming) |
 | Plugins | Strong (user-defined HTTP tools + MCP server discovery + Pyodide Python) |
+| Image generation | Strong (on-device FLUX.2-Klein, dedicated 🎨 mode) |
+| Text diffusion | Showcase (kohra Qwen3-0.6B MDLM, dedicated 🌫️ mode) |
+| Local endpoint | Strong (OpenAI-compatible: Ollama / LM Studio / llama.cpp) |
+| Responsive | Strong (mobile gate + endpoint-hero; desktop app-shell) |
+| Runtimes | ONNX/WebGPU + local-endpoint (server) · **in-browser GGUF/wllama in progress** |
 
 ---
 
@@ -107,14 +121,16 @@ The `+esm` jsDelivr endpoint internally redirects to content-addressed URLs, so 
 ### 4. Pyodide plot capture
 `run_python` returns stdout/stderr only; matplotlib figures go nowhere. Capture via `pyplot.savefig(BytesIO)` → base64 → image in the tool-result block.
 
-### 5. Second runtime adapter (wllama / WebLLM / GGUF)
-The runtime adapter boundary at [index.html:6213+](index.html) was deliberately built so a second backend can be slotted in — the code comments already reference this ("a second backend (WebLLM, wllama, …) can be slotted in by adding another adapter section without touching anything above"). Not yet implemented.
+### 5. Second runtime adapter — in-browser GGUF via wllama  · **IN PROGRESS (June 2026)**
+The runtime adapter boundary at [index.html:11615+](index.html) (`LocalMind.runtime`) was deliberately built so a second backend can be slotted in — the code comments already reference this ("a second backend (WebLLM, wllama, …) can be slotted in by adding another adapter section without touching anything above"). The endpoint backend (Tier 2) was the first such addition.
 
-A real GGUF path would unlock: (a) models with no ONNX export, (b) the native llama.cpp quant ladder (Q1_0, Q2_0, Q4_K_M, …) without waiting for ONNX exports, (c) interoperability with the broader local-LLM ecosystem where GGUF is the de facto format.
+A real GGUF path unlocks: (a) models with no ONNX export, (b) the native llama.cpp quant ladder (Q2_K, Q4_K_M, …) without waiting for ONNX exports, (c) interoperability with the broader local-LLM ecosystem where GGUF is the de facto format.
 
-Minimum deliverables: implement the `loadModel / chat / embed / capabilities` contract against **wllama** (llama.cpp WASM) — it's the most drop-in option; WebLLM is heavier and uses MLC's own format, not raw GGUF. Extend the MODELS registry entry shape to carry an explicit `runtime: 'onnx' | 'wllama'` field. Settings pickers route to the right adapter on load.
+**Note on the escape hatch already shipped:** the local-endpoint backend already lets you run *any* GGUF model — via Ollama / LM Studio over `localhost`. So this item is specifically the **fully-offline, in-tab, no-local-server** GGUF path: open the page, pick a GGUF model, it runs in the browser with nothing else installed.
 
-Sizeable: **~400-600 lines** (wllama bindings + adapter + per-entry runtime dispatch + UI + download path). Probably a multi-session effort.
+Approach: implement the `loadModel / chat / capabilities` contract against **wllama** (llama.cpp compiled to WASM) — the most drop-in option; WebLLM is heavier and uses MLC's own format, not raw GGUF. Constraint for the single-file / GitHub-Pages deployment: wllama's **multi-thread** mode needs cross-origin isolation (COOP/COEP), which a static single HTML file on GH Pages can't set — so the in-tab path runs **single-threaded** WASM (slower, but works everywhere with zero server config; the endpoint backend remains the fast path). Extend the MODELS registry entry to carry `runtime: 'onnx' | 'wllama' | 'endpoint'`; `loadModel()` + the picker route on it.
+
+Sizeable: **~400-600 lines** (wllama bindings + a blob-worker + adapter section + per-entry runtime dispatch + UI + GGUF download/progress). De-risked with a standalone harness first (wllama is CPU/WASM, so unlike the WebGPU engines it can be verified headless).
 
 ### 6. Brave / restricted-WebGPU diagnostics (pending)
 Github and Reddit users report model fails to load in Brave. Likely causes: `navigator.gpu` present but `requestAdapter()` returns null under strict fingerprinting; Shields blocking jsdelivr or huggingface.co; `device: 'webgpu'` failing in the worker. Current error surfacing is poor — on worker error the code hides the progress section *then* writes the error message into it (see `attachWorkerHandlers`), so users see a bare "Error" badge with zero detail.
