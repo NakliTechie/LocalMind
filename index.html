@@ -13433,7 +13433,12 @@ self.addEventListener('message', async (e) => {
           }
           console.error('Worker error:', data.message);
           if (generating && currentAssistantEl) {
-            currentAssistantText += `\n\n*Error: ${data.message}*`;
+            // Friendly message for the WebGPU OOM / lost-device class; raw text
+            // otherwise. (On that class, runPlannerChatTurn may reset this and
+            // retry — so this only stays visible if recovery is exhausted.)
+            currentAssistantText += isGpuDeviceError(data.message)
+              ? GPU_OOM_MESSAGE
+              : `\n\n*Error: ${data.message}*`;
             updateAssistantBubble(currentAssistantEl.bubble, currentAssistantText);
           }
           // Reject any pending window.localmind.load() promise
@@ -13909,25 +13914,73 @@ self.addEventListener('message', async (e) => {
     // Drive one runtime.chat() call, collect text + any tool_calls. Pure —
     // does no tool execution. Used by the planner for plan/synthesis passes
     // and as the inner loop of runStepWithTools.
-    async function runPlannerChatTurn(messages, thinking, tools, genConfig) {
-      let fullText = '';
-      const toolCalls = [];
-      let error = null;
+    // ── WebGPU device-error recovery ────────────────────────────
+    // Large ONNX models on onnxruntime-web's WebGPU EP can hit a GPU OOM /
+    // lost-device error mid-generation — it surfaces as an OrtRun /
+    // buffer_manager / mapAsync "invalid due to a previous error" cascade.
+    // Once the device is bad, every following op fails until the model is
+    // reloaded. We detect that class, show a friendly message, and
+    // auto-reload + retry — capped at 2 attempts so a genuinely-too-big model
+    // (or a hard device loss) can't spin forever.
+    function isGpuDeviceError(msg) {
+      if (!msg) return false;
+      return /OrtRun|buffer_manager|mapAsync|GPUBuffer|previous error|device (was |is )?lost|out of memory/i.test(String(msg));
+    }
+
+    const GPU_OOM_MESSAGE = '\n\n*⚠️ The model ran out of GPU memory, or the GPU device dropped — it may be too large for your hardware with this input. Try a smaller model (a 1–4 GB one), shorten the prompt, or keep Token saver on (Settings).*';
+
+    // Reload the active in-browser model to re-acquire a fresh GPU device.
+    // ONNX/WebGPU worker path only — a model with a `backend` field is
+    // endpoint/wllama (no recoverable ONNX device here) and is skipped.
+    async function recoverModel() {
+      const key = activeModelKey;
+      const m = MODELS[key];
+      if (!m || m.backend) return false;
       try {
-        for await (const ev of LocalMind.runtime.chat({
-          messages,
-          tools: tools || undefined,
-          enableThinking: thinking,
-          maxTokens: genConfig && genConfig.max_new_tokens,
-          temperature: genConfig && genConfig.temperature,
-        })) {
-          if (ev.type === 'token') fullText += ev.text;
-          else if (ev.type === 'tool_call') toolCalls.push(ev);
-          else if (ev.type === 'done') break;
-          else if (ev.type === 'error') { error = ev.error; break; }
+        await LocalMind.runtime.loadModel(m.id, {
+          dtype: m.dtype, modelType: m.type,
+          capabilities: {
+            text: true, image: !!m.multimodal, audio: !!m.multimodal,
+            video: !!m.multimodal, toolCalling: !!m.agentCapable,
+            maxContextTokens: m.contextSize || 0,
+          },
+        });
+        worker = LocalMind.runtime._getWorker();
+        attachWorkerHandlers(worker);
+        return true;
+      } catch (e) { console.warn('recoverModel failed:', e && e.message); return false; }
+    }
+
+    async function runPlannerChatTurn(messages, thinking, tools, genConfig) {
+      for (let attempt = 0; ; attempt++) {
+        let fullText = '';
+        const toolCalls = [];
+        let error = null;
+        try {
+          for await (const ev of LocalMind.runtime.chat({
+            messages,
+            tools: tools || undefined,
+            enableThinking: thinking,
+            maxTokens: genConfig && genConfig.max_new_tokens,
+            temperature: genConfig && genConfig.temperature,
+          })) {
+            if (ev.type === 'token') fullText += ev.text;
+            else if (ev.type === 'tool_call') toolCalls.push(ev);
+            else if (ev.type === 'done') break;
+            else if (ev.type === 'error') { error = ev.error; break; }
+          }
+        } catch (e) { error = e; }
+
+        // Auto-recover from a WebGPU device error: reload onto a fresh GPU
+        // device and retry the same turn. Capped at 2 attempts.
+        const emsg = error && (error.message || String(error));
+        if (error && attempt < 2 && generating && isGpuDeviceError(emsg)) {
+          if (currentAssistantEl) { currentAssistantText = ''; updateAssistantBubble(currentAssistantEl.bubble, ''); }
+          showToast('GPU error — reloading the model and retrying (' + (attempt + 1) + '/2)…');
+          if (await recoverModel()) continue;
         }
-      } catch (e) { error = e; }
-      return { fullText, toolCalls, error };
+        return { fullText, toolCalls, error };
+      }
     }
 
     // Run a planner step: up to 2 tool iterations, returns the text of the
