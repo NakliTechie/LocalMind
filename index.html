@@ -14168,7 +14168,8 @@ self.addEventListener('message', async (e) => {
           const results = await executeWebSearch(userText);
           if (results.length > 0) {
             searchSources = results;
-            const searchBlock = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}\nURL: ${r.url}`).join('\n\n');
+            let searchBlock = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}\nURL: ${r.url}`).join('\n\n');
+            if (tokenSaverOn()) searchBlock = compressContext(searchBlock, toolResultBudget());
             sysPrompt += `\n\n[Web search results for "${userText}" — cite sources by number]\n${searchBlock}`;
             // Cache in RAG
             if (LocalMind.runtime.embeddingsReady) {
@@ -14675,9 +14676,13 @@ self.addEventListener('message', async (e) => {
 
         // 4. Synthesize a cited report
         renderTrace('Writing the report…');
+        // Per-source budget: token-saver keeps it tight (CONTENT_CHARS); off allows 3×.
+        // compressContext (dedup + head/tail) beats a hard slice — keeps the source's
+        // conclusion, not just its lede.
+        const perSrc = tokenSaverOn() ? CONTENT_CHARS : CONTENT_CHARS * 3;
         const numbered = sources.map((s, i) =>
           '[' + (i + 1) + '] ' + (s.title || s.url) + '\nURL: ' + s.url + '\n' +
-          (s.content || s.snippet || '').replace(/\s+/g, ' ').slice(0, CONTENT_CHARS)).join('\n\n');
+          compressContext(s.content || s.snippet || '', perSrc)).join('\n\n');
         const synthSys =
           'You are a research analyst. Using ONLY the numbered sources below, write a clear, well-structured ' +
           'report (markdown headings + bullets where useful) answering the user\'s question. Cite every claim ' +
@@ -15277,7 +15282,7 @@ self.addEventListener('message', async (e) => {
             const judgeSys = 'You are an impartial judge. Below are answers from different AI models to the same question. ' +
               'Evaluate them for accuracy, completeness, and clarity. Pick the single best (name the model) or synthesise a ' +
               'better combined answer if clearly better. Give 2–4 sentences of reasoning, then a verdict line starting "**Winner:**".';
-            const judgeUser = 'Question: ' + question + '\n\n' + answers.map(a => '### ' + a.label + '\n' + a.text).join('\n\n');
+            const judgeUser = 'Question: ' + question + '\n\n' + answers.map(a => '### ' + a.label + '\n' + (tokenSaverOn() ? compressContext(a.text, toolResultBudget()) : a.text)).join('\n\n');
             const jt = await runPlannerChatTurn([{ role: 'system', content: judgeSys }, { role: 'user', content: judgeUser }], false, null, MODELS[activeModelKey].genConfig);
             verdict = stripToolCallTags(jt.fullText) || '';
           } catch {}
