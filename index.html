@@ -2325,6 +2325,10 @@
           <input type="checkbox" id="plannerToggle">
           Multi-step planning <span style="font-weight:400;color:var(--gray-500)">(experimental &mdash; slower but handles complex research tasks better)</span>
         </label>
+        <label class="toggle-row" id="tokenSaverRow">
+          <input type="checkbox" id="tokenSaverToggle" checked>
+          Token saver <span style="font-weight:400;color:var(--gray-500)">(concise replies + compress large tool / search / page output &mdash; recommended for small models)</span>
+        </label>
         </div>
         <div class="settings-divider" data-tab="data">
           <label>Data folder sync</label>
@@ -7973,6 +7977,59 @@ self.onmessage = async (e) => {
     // ── Agent: Sliding Window Conversation Builder ────────────
     let conversationSummary = '';
 
+    // ── Token saver: context compression (headroom-inspired) ───────
+    // Small local models have tiny context windows + slow generation, so big
+    // tool outputs (scraped pages, search results, logs, RAG hits) and verbose
+    // replies are expensive. With the token-saver on we (a) steer the model to
+    // answer concisely and (b) crush oversized tool results before they enter
+    // the prompt. Pure heuristics — no trained model. Default on; toggle in
+    // Settings. "Reversible" in spirit: the full result still lives in the
+    // conversation / RAG, this only shrinks the copy fed to the model.
+    const CONCISE_DIRECTIVE = 'Be concise and direct. Skip preamble and pleasantries, do not restate the question or echo the user\'s code back, and stop as soon as the answer is complete.';
+
+    function tokenSaverOn() {
+      return localStorage.getItem('lm_token_saver') !== '0';   // default on
+    }
+
+    function compressContext(text, maxChars) {
+      if (typeof text !== 'string') text = String(text == null ? '' : text);
+      maxChars = maxChars || 4000;
+      let t = text
+        .replace(/[ \t]+\n/g, '\n')      // strip trailing whitespace
+        .replace(/\n{3,}/g, '\n\n')       // collapse runs of blank lines
+        .replace(/[ \t]{3,}/g, '  ');     // collapse long space runs
+      // Drop consecutive identical (trimmed) lines — common in logs and
+      // scraped page nav/footers — leaving a count marker.
+      const lines = t.split('\n');
+      const kept = [];
+      let prev = null, dropped = 0;
+      const flush = () => { if (dropped > 0) { kept.push('  …(' + dropped + ' repeated lines omitted)…'); dropped = 0; } };
+      for (const ln of lines) {
+        const key = ln.trim();
+        if (key && key === prev) { dropped++; continue; }
+        flush();
+        prev = key; kept.push(ln);
+      }
+      flush();
+      t = kept.join('\n').trim();
+      // Char budget: keep head + tail with a marker noting the gap.
+      if (t.length > maxChars) {
+        const head = Math.floor(maxChars * 0.7);
+        const tail = Math.max(0, maxChars - head - 60);
+        const trimmed = t.length - head - tail;
+        t = t.slice(0, head) + '\n…[' + trimmed + ' chars trimmed to save context]…\n' + (tail ? t.slice(-tail) : '');
+      }
+      return t;
+    }
+
+    // Per-call budget for a single tool result, scaled to the active model's
+    // context so a 4K-ctx GGUF doesn't get one tool result that eats its whole
+    // window (~0.8 chars per context token, clamped to a sane range).
+    function toolResultBudget() {
+      const ctx = (MODELS[activeModelKey] && MODELS[activeModelKey].contextSize) || 4096;
+      return Math.max(1500, Math.min(8000, Math.round(ctx * 0.8)));
+    }
+
     function buildContextMessages(allMessages, systemPrompt, modelKey) {
       const m = MODELS[modelKey];
       const maxCtx = m ? m.contextSize : 4096;
@@ -7980,10 +8037,15 @@ self.onmessage = async (e) => {
       const budgetForHistory = maxCtx - 2048 - 300;
 
       const out = [];
-      if (systemPrompt) out.push({ role: 'system', content: systemPrompt });
+      // Verbosity steering: prepend the concise directive when token-saver is on.
+      const effectiveSystem = [
+        tokenSaverOn() ? CONCISE_DIRECTIVE : '',
+        systemPrompt || '',
+      ].filter(Boolean).join('\n\n');
+      if (effectiveSystem) out.push({ role: 'system', content: effectiveSystem });
 
       // Calculate system prompt cost
-      let used = approxTokens(systemPrompt);
+      let used = approxTokens(effectiveSystem);
 
       // Always include all messages if they fit
       let historyTokens = 0;
@@ -10375,6 +10437,13 @@ self.onmessage = async (e) => {
     const autoBackupToggle = document.getElementById('autoBackupToggle');
     autoBackupToggle.checked = localStorage.getItem('lm_auto_backup') === 'true';
     autoBackupToggle.addEventListener('change', () => localStorage.setItem('lm_auto_backup', autoBackupToggle.checked));
+
+    // Token saver (concise replies + tool-output compression) — default on.
+    const tokenSaverToggle = document.getElementById('tokenSaverToggle');
+    if (tokenSaverToggle) {
+      tokenSaverToggle.checked = localStorage.getItem('lm_token_saver') !== '0';
+      tokenSaverToggle.addEventListener('change', () => localStorage.setItem('lm_token_saver', tokenSaverToggle.checked ? '1' : '0'));
+    }
 
     newChatBtn.addEventListener('click', async () => {
       if (generating) return;
@@ -13903,7 +13972,11 @@ self.addEventListener('message', async (e) => {
 
         loopMessages.push({ role: 'assistant', content: turn.fullText });
         for (const { tc, toolResult } of stepResults) {
-          loopMessages.push({ role: 'tool', name: tc.name, content: JSON.stringify(toolResult) });
+          // Crush oversized tool output (scraped pages, search hits, logs, RAG)
+          // before it enters the context — the choke point for every tool.
+          let payload = JSON.stringify(toolResult);
+          if (tokenSaverOn()) payload = compressContext(payload, toolResultBudget());
+          loopMessages.push({ role: 'tool', name: tc.name, content: payload });
         }
 
         if (iter === STEP_MAX_ITER - 1) {
