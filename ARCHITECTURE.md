@@ -9,10 +9,24 @@ The raw context window is 4K–65K tokens depending on model. The effective know
 - **Semantic pre-filtering** — fetched web pages split into paragraphs, embedded, ranked by relevance to your query
 - **Multi-hop reasoning** — agentic loop chains up to 3 tool calls per message; each tool call the model emits in a single turn runs individually, so batched calls (Qwen3-family models often emit 3-4 in one response) all execute rather than being dropped
 - **Multi-step planning** (opt-in, experimental) — for complex research-style queries, decomposes into 2–5 steps, executes each with its own mini tool loop, then synthesises a final answer
+- **Token saver** (on by default) — a concise-output directive plus heuristic compression of large tool / search / page / document output before it enters the context (whitespace normalize + drop repeated lines + head/tail truncate, budget scaled to model context). Applied at the tool-result choke point and the Search / Deep Research / Compare injection points. Originals stay in the conversation + RAG.
+
+## Runtimes
+
+Three interchangeable backends behind one `LocalMind.runtime` adapter (a model's `backend` field routes `loadModel`; everything downstream — the agent loop, tools, RAG, `generateOnce` — is shared):
+
+1. **ONNX + WebGPU** (default) — Transformers.js runs ONNX models on the GPU, in-tab.
+2. **wllama (in-browser GGUF)** — llama.cpp compiled to WASM; loads a GGUF from a URL, WebGPU-accelerated or pure CPU. Its worker speaks the same postMessage protocol as the ONNX chat worker, so it reuses `attachWorkerHandlers` + `generateOnce`.
+3. **Local endpoint** — an OpenAI-compatible server (Ollama / LM Studio / llama.cpp) over `/v1/chat/completions`; no in-browser inference (no worker).
+
+A WebGPU device error (OOM / lost device) on the ONNX path is detected, shown as a friendly message, and auto-recovered by reloading the model on a fresh device — capped at 2 retries.
 
 ## Tech stack
 
 - **[Transformers.js](https://huggingface.co/docs/transformers.js)** v4 — runs Hugging Face ONNX models in the browser via WebGPU
+- **[wllama](https://github.com/ngxson/wllama)** — llama.cpp compiled to WebAssembly; the in-browser GGUF chat runtime (WebGPU or CPU)
+- **Image diffusion** — the FLUX.2-Klein 4B engine (ternary/1-bit) extracted from the `webml-community/bonsai-image-webgpu` Space, inlined as a worker
+- **Text diffusion** — [kohra](https://github.com/NakliTechie/kohra) (Qwen3-0.6B MDLM) on onnxruntime-web / WebGPU, inlined as a worker
 - **[Ternary Bonsai 1.7B / 4B / 8B](https://huggingface.co/collections/prism-ml/ternary-bonsai)** — 1.58-bit Qwen3-based LLMs, q2f16, Apache-2.0
 - **[Gemma 3 1B](https://huggingface.co/onnx-community/gemma-3-1b-it-ONNX-GQA)** — text-only, q4f16
 - **[Gemma 4 E2B](https://huggingface.co/onnx-community/gemma-4-E2B-it-ONNX)** — multimodal, 2.3B effective params, q4f16
@@ -32,17 +46,20 @@ The raw context window is 4K–65K tokens depending on model. The effective know
 
 ## Worker topology
 
-LocalMind runs up to five concurrent workers, each with its own lifecycle and memory:
+Workers spin up on demand, each with its own lifecycle and memory. Only **one WebGPU-heavy worker is resident at a time** — loading Image / Diffuse / wllama unloads the chat model; leaving brings it back.
 
 | Worker | Created | Device | Purpose |
 |---|---|---|---|
-| **Chat** | On model load | WebGPU | Main LLM (Gemma / Ternary Bonsai) |
+| **Chat (ONNX)** | On model load | WebGPU | Main LLM via Transformers.js |
+| **wllama (GGUF)** | On loading a GGUF model | WebGPU / CPU | llama.cpp-wasm chat runtime |
+| **Image** | On entering Image mode | WebGPU | FLUX.2-Klein text-to-image |
+| **Diffuse** | On entering Diffuse mode | WebGPU | kohra masked-diffusion text |
 | **Embedding** | Lazy on first RAG/memory call | WASM | MiniLM 384-dim vectors |
 | **SAM** | Lazy on first `segment_image` call | WASM | Image segmentation |
-| **Whisper** | Lazy on first 🗣 voice-to-text click | WebGPU | Audio → text |
+| **Whisper** | Lazy on first 🗣 click | WebGPU | Audio → text |
 | **Pyodide** | Lazy on first `run_python` call | WASM | Python execution |
 
-Inference through the chat worker is serialised through a single FIFO queue (`runInference`) so the chat UI, JS API, planner, and agent loop can't race each other.
+The local-endpoint runtime uses no worker (inference runs on the user's server). Inference through the chat worker is serialised through a single FIFO queue (`runInference`) so the chat UI, JS API, planner, and agent loop can't race each other.
 
 ## Resumable downloads
 
@@ -60,6 +77,6 @@ Toggle: Settings → Model cache → "Resumable downloads" (on by default).
 
 ## Build & deployment
 
-Zero build tooling. One HTML file (~9k lines). Everything else loads from CDN with SRI where possible.
+Zero build tooling. One HTML file (~15k lines, ~800 KB). Everything else loads from CDN with SRI where possible.
 
 Deploy by serving `index.html` from any static host. GitHub Pages, Netlify, S3, or `python3 -m http.server`. Must be served over HTTP — `file://` won't work because ES module workers and WebGPU both require an HTTP origin.
