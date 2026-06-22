@@ -15,6 +15,7 @@ Pick a model from the dropdown. It downloads once, caches in the browser, and ru
 | **Ternary Bonsai 8B** | ~2.2 GB | WebGPU | Text + agent | Best Bonsai quality; 65K context |
 | **Qwen3 4B** | ~2.8 GB | WebGPU | Text + agent | Stock Qwen3 at q4f16; native tool calling |
 | **LFM2 8B A1B** | ~4.8 GB | WebGPU | Text + agent | Liquid AI sparse-MoE (8B total / ~1B active); needs a capable GPU + ~8 GB RAM |
+| **Apertus 4B** | ~2.7 GB | WebGPU | Text (chat) | Swiss AI fully-open multilingual (1800+ languages); v1.1 distilled from the 8B; chat-only |
 | **Gemma 3 1B** | ~760 MB | WebGPU | Text only | Lightweight fallback |
 | **Gemma 4 E2B** | ~1.5 GB | WebGPU | Text + image + audio + agent | Multimodal on any device |
 | **Gemma 4 E4B** | ~4.9 GB | WebGPU | Text + image + audio + agent | Best multimodal quality |
@@ -24,7 +25,7 @@ Pick a model from the dropdown. It downloads once, caches in the browser, and ru
 
 Plus any **custom Hugging Face ONNX model** (paste a repo id) or any model served by **your own Ollama / LM Studio** (see Runtimes).
 
-The Bonsai family are 1.58-bit ternary-weight LLMs from Prism ML (Apache-2.0, Qwen3 backbone) — they punch above their download size on reasoning/code/tool-calling. LFM2 8B A1B is Liquid AI's sparse mixture-of-experts; note the **symmetric** QMoE export (`onnx-community/LFM2-8B-A1B-ONNX`) is the one that loads on WebGPU — the asymmetric/zero-point builds don't.
+The Bonsai family are 1.58-bit ternary-weight LLMs from Prism ML (Apache-2.0, Qwen3 backbone) — they punch above their download size on reasoning/code/tool-calling. LFM2 8B A1B is Liquid AI's sparse mixture-of-experts; note the **symmetric** QMoE export (`onnx-community/LFM2-8B-A1B-ONNX`) is the one that loads on WebGPU — the asymmetric/zero-point builds don't. **Apertus 4B** is Swiss AI's fully-open (open data + weights), Apache-2.0, multilingual model (1800+ languages) — a pretraining distillation of their 8B teacher (`onnx-community` q4f16 ONNX, runs via Transformers.js ≥4.0). It's a strong chat model but an unreliable tool-caller at this size, so it's exposed for chat only.
 
 ## Runtimes — three ways to run a model
 

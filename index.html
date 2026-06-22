@@ -2082,6 +2082,7 @@
                 <li><strong>Ternary Bonsai 8B</strong> (~2.2 GB) &mdash; best Bonsai quality, 65K context.</li>
                 <li><strong>Qwen3 4B</strong> (~2.8 GB) &mdash; text + agent (tool calling). Standard Qwen3-4B at q4f16, Apache-2.0, 32K context.</li>
                 <li><strong>LFM2 8B A1B</strong> (~4.8 GB) &mdash; text + agent (tool calling). Liquid AI sparse-MoE (8B total / ~1B active) at q4f16, 32K context. WebGPU-only and large &mdash; needs a capable GPU (Chrome/Edge, ~8 GB+ RAM recommended).</li>
+                <li><strong>Apertus 4B</strong> (~2.7 GB) &mdash; text-only chat. Swiss AI's fully-open, multilingual model (1800+ languages, Apache-2.0); v1.1 distilled from the 8B teacher, q4f16, 32K context. Strong chat, but not exposed for tool calling (the 4B is an unreliable tool caller).</li>
                 <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; text-only, no tool calling. Fallback option.</li>
                 <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
                 <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
@@ -2523,6 +2524,7 @@
           <option value="bonsai-ternary-8b">Ternary Bonsai 8B &middot; Agent (~2.2 GB)</option>
           <option value="qwen3-4b">Qwen3 4B &middot; Agent (~2.8 GB)</option>
           <option value="lfm2-8b-a1b">LFM2 8B A1B &middot; Agent (~4.8 GB)</option>
+          <option value="apertus-4b">Apertus 4B &middot; Chat (~2.7 GB)</option>
           <option value="gemma3-1b">Gemma 3 1B &middot; Fast (~760 MB)</option>
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
@@ -7289,6 +7291,27 @@ self.onmessage = async (e) => {
         // exposed by Transformers.js generate(), so top_p approximates.
         genConfig: { temperature: 0.3, top_k: 20, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.05 },
       },
+      'apertus-4b': {
+        id: 'onnx-community/Apertus-v1.1-4B-Instruct-ONNX',
+        label: 'Apertus 4B',
+        dtype: 'q4f16',
+        size: '~2.7 GB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: false,
+        contextSize: 32768,
+        // Swiss AI Apertus v1.1 4B Instruct — fully-open (open data + weights),
+        // multilingual (1800+ languages), Apache-2.0; a pretraining distillation
+        // of the Apertus-8B-2509 teacher. Custom arch (xIELU + QK-norm) runs via
+        // transformers.js >=4.0.0 (pinned @4 = 4.2.0). Stock onnx-community
+        // q4f16 export. CHAT-ONLY (agentCapable:false): live testing showed the
+        // 4B is an excellent multilingual chat model but an unreliable tool
+        // caller — it hallucinated tool names, truncated JSON, emitted empty
+        // args, and sometimes refused, even at low temperature. The tool-call
+        // parser handles the recoverable slips, but the model can't be trusted
+        // to drive tools, so we don't expose them. Chat-tuned sampling.
+        genConfig: { temperature: 0.7, top_k: 40, top_p: 0.9, max_new_tokens: 2048, repetition_penalty: 1.1 },
+      },
       'gemma3-1b': {
         id: 'onnx-community/gemma-3-1b-it-ONNX-GQA',
         label: 'Gemma 3 1B',
@@ -11550,6 +11573,10 @@ self.onmessage = async (e) => {
       const fixed = String(str)
         .replace(/,\s*([}\]])/g, '$1')   // trailing commas
         .replace(/'/g, '"')              // single → double quotes
+        // Empty args value, e.g. {"name":"foo","parameters": } — small models
+        // sometimes open the args slot then bail. Default it to {} so a call
+        // with a valid name still fires (the tool runs with its defaults).
+        .replace(/"(arguments|parameters)"\s*:\s*(?=[}\],])/g, '"$1":{}')
         .replace(/(\w+)\s*:/g, '"$1":'); // unquoted keys
       try { return JSON.parse(fixed); } catch {}
       return null;
@@ -11604,6 +11631,27 @@ Rules:
       return matches.length === 1 ? matches[0].name : null;
     }
 
+    // Scan `str` from index `start` (which must point at '{') and return the
+    // first brace-balanced JSON object substring, honouring string literals so
+    // braces inside "…" don't miscount. Returns null if never balanced. Used to
+    // pull the JSON out of an UNCLOSED <tool_call> block (no </tool_call>),
+    // where a lazy regex would stop at the first nested '}' and break the JSON.
+    function _adapterExtractBalancedObject(str, start) {
+      if (str[start] !== '{') return null;
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < str.length; i++) {
+        const c = str[i];
+        if (inStr) {
+          if (esc) esc = false;
+          else if (c === '\\') esc = true;
+          else if (c === '"') inStr = false;
+        } else if (c === '"') inStr = true;
+        else if (c === '{') depth++;
+        else if (c === '}') { if (--depth === 0) return str.slice(start, i + 1); }
+      }
+      return null;
+    }
+
     function _adapterParseToolCalls(text, knownToolNames, toolDefs) {
       const toolCalls = [];
       let cleanText = text;
@@ -11615,20 +11663,60 @@ Rules:
         const parsed = _adapterRepairJSON(match[1].trim());
         const tcName = parsed && (parsed.name || parsed.function);
         if (tcName) {
-          toolCalls.push({ name: tcName, arguments: parsed.arguments || {} });
+          // `parameters` is accepted alongside `arguments`: Apertus (and some
+          // other tool-tuned models) name the args object `parameters`.
+          toolCalls.push({ name: tcName, arguments: parsed.arguments || parsed.parameters || {} });
         } else if (parsed && typeof parsed === 'object') {
           // Name-less tool_call (LFM2-style): the block holds bare arguments.
           // Infer the tool from the argument signature; skip if ambiguous.
-          const argObj = (parsed.arguments && typeof parsed.arguments === 'object') ? parsed.arguments : parsed;
+          const argObj = (parsed.arguments && typeof parsed.arguments === 'object') ? parsed.arguments
+                       : (parsed.parameters && typeof parsed.parameters === 'object') ? parsed.parameters
+                       : parsed;
           const inferred = _adapterInferToolFromArgs(argObj, toolDefs);
           if (inferred) toolCalls.push({ name: inferred, arguments: argObj });
         }
         cleanText = cleanText.replace(match[0], '');
       }
 
+      // 1b. Unclosed <tool_call> blocks. Some tool-tuned models (notably
+      // Apertus) open the block and emit the JSON but stop at EOS WITHOUT a
+      // closing </tool_call>, so the paired regex above never matches and the
+      // raw block would leak into the reply. Pull the first brace-balanced
+      // object after each <tool_call> marker and treat it as a call. Guarded on
+      // the paired pass finding nothing AND a stray marker still being present,
+      // so closing-tag models (Bonsai/Qwen3/Gemma/LFM2) never reach here.
+      if (toolCalls.length === 0 && cleanText.indexOf('<tool_call>') !== -1) {
+        const marker = '<tool_call>';
+        let idx;
+        while ((idx = cleanText.indexOf(marker)) !== -1) {
+          const braceStart = cleanText.indexOf('{', idx + marker.length);
+          const objStr = braceStart !== -1 ? _adapterExtractBalancedObject(cleanText, braceStart) : null;
+          if (objStr) {
+            const parsed = _adapterRepairJSON(objStr);
+            if (parsed && typeof parsed === 'object') {
+              const tcName = parsed.name || parsed.function;
+              const argObj = (parsed.arguments && typeof parsed.arguments === 'object') ? parsed.arguments
+                           : (parsed.parameters && typeof parsed.parameters === 'object') ? parsed.parameters
+                           : (tcName ? {} : parsed);
+              if (tcName) {
+                toolCalls.push({ name: tcName, arguments: argObj });
+              } else {
+                const inferred = _adapterInferToolFromArgs(argObj, toolDefs);
+                if (inferred) toolCalls.push({ name: inferred, arguments: argObj });
+              }
+            }
+            cleanText = (cleanText.slice(0, idx) + cleanText.slice(braceStart + objStr.length)).trim();
+          } else {
+            // No parseable object after this marker — strip just the marker so
+            // the loop can't spin forever; leave any other text intact.
+            cleanText = (cleanText.slice(0, idx) + cleanText.slice(idx + marker.length)).trim();
+          }
+        }
+      }
+
       // 2. Bare JSON without tags
       if (toolCalls.length === 0) {
-        const bareRegex = /\{\s*"(?:name|function)"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[\s\S]*?\})\s*\}/g;
+        const bareRegex = /\{\s*"(?:name|function)"\s*:\s*"(\w+)"\s*,\s*"(?:arguments|parameters)"\s*:\s*(\{[\s\S]*?\})\s*\}/g;
         while ((match = bareRegex.exec(text)) !== null) {
           const args = _adapterRepairJSON(match[2]);
           if (args) {
