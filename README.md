@@ -10,7 +10,7 @@
 
 LocalMind is a single web page that runs real AI models **on your own device**. Open the link, pick a model, and start chatting — the model downloads once, caches in your browser, and works offline after that. Your conversations, files, and memory never leave your machine.
 
-It began as a private chatbot and grew into a small **AI workbench**: chat, image generation, document Q&A, web research, and voice — all local.
+It began as a private chatbot and grew into a small **AI workbench**: chat, image generation, document Q&A, OCR, web research, and voice — all local.
 
 > **The promise: no server · no API keys · no data leaving your device.** The only thing that ever touches the network is a web search — and only when *you* press the search button.
 
@@ -21,6 +21,7 @@ It began as a private chatbot and grew into a small **AI workbench**: chat, imag
 - 🌫️ **Watch text "denoise"** — an experimental diffusion-text mode (a different way of generating).
 - 🌐 **Search the web** *(optional)* — bring your own free search key; answers come back with clickable sources.
 - 📄 **Chat with your documents** — drop in PDFs, Word docs, notes, or a whole folder and ask questions across them. It remembers across sessions.
+- 🔎 **Extract text from images & PDFs (OCR)** — drop in a photo, screenshot, or scanned PDF and get back clean, selectable text or Markdown — tables and formulas included. Runs entirely on your GPU (GLM-OCR); the document never leaves your device. Needs WebGPU (Chrome/Edge); the model downloads once (~1.4 GB), then works offline. You can also point it at the model folder on disk for zero runtime fetch.
 - 🖼️ **See & hear** — some models accept images and audio; voice-to-text works on any model.
 - 🧠 **It remembers** — a private, on-device memory you can browse, search, and tidy up.
 - 🔌 **Use *any* model** — point it at your own Ollama / LM Studio, or load a GGUF model straight into the tab.

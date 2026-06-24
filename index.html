@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="author" content="Chirag Patnaik">
-  <meta name="version" content="2.0.0">
+  <meta name="version" content="2.1.0">
   <meta name="description" content="Private AI chatbot running Gemma entirely in your browser. No server, no API keys, no data leaves your device.">
   <title>LocalMind — Private AI Chat in Your Browser</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
@@ -1736,6 +1736,24 @@
     .image-btn { font: inherit; font-size: 0.78rem; padding: 4px 12px; border: 1px solid var(--gray-200); border-radius: 9999px; background: var(--white); color: var(--gray-800); cursor: pointer; }
     .image-btn:hover:not(:disabled) { border-color: var(--indigo-500); color: var(--indigo-500); }
     .image-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    /* OCR mode — file-driven document recognition */
+    .ocr-controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 8px; }
+    .ocr-mode-toggle { display: inline-flex; border: 1px solid var(--gray-200); border-radius: 9999px; overflow: hidden; }
+    .ocr-mode-btn { font: inherit; font-size: 0.78rem; padding: 4px 14px; border: none; background: var(--white); color: var(--gray-700); cursor: pointer; }
+    .ocr-mode-btn + .ocr-mode-btn { border-left: 1px solid var(--gray-200); }
+    .ocr-mode-btn.active { background: var(--indigo-500); color: #fff; }
+    .ocr-dropzone { border: 1.5px dashed var(--gray-300); border-radius: 10px; padding: 16px; text-align: center; font-size: 0.8rem; color: var(--gray-500); cursor: pointer; transition: border-color .12s, background .12s; }
+    .ocr-dropzone:hover, .ocr-dropzone:focus-visible, .ocr-dropzone.dragover { border-color: var(--indigo-500); color: var(--indigo-500); background: rgba(8,24,74,0.04); outline: none; }
+    .ocr-selected { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 0.8rem; color: var(--gray-700); }
+    .ocr-file-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
+    .ocr-run-btn { background: var(--indigo-500); color: #fff; border-color: var(--indigo-500); }
+    .ocr-run-btn:hover:not(:disabled) { filter: brightness(1.08); color: #fff; }
+    .ocr-consent { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--gray-200); border-radius: 10px; background: rgba(8,24,74,0.03); }
+    .ocr-consent-msg { font-size: 0.78rem; color: var(--gray-700); line-height: 1.5; margin-bottom: 8px; }
+    .ocr-consent-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .ocr-nogpu { font-size: 0.82rem; color: var(--gray-600); line-height: 1.6; padding: 12px 4px; }
+    .ocr-live, .ocr-text { font-family: ui-monospace, 'SF Mono', monospace; font-size: 0.88rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word; margin: 0; user-select: text; }
+    .ocr-live { color: var(--gray-500); }
     /* Diffuse mode — the "fog lifting" reveal */
     .fog { font-family: ui-monospace, 'SF Mono', monospace; font-size: 0.92rem; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
     .fog .tok-mask { color: var(--gray-400); opacity: 0.5; }
@@ -2543,6 +2561,7 @@
         <span class="mode-divider" aria-hidden="true"></span>
         <button class="mode-chip" id="chipImage" title="Generate an image from a prompt — on-device diffusion (WebGPU)">&#127912; Image</button>
         <button class="mode-chip" id="chipDiffuse" title="Experimental: masked-diffusion text generation — watch the answer denoise (WebGPU)">&#127787;&#65039; Diffuse</button>
+        <button class="mode-chip" id="chipOCR" title="Extract text from an image or PDF on-device — GLM-OCR (WebGPU)">&#128196; OCR</button>
         <span class="mode-hint" id="modeHint"></span>
       </div>
       <div class="mode-extra" id="comparePanel">
@@ -2603,6 +2622,48 @@
             <div class="progress-fill" id="diffuseProgressFill" style="background:linear-gradient(90deg,#3b4261,#7aa2f7)"></div>
           </div>
           <div class="progress-text" id="diffuseProgressText">Type a prompt below and Send. First run downloads ~1.4&nbsp;GB (cached after). Watch the answer denoise out of the fog. Best on Chrome/Edge.</div>
+        </div>
+      </div>
+      <div class="mode-extra" id="ocrPanel" role="region" aria-label="Document OCR">
+        <div class="mode-extra-head">Document OCR &middot; <span class="memory-count">GLM-OCR 0.9B (~1.4&nbsp;GB) &middot; on-device</span></div>
+        <!-- WebGPU-capable path -->
+        <div id="ocrMain">
+          <div class="ocr-controls">
+            <div class="ocr-mode-toggle" role="group" aria-label="Output format">
+              <button type="button" class="ocr-mode-btn active" id="ocrModeText" aria-pressed="true" title="Plain recognized text">Text</button>
+              <button type="button" class="ocr-mode-btn" id="ocrModeMarkdown" aria-pressed="false" title="Render structure (tables, formulas) as Markdown">Markdown</button>
+            </div>
+            <button type="button" class="image-btn" id="ocrPickBtn">&#128196; Choose image / PDF…</button>
+            <input type="file" id="ocrFileInput" accept="image/*,application/pdf" hidden>
+          </div>
+          <div class="ocr-dropzone" id="ocrDropzone" tabindex="0" role="button" aria-label="Drop an image or PDF to extract text, or activate to choose a file">
+            Drop an image or PDF here, or choose a file. The document never leaves your device.
+          </div>
+          <!-- Selected-file + run row (hidden until a file is chosen) -->
+          <div class="ocr-selected" id="ocrSelected" hidden>
+            <span class="ocr-file-name" id="ocrFileName"></span>
+            <button type="button" class="image-btn ocr-run-btn" id="ocrRunBtn">Extract text</button>
+            <button type="button" class="image-btn" id="ocrClearBtn" title="Clear the selected file">&times;</button>
+          </div>
+          <!-- First-use consent gate (hidden until a run is requested with no cached model) -->
+          <div class="ocr-consent" id="ocrConsent" hidden role="group" aria-label="Model download consent">
+            <div class="ocr-consent-msg" id="ocrConsentMsg">First use downloads <strong>GLM-OCR (~1.4&nbsp;GB)</strong>, once — then it runs offline. Nothing else is contacted.</div>
+            <div class="ocr-consent-actions">
+              <button type="button" class="image-btn ocr-run-btn" id="ocrDownloadBtn">Download &amp; run</button>
+              <button type="button" class="image-btn" id="ocrFolderBtn" title="Load the ONNX model folder from disk — nothing is fetched">Load from folder…</button>
+              <button type="button" class="image-btn" id="ocrConsentCancel">Cancel</button>
+            </div>
+          </div>
+          <div class="progress-section visible" id="ocrProgressSection" style="border-top:none;background:transparent;padding:8px 0 0">
+            <div class="progress-bar">
+              <div class="progress-fill" id="ocrProgressFill" style="background:linear-gradient(90deg,#0b3d2e,#2f9e6e)"></div>
+            </div>
+            <div class="progress-text" id="ocrProgressText" role="status" aria-live="polite">Choose an image or PDF, pick a format, then Extract. First use downloads the model once (cached after, then offline). WebGPU — best on Chrome/Edge.</div>
+          </div>
+        </div>
+        <!-- Honest degraded state when WebGPU is absent (no error wall) -->
+        <div id="ocrNoGpu" hidden class="ocr-nogpu">
+          This device can&rsquo;t run the GLM-OCR engine in-browser &mdash; it needs <strong>WebGPU</strong> (Chrome or Edge, or <code>chrome://flags/#enable-unsafe-webgpu</code>). A lighter recognizer for low-end devices is planned for a later release. The rest of LocalMind keeps working.
         </div>
       </div>
 
@@ -9084,6 +9145,19 @@ self.onmessage = async (e) => {
     // window.localmind v1 — read-only inference surface.
     // Live properties (`ready`, `model`) use getters so they reflect current
     // state without needing a re-attach on every model change.
+    // window.localmind.ocr — document recognition surface. Same core as the OCR
+    // tile (ocrRecognize, hoisted). Dev-setting gated via the same toggle as the
+    // rest of the API. Result: { mode, pages:[{index,text,markdown?}], model, ms }.
+    let ocrBroadcast = null;
+    function ocrApi(input, opts) {
+      const start = Date.now();
+      opts = opts || {};
+      return ocrRecognize(input, { mode: opts.mode, pages: opts.pages, signal: opts.signal, maxNewTokens: opts.maxNewTokens, prompt: opts.prompt }).then(
+        (res) => { logApiCall({ method: 'ocr', outcome: 'ok', durationMs: Date.now() - start }); return res; },
+        (err) => { logApiCall({ method: 'ocr', outcome: 'err', error: err.message, durationMs: Date.now() - start }); throw err; }
+      );
+    }
+
     const localmindAPI = Object.freeze({
       version: '1.0',
       get ready() { return modelReady; },
@@ -9116,6 +9190,7 @@ self.onmessage = async (e) => {
           create: chatCompletionsCreate,
         }),
       }),
+      ocr: ocrApi,
     });
 
     function attachLocalmindAPI() {
@@ -9126,6 +9201,23 @@ self.onmessage = async (e) => {
           configurable: true,
           enumerable: false,
         });
+        // Cross-tab OCR request/response channel — also the hook headless smoke
+        // tests use. Mirrors window.localmind.ocr; gated by the same dev toggle.
+        try {
+          if (!ocrBroadcast && typeof BroadcastChannel !== 'undefined') {
+            ocrBroadcast = new BroadcastChannel('localmind:ocr');
+            ocrBroadcast.onmessage = async (ev) => {
+              const msg = ev.data || {};
+              if (!msg || msg.type !== 'request' || msg.id == null) return;
+              try {
+                const res = await ocrApi(msg.input, msg.opts || {});
+                ocrBroadcast.postMessage({ type: 'response', id: msg.id, ok: true, result: res });
+              } catch (e) {
+                ocrBroadcast.postMessage({ type: 'response', id: msg.id, ok: false, error: (e && e.message) || String(e) });
+              }
+            };
+          }
+        } catch (e) {}
       } catch (e) {
         console.error('Could not attach window.localmind:', e);
       }
@@ -9133,6 +9225,7 @@ self.onmessage = async (e) => {
 
     function detachLocalmindAPI() {
       try { delete window.localmind; } catch {}
+      try { if (ocrBroadcast) { ocrBroadcast.close(); ocrBroadcast = null; } } catch {}
     }
 
     apiEnabledToggle.addEventListener('change', (e) => setApiEnabled(e.target.checked));
@@ -12126,6 +12219,75 @@ ${JSON.stringify({ name, result })}
         this._diffusionActiveModel = null;
       },
 
+      // --- OCR (GLM-OCR, separate WebGPU worker) ------------------
+      // Document OCR. Like the image/diffuse engines: independent worker, one
+      // WebGPU-heavy worker resident at a time, terminate() frees its device.
+      _ocrWorker: null,
+      _ocrActiveModel: null,
+      loadOCRModel(cfg, options) {
+        cfg = cfg || {};
+        options = options || {};
+        if (this._ocrWorker && this._ocrActiveModel === cfg.modelId) return Promise.resolve();
+        this.unloadOCR();
+        const w = createOCRWorker();
+        this._ocrWorker = w;
+        return new Promise((resolve, reject) => {
+          const onMsg = (e) => {
+            const d = e.data || {};
+            if (d.type === 'progress') {
+              if (typeof options.onProgress === 'function') { try { options.onProgress(d.data || d); } catch {} }
+            } else if (d.type === 'ready') {
+              w.removeEventListener('message', onMsg);
+              this._ocrActiveModel = cfg.modelId;
+              resolve();
+            } else if (d.type === 'error') {
+              w.removeEventListener('message', onMsg);
+              reject(new Error(d.message || 'OCR model load failed'));
+            }
+          };
+          w.addEventListener('message', onMsg);
+          w.addEventListener('error', (ev) => { reject(new Error(ev.message || 'OCR worker startup failed')); });
+          w.postMessage({ type: 'load', modelId: cfg.modelId, baseId: cfg.baseId, dtype: cfg.dtype, useExternalData: cfg.useExternalData, folderFiles: cfg.folderFiles });
+        });
+      },
+      // Run one recognition pass. opts: { imageBuffer (ArrayBuffer), mimeType,
+      // prompt, maxNewTokens, onToken }. Resolves the full recognized text.
+      recognizeOCR(opts) {
+        const w = this._ocrWorker;
+        if (!w) return Promise.reject(new Error('OCR model not loaded'));
+        const id = 'ocr_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        return new Promise((resolve, reject) => {
+          const onMsg = (e) => {
+            const d = e.data || {};
+            if (d.id && d.id !== id) return;
+            if (d.type === 'token') {
+              if (typeof opts.onToken === 'function') { try { opts.onToken(d.text); } catch {} }
+            } else if (d.type === 'result') {
+              w.removeEventListener('message', onMsg);
+              resolve(d.text || '');
+            } else if (d.type === 'error') {
+              w.removeEventListener('message', onMsg);
+              reject(new Error(d.message || 'OCR failed'));
+            }
+          };
+          w.addEventListener('message', onMsg);
+          const buf = opts.imageBuffer;
+          // Transfer the image bytes to the worker (zero-copy) when possible.
+          const transfer = (buf instanceof ArrayBuffer) ? [buf] : [];
+          w.postMessage({ type: 'recognize', id, imageBuffer: buf, mimeType: opts.mimeType, prompt: opts.prompt, maxNewTokens: opts.maxNewTokens }, transfer);
+        });
+      },
+      stopOCR() {
+        if (this._ocrWorker) { try { this._ocrWorker.postMessage({ type: 'stop' }); } catch {} }
+      },
+      unloadOCR() {
+        if (this._ocrWorker) {
+          try { this._ocrWorker.terminate(); } catch {}
+          this._ocrWorker = null;
+        }
+        this._ocrActiveModel = null;
+      },
+
       // --- chat ---------------------------------------------------
       // Returns an async iterator that yields:
       //   { type: 'token', text }
@@ -12811,6 +12973,127 @@ self.addEventListener('message', async (e) => {
       const w = new Worker(url, { type: 'module' });
       w.addEventListener('error', (e) => {
         console.error('SAM worker error:', e.message);
+      });
+      return w;
+    }
+
+    // ── OCR worker factory (GLM-OCR via @huggingface/transformers, WebGPU) ──
+    // GLM-OCR (zai-org, 0.9B, MIT) is a Qwen2.5-VL-family vision→text model;
+    // transformers.js 4.2.0 ships GlmOcrForConditionalGeneration + Glm46VProcessor
+    // (resolved by AutoProcessor via processor_class). Per-module dtype keeps the
+    // CogViT vision encoder in fp16 (encoders are quantization-sensitive) and the
+    // GLM-0.5B decoder at q4f16. Independent WebGPU worker — one heavy worker
+    // resident at a time; terminate() frees its GPU device (same VRAM-coexistence
+    // convention as the image/diffuse engines). The processor handles image
+    // preprocessing + vision-token insertion per chat_template.jinja, so there is
+    // no app-side tensor math. Model bytes: onnx-community/GLM-OCR-ONNX (MIT) over
+    // HuggingFace — the same trust anchor every other LocalMind model loads from.
+    function createOCRWorker() {
+      const code = `
+import {
+  env,
+  GlmOcrForConditionalGeneration,
+  AutoProcessor,
+  RawImage,
+  TextStreamer,
+  InterruptableStoppingCriteria,
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+
+env.allowLocalModels  = true;
+env.localModelPath    = '/models/';
+env.allowRemoteModels = true;
+
+let model = null;
+let processor = null;
+let stopper = null;
+
+self.addEventListener('message', async (e) => {
+  const d = e.data || {};
+  const type = d.type;
+
+  if (type === 'load') {
+    try {
+      const realId = d.baseId || d.modelId;
+      if (d.folderFiles) {
+        // Load-from-folder: resolve every model file from user-supplied blob URLs
+        // (created on the main thread, disk-backed). NOTHING is fetched over the
+        // network. Keys are folder-relative paths; match on exact path suffix so
+        // '...onnx' never collides with its '...onnx_data' external-data sibling.
+        const map = d.folderFiles;
+        const origFetch = self.fetch.bind(self);
+        env.useBrowserCache = false;
+        env.fetch = async (url, init) => {
+          const u = (typeof url === 'string') ? url : ((url && url.url) || String(url));
+          const clean = u.split('?')[0];
+          for (const key in map) { if (clean === key || clean.endsWith('/' + key)) return origFetch(map[key], init); }
+          return origFetch(url, init);
+        };
+      }
+      const opts = {
+        device: 'webgpu',
+        dtype: d.dtype || { vision_encoder: 'fp16', embed_tokens: 'fp16', decoder_model_merged: 'q4f16' },
+        progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
+      };
+      // Per-module external-data map (full file name → shard count). Overrides the
+      // repo config, which omits the _q4f16 keys we use for the decoder.
+      if (d.useExternalData) opts.use_external_data_format = d.useExternalData;
+      processor = await AutoProcessor.from_pretrained(realId);
+      model = await GlmOcrForConditionalGeneration.from_pretrained(realId, opts);
+      self.postMessage({ type: 'ready' });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: 'OCR load failed: ' + ((err && err.message) || String(err)) });
+    }
+  }
+
+  else if (type === 'recognize') {
+    if (!model || !processor) { self.postMessage({ type: 'error', message: 'OCR model not loaded', id: d.id }); return; }
+    try {
+      const blob = new Blob([d.imageBuffer], { type: d.mimeType || 'image/png' });
+      const image = await RawImage.fromBlob(blob);
+      // GLM-OCR is prompt-limited to Document-Parsing scenarios — 'Text Recognition:'
+      // is the full-page recognizer (emits markdown tables / LaTeX for documents).
+      const messages = [{ role: 'user', content: [{ type: 'image' }, { type: 'text', text: d.prompt || 'Text Recognition:' }] }];
+      const text = processor.apply_chat_template(messages, { add_generation_prompt: true });
+      const inputs = await processor(text, image);
+      const tokenizer = processor.tokenizer || processor;
+      let acc = '';
+      const streamer = new TextStreamer(tokenizer, {
+        skip_prompt: true,
+        skip_special_tokens: true,
+        callback_function: (t) => { acc += t; self.postMessage({ type: 'token', text: t, id: d.id }); },
+      });
+      stopper = new InterruptableStoppingCriteria();
+      const output = await model.generate({
+        ...inputs,
+        max_new_tokens: d.maxNewTokens || 4096,
+        do_sample: false,
+        streamer,
+        stopping_criteria: stopper,
+      });
+      // The streamed accumulation is the live UI text; re-decode the generated
+      // tail for the authoritative result (falls back to acc on any slip).
+      let out = acc;
+      try {
+        const sliced = output.slice(null, [inputs.input_ids.dims.at(-1), null]);
+        const dec = (processor.batch_decode ? processor : tokenizer).batch_decode(sliced, { skip_special_tokens: true });
+        if (dec && dec[0] != null) out = dec[0];
+      } catch (_) {}
+      self.postMessage({ type: 'result', text: out, id: d.id });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: 'OCR failed: ' + ((err && err.message) || String(err)), id: d.id });
+    }
+  }
+
+  else if (type === 'stop') {
+    if (stopper) { try { stopper.interrupt(); } catch (_) {} }
+  }
+});
+`;
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url, { type: 'module' });
+      w.addEventListener('error', (e) => {
+        console.error('OCR worker error:', e.message);
       });
       return w;
     }
@@ -14891,6 +15174,58 @@ self.addEventListener('message', async (e) => {
       tokenizer: 'naklitechie/Qwen3-0.6B-diffusion-mdlm-ONNX',
     };
 
+    // ── OCR mode (GLM-OCR) ──────────────────────────────────────
+    // Model bytes: onnx-community/GLM-OCR-ONNX (MIT) over HuggingFace — the same
+    // origin every other LocalMind model loads from; the official onnx-community
+    // export is the accepted permanent home (no NakliTechie mirror). Per-module
+    // dtype: CogViT vision encoder fp16 (encoders are quantization-sensitive),
+    // GLM-0.5B decoder q4f16, embeddings fp16 → ~1.39 GB first-use download,
+    // cached then offline.
+    // TODO(v1.1): PP-DocLayout-V3 layout pre-stage + Tier-0 WASM floor for no-GPU.
+    const OCR_MODEL = {
+      modelId: 'onnx-community/GLM-OCR-ONNX',
+      label: 'GLM-OCR 0.9B',
+      size: '~1.39 GB',
+      dtype: { vision_encoder: 'fp16', embed_tokens: 'fp16', decoder_model_merged: 'q4f16' },
+      // The repo's config.json declares external-data only for the base + _fp16
+      // variants, NOT the _q4f16 ones we select for the decoder — so we must pass
+      // the map explicitly (it overrides config), keyed by full file name → count
+      // of .onnx_data shards. Without this, ORT errors "MountedFiles not available".
+      externalData: {
+        'vision_encoder_fp16.onnx': 1,
+        'embed_tokens_fp16.onnx': 1,
+        'decoder_model_merged_q4f16.onnx': 1,
+      },
+      maxNewTokens: 4096,
+    };
+    // GLM-OCR is prompt-limited; both spec modes use the Document-Parsing
+    // 'Text Recognition:' prompt and differ only in how the result is rendered.
+    const OCR_PROMPT = 'Text Recognition:';
+    const ocrPanel       = document.getElementById('ocrPanel');
+    const chipOCR        = document.getElementById('chipOCR');
+    const ocrMain        = document.getElementById('ocrMain');
+    const ocrNoGpu       = document.getElementById('ocrNoGpu');
+    const ocrModeTextBtn = document.getElementById('ocrModeText');
+    const ocrModeMdBtn   = document.getElementById('ocrModeMarkdown');
+    const ocrPickBtn     = document.getElementById('ocrPickBtn');
+    const ocrFileInput   = document.getElementById('ocrFileInput');
+    const ocrDropzone    = document.getElementById('ocrDropzone');
+    const ocrSelected    = document.getElementById('ocrSelected');
+    const ocrFileName    = document.getElementById('ocrFileName');
+    const ocrRunBtn      = document.getElementById('ocrRunBtn');
+    const ocrClearBtn    = document.getElementById('ocrClearBtn');
+    const ocrConsent     = document.getElementById('ocrConsent');
+    const ocrDownloadBtn = document.getElementById('ocrDownloadBtn');
+    const ocrFolderBtn   = document.getElementById('ocrFolderBtn');
+    const ocrConsentCancel = document.getElementById('ocrConsentCancel');
+    const ocrProgressFill = document.getElementById('ocrProgressFill');
+    const ocrProgressText = document.getElementById('ocrProgressText');
+    let ocrOutMode = 'text';        // 'text' | 'markdown'
+    let ocrFile = null;             // currently selected File (image or PDF)
+    let ocrBusy = false;
+    let ocrFolderFiles = null;      // {basename: blobURL} when loaded from a folder
+    const OCR_PROGRESS_DEFAULT = 'Choose an image or PDF, pick a format, then Extract. First use downloads the model once (cached after, then offline). WebGPU — best on Chrome/Edge.';
+
     function refreshModeUI() {
       chipSearch.classList.toggle('active', searchOn);
       chipResearch.classList.toggle('active', activeMode === 'research');
@@ -14898,21 +15233,25 @@ self.addEventListener('message', async (e) => {
       chipBatch.classList.toggle('active', activeMode === 'batch');
       chipImage.classList.toggle('active', activeMode === 'image');
       chipDiffuse.classList.toggle('active', activeMode === 'diffuse');
+      chipOCR.classList.toggle('active', activeMode === 'ocr');
       comparePanel.classList.toggle('open', activeMode === 'compare');
       batchPanel.classList.toggle('open', activeMode === 'batch');
       imagePanel.classList.toggle('open', activeMode === 'image');
       diffusePanel.classList.toggle('open', activeMode === 'diffuse');
+      ocrPanel.classList.toggle('open', activeMode === 'ocr');
       if (activeMode === 'batch') chatInput.placeholder = 'One prompt per line — Shift+Enter for newlines, then Send…';
       else if (activeMode === 'compare') chatInput.placeholder = 'Ask once — every ticked model answers, then a judge picks…';
       else if (activeMode === 'research') chatInput.placeholder = 'Ask a research question…';
       else if (activeMode === 'image') chatInput.placeholder = 'Describe an image to generate…';
       else if (activeMode === 'diffuse') chatInput.placeholder = 'Ask — watch the answer denoise…';
+      else if (activeMode === 'ocr') chatInput.placeholder = 'Drop a file in the panel above, or type a note…';
       else chatInput.placeholder = 'Type a message…';
       modeHint.textContent =
         activeMode === 'batch' ? 'Each line runs as its own prompt, in sequence.' :
         activeMode === 'research' ? 'Searches the web, reads sources, writes a cited report.' :
         activeMode === 'image' ? 'On-device diffusion — frees the chat model while active.' :
         activeMode === 'diffuse' ? 'Masked-diffusion text — the answer fills in non-linearly. Frees the chat model.' :
+        activeMode === 'ocr' ? 'Extracts text from images / PDFs on-device. Frees the chat model while active.' :
         (activeMode === 'chat' && searchOn) ? 'This message will be web-enriched.' : '';
     }
     function setExclusiveMode(mode) {
@@ -14920,6 +15259,8 @@ self.addEventListener('message', async (e) => {
       activeMode = (activeMode === mode) ? 'chat' : mode;
       if (prev === 'image' && activeMode !== 'image') onLeaveImageMode();
       if (prev === 'diffuse' && activeMode !== 'diffuse') onLeaveDiffuseMode();
+      if (prev === 'ocr' && activeMode !== 'ocr') onLeaveOCRMode();
+      if (activeMode === 'ocr') onEnterOCRMode();
       refreshModeUI();
     }
     function needsSearchOrConfigure(what) {
@@ -14935,6 +15276,9 @@ self.addEventListener('message', async (e) => {
     chipBatch.addEventListener('click', () => { if (!generating) setExclusiveMode('batch'); });
     chipImage.addEventListener('click', () => { if (!generating) setExclusiveMode('image'); });
     chipDiffuse.addEventListener('click', () => { if (!generating) setExclusiveMode('diffuse'); });
+    // OCR chip stays enabled even without WebGPU — it degrades to an honest
+    // "needs WebGPU" panel state rather than an error wall (spec hard-rule #5).
+    chipOCR.addEventListener('click', () => { if (!generating && !ocrBusy) setExclusiveMode('ocr'); });
     imageStepsInput.addEventListener('input', () => { imageStepsVal.textContent = imageStepsInput.value; });
     imageReroll.addEventListener('click', () => { if (generating || !lastImagePrompt) return; imageSeedInput.value = ''; runImageGen(lastImagePrompt); });
     // Phone/tablet check (touch + small viewport) — used to gate heavy capabilities.
@@ -15071,7 +15415,7 @@ self.addEventListener('message', async (e) => {
     // Restore the chat model that a gen mode suspended — but not when hopping
     // straight between the two gen modes (image <-> diffuse), to avoid churn.
     function maybeRestoreChat() {
-      if (activeMode === 'image' || activeMode === 'diffuse') return;
+      if (activeMode === 'image' || activeMode === 'diffuse' || activeMode === 'ocr') return;
       if (lastChatModelKey && !modelReady) { const k = lastChatModelKey; lastChatModelKey = null; loadModel(k); }
     }
 
@@ -15140,6 +15484,311 @@ self.addEventListener('message', async (e) => {
       maybeRestoreChat();
     }
 
+    // ── OCR: document recognition (GLM-OCR) ─────────────────────
+    // File-driven (not prompt-driven like image/diffuse): the panel holds the
+    // controls, results render ephemerally into the transcript DOM. Extracted
+    // text is NEVER pushed into the persisted `messages` array — it lives only
+    // in the DOM and is gone on reload (spec: nothing persisted by default).
+    let _ocrGpuOk = null;
+    async function ocrWebGPUAvailable() {
+      if (_ocrGpuOk !== null) return _ocrGpuOk;
+      let ok = !!(navigator.gpu);
+      if (ok) { try { ok = !!(await navigator.gpu.requestAdapter()); } catch (e) { ok = false; } }
+      _ocrGpuOk = ok;
+      return ok;
+    }
+
+    async function onEnterOCRMode() {
+      const ok = await ocrWebGPUAvailable();
+      ocrMain.hidden = !ok;          // honest degraded state instead of an error wall
+      ocrNoGpu.hidden = ok;
+    }
+    function onLeaveOCRMode() {
+      try { LocalMind.runtime.stopOCR(); } catch {}
+      try { LocalMind.runtime.unloadOCR(); } catch {}
+      ocrConsent.hidden = true;
+      ocrProgressFill.style.width = '0%';
+      ocrProgressText.textContent = OCR_PROGRESS_DEFAULT;
+      maybeRestoreChat();
+    }
+
+    function setOcrOutMode(m) {
+      ocrOutMode = (m === 'markdown') ? 'markdown' : 'text';
+      ocrModeTextBtn.classList.toggle('active', ocrOutMode === 'text');
+      ocrModeMdBtn.classList.toggle('active', ocrOutMode === 'markdown');
+      ocrModeTextBtn.setAttribute('aria-pressed', String(ocrOutMode === 'text'));
+      ocrModeMdBtn.setAttribute('aria-pressed', String(ocrOutMode === 'markdown'));
+    }
+
+    // Suspend the chat model (free its VRAM — one heavy WebGPU worker at a time)
+    // and load GLM-OCR with progress. Mirrors ensureImageModel/ensureDiffusionModel.
+    async function ensureOCRModel() {
+      const wantId = ocrFolderFiles ? '__folder__' : OCR_MODEL.modelId;
+      if (LocalMind.runtime._ocrWorker && LocalMind.runtime._ocrActiveModel === wantId) return;
+      if (activeModelKey) lastChatModelKey = activeModelKey;
+      try { LocalMind.runtime.unload(); } catch {}
+      worker = null; modelReady = false;
+      try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch {}
+      ocrProgressFill.style.width = '0%';
+      ocrProgressText.textContent = ocrFolderFiles
+        ? 'Loading GLM-OCR from your folder… nothing is fetched.'
+        : 'Loading GLM-OCR… first use downloads ~1.39 GB + compiles WebGPU shaders (cached after, then offline).';
+      const mb = (n) => (n / 1048576).toFixed(0) + 'MB';
+      await LocalMind.runtime.loadOCRModel(
+        { modelId: wantId, baseId: OCR_MODEL.modelId, dtype: OCR_MODEL.dtype, useExternalData: OCR_MODEL.externalData, folderFiles: ocrFolderFiles },
+        { onProgress: (p) => {
+            const pct = p.total ? Math.round(100 * p.loaded / p.total) : 0;
+            if (p.total) ocrProgressFill.style.width = pct + '%';
+            const verb = (p.status === 'progress' || p.status === 'download') ? 'Downloading' : (p.status || 'Loading');
+            const name = (p.file || p.name || '').replace(/^onnx\//, '');
+            ocrProgressText.textContent = `${verb} ${name} — ${p.loaded ? mb(p.loaded) : ''}${p.total ? (' / ' + mb(p.total)) : ''}`.replace(/\s+/g, ' ').trim();
+          } }
+      );
+      ocrProgressFill.style.width = '100%';
+      ocrProgressText.textContent = 'Model ready.';
+    }
+
+    // Has the model already been fetched into the browser cache? If so we can
+    // load instantly with no network — so we skip the consent gate (no surprise
+    // download). Probes all Cache Storage buckets for a GLM-OCR entry.
+    async function ocrModelCached() {
+      if (ocrFolderFiles) return true;
+      try {
+        if (!self.caches) return false;
+        const names = await caches.keys();
+        for (const n of names) {
+          const c = await caches.open(n);
+          const reqs = await c.keys();
+          if (reqs.some(r => r.url.indexOf('GLM-OCR-ONNX') !== -1)) return true;
+        }
+      } catch (e) {}
+      return false;
+    }
+
+    // ---- input → page images (downscale guard against encoder OOM) ----
+    async function ocrBlobToBuffer(blob, maxDim) {
+      let bitmap;
+      try { bitmap = await createImageBitmap(blob); }
+      catch (e) { throw new Error('Could not read that image (' + ((e && e.message) || e) + ')'); }
+      const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+      const w = Math.max(1, Math.round(bitmap.width * scale));
+      const h = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      if (bitmap.close) bitmap.close();
+      const out = await new Promise(r => canvas.toBlob(r, 'image/png'));
+      return { buffer: await out.arrayBuffer(), mimeType: 'image/png', index: 1 };
+    }
+    async function ocrRenderPdf(blob, maxDim, pageFilter) {
+      await ensurePDFJS();
+      const data = await blob.arrayBuffer();
+      const pdf = await window.pdfjsLib.getDocument({ data }).promise;
+      const want = (pageFilter && pageFilter.length) ? new Set(pageFilter) : null;
+      const pages = [];
+      for (let n = 1; n <= pdf.numPages; n++) {
+        if (want && !want.has(n)) continue;
+        const page = await pdf.getPage(n);
+        const base = page.getViewport({ scale: 1 });
+        const scale = Math.min(2.0, maxDim / Math.max(base.width, base.height));
+        const viewport = page.getViewport({ scale: Math.max(0.2, scale) });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(viewport.width); canvas.height = Math.round(viewport.height);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        const out = await new Promise(r => canvas.toBlob(r, 'image/png'));
+        pages.push({ buffer: await out.arrayBuffer(), mimeType: 'image/png', index: n });
+      }
+      if (!pages.length) throw new Error('No pages to render from that PDF.');
+      return pages;
+    }
+    async function ocrInputToImages(input, maxDim, pageFilter) {
+      if (input && input.pdf instanceof Blob) return ocrRenderPdf(input.pdf, maxDim, pageFilter);
+      if (typeof input === 'string') { const b = await (await fetch(input)).blob(); return ocrInputToImages(b, maxDim, pageFilter); }
+      if (typeof ImageBitmap !== 'undefined' && input instanceof ImageBitmap) {
+        const c = document.createElement('canvas'); c.width = input.width; c.height = input.height;
+        c.getContext('2d').drawImage(input, 0, 0);
+        const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+        return [await ocrBlobToBuffer(blob, maxDim)];
+      }
+      if (input instanceof Blob) {
+        const isPDF = input.type === 'application/pdf' || (input.name && /\.pdf$/i.test(input.name));
+        if (isPDF) return ocrRenderPdf(input, maxDim, pageFilter);
+        return [await ocrBlobToBuffer(input, maxDim)];
+      }
+      if (input instanceof ArrayBuffer) return [await ocrBlobToBuffer(new Blob([input]), maxDim)];
+      throw new Error('Unsupported OCR input type');
+    }
+
+    // Shared recognition core — used by the UI (doOCR) AND window.localmind.ocr.
+    // Returns { mode, pages: [{ index, text, markdown? }], model, ms }.
+    async function ocrRecognize(input, opts) {
+      opts = opts || {};
+      const mode = opts.mode === 'markdown' ? 'markdown' : 'text';
+      if (!(await ocrWebGPUAvailable())) throw new Error('WebGPU is required for GLM-OCR and is not available in this browser.');
+      await ensureOCRModel();
+      const imgs = await ocrInputToImages(input, 2000, opts.pages);
+      const result = { mode, pages: [], model: ocrFolderFiles ? 'GLM-OCR (folder)' : OCR_MODEL.modelId, ms: 0 };
+      const t0 = Date.now();
+      for (let i = 0; i < imgs.length; i++) {
+        if (opts.signal && opts.signal.aborted) { try { LocalMind.runtime.stopOCR(); } catch {} throw new DOMException('OCR aborted', 'AbortError'); }
+        if (typeof opts.onPageStart === 'function') { try { opts.onPageStart(imgs[i].index, imgs.length); } catch {} }
+        let text = '';
+        await LocalMind.runtime.recognizeOCR({
+          imageBuffer: imgs[i].buffer, mimeType: imgs[i].mimeType,
+          prompt: opts.prompt || OCR_PROMPT, maxNewTokens: opts.maxNewTokens || OCR_MODEL.maxNewTokens,
+          onToken: (t) => { text += t; if (typeof opts.onToken === 'function') { try { opts.onToken(t, imgs[i].index); } catch {} } },
+        });
+        const page = { index: imgs[i].index, text: text };
+        if (mode === 'markdown') page.markdown = text;
+        result.pages.push(page);
+      }
+      result.ms = Date.now() - t0;
+      return result;
+    }
+
+    function ocrAppendResultMeta(bubble, text, name, ms) {
+      const meta = document.createElement('div');
+      meta.className = 'gen-image-meta';
+      const span = document.createElement('span');
+      span.textContent = `${name} · ${(text || '').length} chars · ${(ms / 1000).toFixed(1)}s · on-device, not saved`;
+      const copy = document.createElement('button');
+      copy.className = 'image-btn'; copy.style.marginLeft = '8px'; copy.textContent = 'Copy';
+      copy.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(text || ''); copy.textContent = 'Copied'; setTimeout(() => { copy.textContent = 'Copy'; }, 1200); }
+        catch (e) { showToast('Copy failed'); }
+      });
+      meta.appendChild(span); meta.appendChild(copy);
+      bubble.appendChild(meta);
+    }
+
+    // UI run: render the file as an ephemeral user turn + stream the result into
+    // an assistant bubble. Never touches `messages`, so nothing is persisted.
+    async function doOCR() {
+      if (ocrBusy || !ocrFile) return;
+      ocrBusy = true; generating = true;
+      sendBtn.innerHTML = '&#9632;'; sendBtn.classList.add('stop');
+      ocrRunBtn.disabled = true; ocrDownloadBtn.disabled = true;
+      const file = ocrFile, outMode = ocrOutMode;
+      addUserMessage('\u{1F4C4} ' + file.name + ' — ' + (outMode === 'markdown' ? 'Document → Markdown' : 'Text Recognition'), false);
+      const ph = addAssistantPlaceholder();
+      const live = document.createElement('pre'); live.className = 'ocr-live'; live.textContent = 'Preparing…';
+      ph.bubble.innerHTML = ''; ph.bubble.appendChild(live);
+      const t0 = Date.now();
+      let acc = '';
+      try {
+        const res = await ocrRecognize(file, {
+          mode: outMode,
+          onPageStart: (idx, total) => {
+            ocrProgressText.textContent = total > 1 ? `Recognizing page ${idx}/${total}…` : 'Recognizing…';
+            if (acc) { acc += '\n\n--- Page ' + idx + ' ---\n\n'; live.textContent = acc; }
+          },
+          onToken: (t) => { acc += t; live.textContent = acc; chatArea.scrollTop = chatArea.scrollHeight; },
+        });
+        const multi = res.pages.length > 1;
+        const full = res.pages.map(p => (multi ? '## Page ' + p.index + '\n\n' : '') + p.text).join('\n\n');
+        const ms = Date.now() - t0;
+        ph.bubble.innerHTML = '';
+        if (outMode === 'markdown') {
+          updateAssistantBubble(ph.bubble, full || '_(no text found)_');
+        } else {
+          const pre = document.createElement('pre'); pre.className = 'ocr-text';
+          pre.textContent = full || '(no text found)';
+          ph.bubble.appendChild(pre);
+        }
+        ocrAppendResultMeta(ph.bubble, full, file.name, ms);
+        ocrProgressFill.style.width = '100%';
+        ocrProgressText.textContent = `Done in ${(ms / 1000).toFixed(1)}s. Choose another file to extract more.`;
+      } catch (e) {
+        const emsg = (e && e.message) || String(e);
+        ph.bubble.innerHTML = '';
+        const er = document.createElement('div'); er.className = 'gen-image-meta';
+        er.textContent = 'OCR failed: ' + emsg;
+        ph.bubble.appendChild(er);
+        ocrProgressText.textContent = 'Failed — ' + emsg;
+        showToast('OCR failed: ' + emsg);
+      } finally {
+        ocrBusy = false; generating = false;
+        sendBtn.innerHTML = '&#9654;'; sendBtn.classList.remove('stop');
+        ocrRunBtn.disabled = false; ocrDownloadBtn.disabled = false;
+      }
+    }
+
+    // Decide whether to run now or show the first-use consent gate.
+    async function requestOCR() {
+      if (ocrBusy) return;
+      if (!(await ocrWebGPUAvailable())) { onEnterOCRMode(); return; }
+      if (!ocrFile) { showToast('Choose an image or PDF first'); return; }
+      const loaded = !!(LocalMind.runtime._ocrWorker && LocalMind.runtime._ocrActiveModel);
+      if (loaded || ocrFolderFiles) { doOCR(); return; }
+      if (await ocrModelCached()) { doOCR(); return; }   // already downloaded → no surprise
+      ocrConsent.hidden = false;                          // first use → ask before fetching
+    }
+
+    // Load-from-folder: user supplies the GLM-OCR ONNX model folder; we map every
+    // file to a disk-backed blob URL and load with zero runtime fetch. Needs FSA
+    // (Chromium). The worker's env.fetch shim resolves model paths to these blobs.
+    async function loadOCRFromFolder() {
+      if (!window.showDirectoryPicker) { showToast('Folder loading needs a Chromium browser (File System Access).'); return; }
+      let dir;
+      try { dir = await window.showDirectoryPicker({ id: 'glm-ocr-model', mode: 'read' }); }
+      catch (e) { return; } // user cancelled the picker
+      ocrConsent.hidden = true;
+      ocrProgressText.textContent = 'Reading model folder…';
+      const map = {};
+      async function walk(handle, prefix) {
+        for await (const [name, h] of handle.entries()) {
+          const rel = prefix ? prefix + '/' + name : name;
+          if (h.kind === 'file') { const file = await h.getFile(); map[rel] = URL.createObjectURL(file); }
+          else if (h.kind === 'directory') { await walk(h, rel); }
+        }
+      }
+      try {
+        await walk(dir, '');
+        if (!Object.keys(map).some(k => k === 'config.json' || k.endsWith('/config.json'))) {
+          throw new Error('No config.json found — pick the GLM-OCR ONNX model folder itself.');
+        }
+        ocrFolderFiles = map;
+        showToast('Model folder loaded — running fully offline.');
+        doOCR();
+      } catch (e) {
+        ocrFolderFiles = null;
+        showToast('Folder load failed: ' + ((e && e.message) || e));
+        ocrProgressText.textContent = OCR_PROGRESS_DEFAULT;
+      }
+    }
+
+    function selectOCRFile(f) {
+      if (!f) return;
+      const ok = (f.type && (f.type.startsWith('image/') || f.type === 'application/pdf')) || /\.(png|jpe?g|webp|gif|bmp|pdf)$/i.test(f.name || '');
+      if (!ok) { showToast('Choose an image or PDF'); return; }
+      ocrFile = f;
+      ocrFileName.textContent = f.name || 'image';
+      ocrSelected.hidden = false;
+      ocrConsent.hidden = true;
+    }
+
+    // ---- OCR event wiring ----
+    if (ocrModeTextBtn) {
+      ocrModeTextBtn.addEventListener('click', () => setOcrOutMode('text'));
+      ocrModeMdBtn.addEventListener('click', () => setOcrOutMode('markdown'));
+      ocrPickBtn.addEventListener('click', () => ocrFileInput.click());
+      ocrFileInput.addEventListener('change', () => { if (ocrFileInput.files && ocrFileInput.files[0]) selectOCRFile(ocrFileInput.files[0]); });
+      ocrDropzone.addEventListener('click', () => ocrFileInput.click());
+      ocrDropzone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ocrFileInput.click(); } });
+      ocrDropzone.addEventListener('dragover', (e) => { e.preventDefault(); ocrDropzone.classList.add('dragover'); });
+      ocrDropzone.addEventListener('dragleave', () => ocrDropzone.classList.remove('dragover'));
+      ocrDropzone.addEventListener('drop', (e) => { e.preventDefault(); ocrDropzone.classList.remove('dragover'); const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) selectOCRFile(f); });
+      ocrRunBtn.addEventListener('click', () => requestOCR());
+      ocrClearBtn.addEventListener('click', () => { ocrFile = null; ocrSelected.hidden = true; ocrFileInput.value = ''; ocrConsent.hidden = true; ocrProgressText.textContent = OCR_PROGRESS_DEFAULT; });
+      ocrDownloadBtn.addEventListener('click', () => { ocrConsent.hidden = true; doOCR(); });
+      ocrConsentCancel.addEventListener('click', () => { ocrConsent.hidden = true; });
+      ocrFolderBtn.addEventListener('click', () => loadOCRFromFolder());
+    }
+
     function dispatchSend() {
       const q = chatInput.value.trim();
       if (activeMode === 'research') { if (!q) { showToast('Type a research question'); return; } runDeepResearch(q); return; }
@@ -15152,12 +15801,14 @@ self.addEventListener('message', async (e) => {
       if (activeMode === 'batch') { runBatchInline(); return; }
       if (activeMode === 'image') { if (!q) { showToast('Describe an image to generate'); return; } runImageGen(q); return; }
       if (activeMode === 'diffuse') { if (!q) { showToast('Type a prompt'); return; } runDiffuseGen(q); return; }
+      if (activeMode === 'ocr') { requestOCR(); return; }   // file-driven — input text is ignored
       if (searchOn) webEnrichedMode = true;
       sendMessage();
     }
 
     sendBtn.addEventListener('click', () => {
       if (generating) {
+        if (ocrBusy) { try { LocalMind.runtime.stopOCR(); } catch {} return; } // interrupt OCR; partial text resolves
         if (imageBusy || diffuseBusy) return; // gen runs to completion — no mid-run stop
         if (LocalMind.runtime.isEndpoint && LocalMind.runtime.isEndpoint()) {
           if (endpointAbort) { try { endpointAbort.abort(); } catch {} }
