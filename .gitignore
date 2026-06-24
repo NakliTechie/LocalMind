@@ -23,3 +23,6 @@
 !.dev.vars.example
 .env*
 !.env.example
+
+# local-only working notes — never pushed (also covered by the `*` rule above)
+plan/
