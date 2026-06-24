@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="author" content="Chirag Patnaik">
-  <meta name="version" content="2.1.0">
+  <meta name="version" content="2.2.0">
   <meta name="description" content="Private AI chatbot running Gemma entirely in your browser. No server, no API keys, no data leaves your device.">
   <title>LocalMind — Private AI Chat in Your Browser</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
@@ -1941,6 +1941,20 @@
       font-weight: 400;
       padding: 5px 8px;
     }
+    /* No-WebGPU soft banner — booted-but-degraded notice (not a dead end) */
+    .nowebgpu-banner {
+      position: fixed; top: 0; left: 0; right: 0;
+      background: #8a5a00; color: #fff;
+      padding: 10px 20px; display: none; align-items: center; gap: 12px;
+      z-index: 690; font-size: 0.82rem; line-height: 1.45; flex-wrap: wrap;
+    }
+    .nowebgpu-banner.open { display: flex; }
+    .nowebgpu-banner strong { font-weight: 700; }
+    .nowebgpu-banner span { flex: 1; min-width: 200px; }
+    .nowebgpu-banner button {
+      background: var(--white); color: #8a5a00; border: none; border-radius: 6px;
+      padding: 5px 12px; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+    }
 
     /* Drag-drop overlay */
     .drag-overlay {
@@ -2701,6 +2715,12 @@
     <input type="password" id="importPassphrase" placeholder="Passphrase" style="display:none">
     <button id="importConfirmBtn">Load conversation</button>
     <button class="dismiss-btn" id="importDismissBtn">Dismiss</button>
+  </div>
+
+  <!-- Shown when WebGPU is unavailable: booted-but-degraded, not a dead end -->
+  <div class="nowebgpu-banner" id="noWebGPUBanner">
+    <span><strong>WebGPU is off in this browser.</strong> In-browser GPU models (and Image / Diffuse / OCR) need it — but you can still run <strong>in-browser GGUF models on CPU</strong> or connect <strong>your own server</strong> (Settings → Local endpoint). Best WebGPU support: Chrome / Edge.</span>
+    <button id="noWebGPUDismiss">Got it</button>
   </div>
 
   <!-- Message context menu (right-click / long-press on a message) -->
@@ -7266,19 +7286,18 @@ self.onmessage = async (e) => {
   </script>
   <script type="module">
     // ── WebGPU check ────────────────────────────────────────────
+    // WebGPU is required for in-browser GPU models (ONNX), 🎨 Image, 🌫️ Diffuse,
+    // and 📄 OCR — but NOT for the local-endpoint backend or in-browser GGUF
+    // (wllama, which runs on CPU). So a missing WebGPU is no longer a dead end:
+    // we flag it, boot anyway, steer the default load to a CPU/server path, and
+    // let the WebGPU-only surfaces gate themselves on `noWebGPU`. The soft banner
+    // + picker gating + steered auto-load are wired in Init (refs exist by then).
     const hasWebGPU = !!navigator.gpu;
-    if (!hasWebGPU) {
-      document.getElementById('chatArea').innerHTML = `
-        <div class="webgpu-error">
-          <div style="font-size:2rem;margin-bottom:12px">&#9888;</div>
-          <h2>WebGPU Not Available</h2>
-          <p>LocalMind requires WebGPU to run the AI model in your browser.
-          Please use Chrome 113+, Edge 113+, or Firefox 130+ on a device with a compatible GPU.</p>
-        </div>`;
+    const noWebGPU = !hasWebGPU;
+    if (noWebGPU) {
       document.getElementById('statusBadge').className = 'status-badge error';
       document.getElementById('statusSpinner').style.display = 'none';
-      document.getElementById('statusText').textContent = 'Not supported';
-      throw new Error('WebGPU not available');
+      document.getElementById('statusText').textContent = 'WebGPU off';
     }
 
     // ── Model registry ──────────────────────────────────────────
@@ -15684,12 +15703,20 @@ self.addEventListener('message', async (e) => {
           mode: outMode,
           onPageStart: (idx, total) => {
             ocrProgressText.textContent = total > 1 ? `Recognizing page ${idx}/${total}…` : 'Recognizing…';
-            if (acc) { acc += '\n\n--- Page ' + idx + ' ---\n\n'; live.textContent = acc; }
+            // Live view is a <pre> (raw), so use a plain delimiter — for every
+            // page including the first, so the page count is clear from the start.
+            if (total > 1) { acc += (acc ? '\n\n' : '') + `===== Page ${idx} of ${total} =====\n\n`; live.textContent = acc; }
           },
           onToken: (t) => { acc += t; live.textContent = acc; chatArea.scrollTop = chatArea.scrollHeight; },
         });
         const multi = res.pages.length > 1;
-        const full = res.pages.map(p => (multi ? '## Page ' + p.index + '\n\n' : '') + p.text).join('\n\n');
+        const total = res.pages.length;
+        // Final render: markdown headings in Markdown mode, plain rules in Text mode.
+        const full = res.pages.map(p => {
+          if (!multi) return p.text;
+          const marker = outMode === 'markdown' ? `## Page ${p.index} of ${total}` : `===== Page ${p.index} of ${total} =====`;
+          return marker + '\n\n' + p.text;
+        }).join('\n\n');
         const ms = Date.now() - t0;
         ph.bubble.innerHTML = '';
         if (outMode === 'markdown') {
@@ -16287,7 +16314,28 @@ self.addEventListener('message', async (e) => {
     // ── Init ────────────────────────────────────────────────────
     renderRestoredMessages();
     refreshHistoryPanel();   // populate the docked desktop history rail on load
-    loadModel(modelSelect.value);
+    if (noWebGPU) {
+      // Reveal the soft banner, mark WebGPU-only models in the picker, and steer
+      // the default load to a CPU-capable GGUF (wllama) — or, if none, leave it
+      // unloaded for the user to connect a server. The endpoint + GGUF backends
+      // need no WebGPU, so the app stays useful instead of dead-ending.
+      const banner = document.getElementById('noWebGPUBanner');
+      if (banner) banner.classList.add('open');
+      const dismiss = document.getElementById('noWebGPUDismiss');
+      if (dismiss) dismiss.addEventListener('click', () => banner.classList.remove('open'));
+      let firstCpuKey = null;
+      for (const opt of Array.from(modelSelect.options)) {
+        const mm = MODELS[opt.value];
+        if (!mm) continue;
+        const cpuOk = mm.backend === 'wllama' || mm.backend === 'endpoint';
+        if (cpuOk) { if (!firstCpuKey) firstCpuKey = opt.value; }
+        else { opt.disabled = true; if (!/needs WebGPU/.test(opt.textContent)) opt.textContent += ' — needs WebGPU'; }
+      }
+      if (firstCpuKey) { modelSelect.value = firstCpuKey; loadModel(firstCpuKey); }
+      else { statusText.textContent = 'Connect a server'; chatInput.placeholder = 'Connect a local endpoint in Settings to start…'; }
+    } else {
+      loadModel(modelSelect.value);
+    }
   </script>
 </body>
 </html>
