@@ -19,6 +19,8 @@ Pick a model from the dropdown. It downloads once, caches in the browser, and ru
 | **Gemma 3 1B** | ~760 MB | WebGPU | Text only | Lightweight fallback |
 | **Gemma 4 E2B** | ~1.5 GB | WebGPU | Text + image + audio + agent | Multimodal on any device |
 | **Gemma 4 E4B** | ~4.9 GB | WebGPU | Text + image + audio + agent | Best multimodal quality |
+| **LFM2.5 230M · WebGPU kernels** | ~140 MB | Custom WGSL (in-tab) | Text + agent | LFM2.5 230M on a from-scratch WebGPU engine — every kernel hand-written WGSL |
+| **Gemma 4 E2B · WebGPU kernels** | ~1.5 GB | Custom WGSL (in-tab) | Text + agent | Gemma 4 E2B (QAT int4) on hand-written WGSL kernels; ~250 tok/s on an M4 Max |
 | **SmolLM2 360M · GGUF** | ~270 MB | wllama (in-tab) | Text + agent | Tiniest; runs on CPU without WebGPU |
 | **Llama 3.2 1B · GGUF** | ~810 MB | wllama (in-tab) | Text + agent | Popular GGUF instruct model |
 | **Qwen2.5 1.5B · GGUF** | ~1.1 GB | wllama (in-tab) | Text + agent | More capable GGUF option |
@@ -27,13 +29,14 @@ Plus any **custom Hugging Face ONNX model** (paste a repo id) or any model serve
 
 The Bonsai family are 1.58-bit ternary-weight LLMs from Prism ML (Apache-2.0, Qwen3 backbone) — they punch above their download size on reasoning/code/tool-calling. LFM2 8B A1B is Liquid AI's sparse mixture-of-experts; note the **symmetric** QMoE export (`onnx-community/LFM2-8B-A1B-ONNX`) is the one that loads on WebGPU — the asymmetric/zero-point builds don't. **Apertus 4B** is Swiss AI's fully-open (open data + weights), Apache-2.0, multilingual model (1800+ languages) — a pretraining distillation of their 8B teacher (`onnx-community` q4f16 ONNX, runs via Transformers.js ≥4.0). It's a strong chat model but an unreliable tool-caller at this size, so it's exposed for chat only.
 
-## Runtimes — three ways to run a model
+## Runtimes — four ways to run a model
 
 You're not locked into one engine. Every option is local; nothing leaves your device.
 
 1. **In your browser (ONNX + WebGPU)** — the default. Models run on your GPU via Transformers.js. Zero setup, fully private, supports multimodal + tools.
 2. **In-browser GGUF (wllama)** — load a GGUF model straight from a Hugging Face URL into the tab (llama.cpp compiled to WebAssembly). Taps the huge GGUF ecosystem with no ONNX export needed; WebGPU-accelerated when available (~48 tok/s on a 360M), or pure CPU when not — **the only in-tab path that works without WebGPU**.
-3. **Your own local server (endpoint)** — point LocalMind at an OpenAI-compatible server on your machine (Ollama, LM Studio, llama.cpp, Atomic) in Settings → Models. The model runs on the server at native speed; the browser just streams. Lets you use big models (7B–70B+) and the whole Ollama / LM Studio library. Still local (localhost) — nothing leaves the device.
+3. **Custom WebGPU kernels (in-tab)** — purpose-built, from-scratch WebGPU inference engines where *every* kernel is hand-written WGSL — no ONNX runtime, no llama.cpp. Two are bundled: **LFM2.5 230M** (`Lfm2Mobile`, from `webml-community/lfm2-webgpu-kernels` — RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) and **Gemma 4 E2B** (`Gemma4Mobile`, from `webml-community/gemma-4-webgpu-kernels` — QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm, GQA + sliding-window attention). Each reads its quantized weights directly and is tuned for maximal decode throughput. WebGPU-only (no CPU fallback).
+4. **Your own local server (endpoint)** — point LocalMind at an OpenAI-compatible server on your machine (Ollama, LM Studio, llama.cpp, Atomic) in Settings → Models. The model runs on the server at native speed; the browser just streams. Lets you use big models (7B–70B+) and the whole Ollama / LM Studio library. Still local (localhost) — nothing leaves the device.
 
 ## Generation modes
 
@@ -166,7 +169,7 @@ A gallery is built into the app — the **?** help button → *Try these* tab. C
 
 ## Compared to other in-browser chat apps
 
-Most "run an LLM in your browser" projects are **chat UIs for a model**. LocalMind is a **research agent with persistent memory, tools, web enrichment, image + text-diffusion generation, and three interchangeable runtimes** — in a single HTML file with zero build.
+Most "run an LLM in your browser" projects are **chat UIs for a model**. LocalMind is a **research agent with persistent memory, tools, web enrichment, image + text-diffusion generation, and four interchangeable runtimes** — in a single HTML file with zero build.
 
 | Feature | **LocalMind** | [WebLLM Chat](https://chat.webllm.ai) | [Chatty](https://github.com/addyosmani/chatty) | [Transformers.js chat](https://github.com/huggingface/transformers.js/tree/v3/examples/webgpu-chat) |
 |---|---|---|---|---|

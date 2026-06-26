@@ -82,6 +82,7 @@ Three generation paradigms live in the one file: **autoregressive chat** (ONNX +
 - **Local-endpoint backend** — point LocalMind at a local OpenAI-compatible server (Ollama / LM Studio / llama.cpp / Atomic): `/v1/chat/completions` SSE streaming + `/v1/models` discovery (Ollama `/api/tags` fallback). A single branch point in `generateOnce()` → `generateViaEndpoint()`; text tool-calling, Deep Research, and Compare all route through it unchanged. Sidesteps the WebGPU bottleneck and unlocks any GGUF model the host can run. Local-first (localhost); cloud endpoints intentionally not encouraged (would break the no-data-leaves ethos).
 - **Settings sub-tabs** — General / Models / Tools / Data, with the tab bar at the bottom (the panel opens upward), so the now-large Settings surface stays navigable.
 - **Responsive pass.** Mobile: toolbar + model-picker reflow, bigger tap targets, the heavy WebGPU modes (Image/Diffuse) gated on touch devices, a memory warning for chat models >1.5 GB, and an endpoint-hero tip (use the phone as a thin client to a desktop Ollama). Desktop: an app-shell — a full-width top bar + a docked conversation-history left rail + a widened main area, with the chat reading column capped at 720 px for legibility.
+- **Custom-WGSL WebGPU-kernel runtimes (June 2026).** A fourth runtime family: from-scratch in-browser inference engines where *every* kernel is hand-written WGSL — no ONNX runtime, no llama.cpp. Two are bundled, each ported from its `webml-community/*-webgpu-kernels` HF Space as a self-contained sibling module imported by a blob-URL worker: **LFM2.5 230M** (`Lfm2Mobile` / `lfm2_5.js` — RoPE, RMSNorm, Q4_0/Q8_0 dequant, the LFM2 short-conv depthwise+gating, GQA attention, GEMVs; reads a Q4_0 GGUF directly) and **Gemma 4 E2B** (`Gemma4Mobile` / `gemma-4-e2b.js` — QAT int4 matmul (gemm / split-K / sgmat), embed-gather-norm, RoPE/RMSNorm, GQA + sliding-window attention; reads Google's QAT-mobile weights). Each engine runs its own ranged weight download + CacheStorage cache, applies its chat template internally, and needs only WebGPU (no SharedArrayBuffer / COOP-COEP). They reuse the shared chat-worker protocol (`attachWorkerHandlers` + `generateOnce`) unchanged — a new worker adapts the engine's cumulative-`{text}` stream into per-token deltas, and `loadModel()` routes on `backend: 'lfm2-webgpu' | 'gemma4-webgpu'`. WebGPU-only (no CPU fallback).
 
 ## Status
 
@@ -99,7 +100,7 @@ Three generation paradigms live in the one file: **autoregressive chat** (ONNX +
 | Text diffusion | Showcase (kohra Qwen3-0.6B MDLM, dedicated 🌫️ mode) |
 | Local endpoint | Strong (OpenAI-compatible: Ollama / LM Studio / llama.cpp) |
 | Responsive | Strong (mobile gate + endpoint-hero; desktop app-shell) |
-| Runtimes | ONNX/WebGPU + local-endpoint (server) · **in-browser GGUF/wllama in progress** |
+| Runtimes | ONNX/WebGPU + in-browser GGUF (wllama) + custom-WGSL engines (LFM2 / Gemma 4) + local-endpoint (server) |
 
 ---
 
