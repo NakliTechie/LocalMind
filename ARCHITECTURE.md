@@ -19,6 +19,7 @@ Three interchangeable backends behind one `LocalMind.runtime` adapter (a model's
 2. **wllama (in-browser GGUF)** — llama.cpp compiled to WASM; loads a GGUF from a URL, WebGPU-accelerated or pure CPU. Its worker speaks the same postMessage protocol as the ONNX chat worker, so it reuses `attachWorkerHandlers` + `generateOnce`.
 3. **Local endpoint** — an OpenAI-compatible server (Ollama / LM Studio / llama.cpp) over `/v1/chat/completions`; no in-browser inference (no worker).
 4. **LFM2 WebGPU kernels** (`backend: 'lfm2-webgpu'`) — a from-scratch WebGPU inference engine (`lfm2_5.js`, exporting `Lfm2Mobile`) ported from the `webml-community/lfm2-webgpu-kernels` Space, where every kernel — RoPE, RMSNorm, Q4_0/Q8_0 dequant, the LFM2 short-conv depthwise+gating, GQA attention, the GEMVs — is hand-written WGSL reading a Q4_0 GGUF directly (no onnxruntime, no llama.cpp). Its worker (`#lfm2WebgpuWorkerSrc`) dynamically imports the engine by an absolute URL injected at blob-build time, adapts the engine's cumulative-`{text}` stream into the shared per-token-delta protocol, and otherwise reuses `attachWorkerHandlers` + `generateOnce` like every other in-browser backend. The engine runs its own ranged GGUF download + CacheStorage cache and needs only WebGPU (no SharedArrayBuffer / COOP-COEP).
+5. **Gemma 4 WebGPU kernels** (`backend: 'gemma4-webgpu'`) — the same pattern as (4) for Google's Gemma 4 E2B (QAT mobile): a from-scratch WebGPU engine (`gemma-4-e2b.js`, exporting `Gemma4Mobile`) ported from `webml-community/gemma-4-webgpu-kernels`, with hand-written WGSL for QAT int4 matmul (gemm / split-K / sgmat variants), embed-gather-norm, RoPE, RMSNorm, and GQA + sliding-window attention, reading Google's QAT-mobile weights directly. Its worker (`#gemma4WebgpuWorkerSrc`) folds any `system` message into the first user turn (Gemma's template has no system role) and otherwise reuses the same shared protocol as (4).
 
 A WebGPU device error (OOM / lost device) on the ONNX path is detected, shown as a friendly message, and auto-recovered by reloading the model on a fresh device — capped at 2 retries.
 
@@ -54,6 +55,7 @@ Workers spin up on demand, each with its own lifecycle and memory. Only **one We
 | **Chat (ONNX)** | On model load | WebGPU | Main LLM via Transformers.js |
 | **wllama (GGUF)** | On loading a GGUF model | WebGPU / CPU | llama.cpp-wasm chat runtime |
 | **LFM2 WebGPU** | On loading the `lfm2-webgpu` model | WebGPU | Custom-WGSL `Lfm2Mobile` engine (`lfm2_5.js`) |
+| **Gemma 4 WebGPU** | On loading the `gemma4-webgpu` model | WebGPU | Custom-WGSL `Gemma4Mobile` engine (`gemma-4-e2b.js`) |
 | **Image** | On entering Image mode | WebGPU | FLUX.2-Klein text-to-image |
 | **Diffuse** | On entering Diffuse mode | WebGPU | kohra masked-diffusion text |
 | **Embedding** | Lazy on first RAG/memory call | WASM | MiniLM 384-dim vectors |
@@ -79,6 +81,6 @@ Toggle: Settings → Model cache → "Resumable downloads" (on by default).
 
 ## Build & deployment
 
-Zero build tooling. One HTML file (~15k lines, ~800 KB), plus one vendored sibling module — `lfm2_5.js` (~650 KB), the self-contained custom-WGSL `Lfm2Mobile` engine, fetched same-origin by its worker. Everything else loads from CDN with SRI where possible.
+Zero build tooling. One HTML file (~15k lines, ~800 KB), plus two vendored sibling modules — `lfm2_5.js` (~650 KB) and `gemma-4-e2b.js` (~540 KB), the self-contained custom-WGSL `Lfm2Mobile` / `Gemma4Mobile` engines, each fetched same-origin by its worker. Everything else loads from CDN with SRI where possible.
 
-Deploy by serving `index.html` (and `lfm2_5.js` alongside it) from any static host. GitHub Pages, Netlify, S3, or `python3 -m http.server`. Must be served over HTTP — `file://` won't work because ES module workers and WebGPU both require an HTTP origin.
+Deploy by serving `index.html` (and the `lfm2_5.js` / `gemma-4-e2b.js` siblings alongside it) from any static host. GitHub Pages, Netlify, S3, or `python3 -m http.server`. Must be served over HTTP — `file://` won't work because ES module workers and WebGPU both require an HTTP origin.

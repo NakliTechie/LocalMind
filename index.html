@@ -2116,6 +2116,7 @@
                 <li><strong>LFM2.5 230M</strong> (~210 MB) &mdash; text + agent (tool calling). Liquid AI's smallest model (released 2026-06-25) &mdash; a dense LFM2 hybrid post-trained for on-device agents; strong at tool use + data extraction for its size, not for math/code/creative writing. q4, 32K context. The smallest tool-capable model here.</li>
                 <li><strong>LFM2 8B A1B</strong> (~4.8 GB) &mdash; text + agent (tool calling). Liquid AI sparse-MoE (8B total / ~1B active) at q4f16, 32K context. WebGPU-only and large &mdash; needs a capable GPU (Chrome/Edge, ~8 GB+ RAM recommended).</li>
                 <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
+                <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~1.5 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only; ~250 tok/s on an M4 Max.</li>
                 <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; text-only, no tool calling. Fallback option.</li>
                 <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
                 <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
@@ -2563,6 +2564,7 @@
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
           <option value="lfm2-230m-gguf">LFM2.5 230M &middot; GGUF (~170 MB)</option>
           <option value="lfm2-230m-webgpu">LFM2.5 230M &middot; WebGPU kernels (~140 MB)</option>
+          <option value="gemma4-e2b-webgpu">Gemma 4 E2B &middot; WebGPU kernels (~1.5 GB)</option>
           <option value="smollm2-360m-gguf">SmolLM2 360M &middot; GGUF (~270 MB)</option>
           <option value="qwen25-1.5b-gguf">Qwen2.5 1.5B &middot; GGUF (~1.1 GB)</option>
         </select>
@@ -7403,6 +7405,122 @@ self.onmessage = async (e) => {
   }
 };
   </script>
+
+  <!-- Gemma 4 E2B (QAT mobile) custom-WGSL WebGPU engine worker (from
+       webml-community/gemma-4-webgpu-kernels). Sibling of the LFM2 engine above:
+       a from-scratch WebGPU engine (gemma-4-e2b.js, exporting `Gemma4Mobile`) whose
+       kernels — QAT int4 matmul (gemm / split-K / sgmat variants), embed-gather-norm,
+       RoPE, RMSNorm, GQA + sliding-window attention — are hand-written WGSL reading
+       Google's QAT-mobile weights (google/gemma-4-E2B-it-qat-mobile-transformers)
+       directly. Same Gemma4Mobile API as Lfm2Mobile; same shared chat protocol. -->
+  <script type="text/worker" id="gemma4WebgpuWorkerSrc">
+// The factory replaces __GEMMA4_ENGINE_URL__ with the engine's absolute same-origin URL.
+const ENGINE_URL = '__GEMMA4_ENGINE_URL__';
+
+let Gemma4Mobile = null;
+let model = null;
+let abortController = null;
+let stopFlag = false;
+let lastHistoryLen = 0; // tracks conversation length to reset KV state on a fresh chat
+
+const WEIGHTS_LABEL = 'Gemma 4 E2B (QAT)';
+const post = (m) => self.postMessage(m);
+
+self.onmessage = async (e) => {
+  const d = e.data || {};
+  try {
+    if (d.type === 'load') {
+      if (!Gemma4Mobile) ({ Gemma4Mobile } = await import(ENGINE_URL));
+      post({ type: 'progress', data: { status: 'initiate', file: WEIGHTS_LABEL } });
+      // load(modelId, opts): a repo id resolves the QAT-mobile weight root;
+      // null falls back to the engine's DEFAULT_MODEL_ID (the same repo).
+      model = await Gemma4Mobile.load(d.modelId || null, {
+        onProgress: (ev) => {
+          if (!ev) return;
+          if (ev.status === 'weights') {
+            const loaded = typeof ev.loaded === 'number' ? ev.loaded : null;
+            const total = typeof ev.total === 'number' ? ev.total : null;
+            if (loaded != null && total != null && total > 0) {
+              post({ type: 'progress', data: { status: 'progress_total', file: WEIGHTS_LABEL, loaded, total } });
+            } else if (typeof ev.fraction === 'number') {
+              post({ type: 'progress', data: { status: 'progress_total', file: WEIGHTS_LABEL, loaded: Math.round(ev.fraction * 1000), total: 1000 } });
+            }
+          } else if (ev.status === 'tokenizer') {
+            post({ type: 'progress', data: { status: 'loading', file: 'tokenizer' } });
+          } else if (ev.status === 'init') {
+            post({ type: 'progress', data: { status: 'initiate', file: 'WebGPU device' } });
+          }
+        },
+      });
+      lastHistoryLen = 0;
+      try { if (typeof model.warmup === 'function') await model.warmup(); } catch (_) {}
+      post({ type: 'ready', backend: 'webgpu' });
+    } else if (d.type === 'generate') {
+      if (!model) { post({ type: 'error', message: 'Gemma 4 WebGPU model not loaded' }); return; }
+      stopFlag = false;
+      const cfg = d.generationConfig || {};
+      // The engine applies Gemma's chat template internally; it expects
+      // {role, content} text. Strip multimodal blocks to text; Gemma's template
+      // has no 'system' role, so fold system content into the first user turn and
+      // coerce any other non-standard role to 'user'.
+      let systemText = '';
+      const raw = (d.messages || []).map((m) => {
+        const content = typeof m.content === 'string' ? m.content
+          : Array.isArray(m.content) ? m.content.filter((b) => b && b.type === 'text').map((b) => b.text).join('\n')
+          : String(m.content == null ? '' : m.content);
+        return { role: m.role, content };
+      });
+      const msgs = [];
+      for (const m of raw) {
+        if (m.role === 'system') { systemText += (systemText ? '\n\n' : '') + m.content; continue; }
+        let role = (m.role === 'assistant') ? 'assistant' : 'user';
+        let content = m.content;
+        if (systemText && role === 'user') { content = systemText + '\n\n' + content; systemText = ''; }
+        msgs.push({ role, content });
+      }
+      if (systemText) msgs.unshift({ role: 'user', content: systemText }); // system-only history
+      const turnCount = msgs.length;
+      if ((turnCount <= 1 || msgs.length < lastHistoryLen) && typeof model.reset === 'function') {
+        try { model.reset(); } catch (_) {}
+      }
+      lastHistoryLen = msgs.length;
+      abortController = new AbortController();
+      let prev = '';
+      try {
+        // generate() yields { text } CUMULATIVE; the shared protocol streams DELTAS.
+        const stream = model.generate(msgs, {
+          maxNewTokens: cfg.max_new_tokens || cfg.max_tokens || 1024,
+          signal: abortController.signal,
+        });
+        for await (const out of stream) {
+          if (stopFlag) break;
+          const full = out && typeof out.text === 'string' ? out.text : '';
+          if (full.length > prev.length) {
+            post({ type: 'token', token: full.slice(prev.length) });
+            prev = full;
+          }
+        }
+      } catch (err) {
+        const s = String((err && err.message) || err);
+        if (!(stopFlag || s.toLowerCase().includes('abort'))) throw err;
+      }
+      post({ type: 'complete' });
+    } else if (d.type === 'stop') {
+      stopFlag = true;
+      if (abortController) { try { abortController.abort(); } catch (_) {} }
+    } else if (d.type === 'unload') {
+      stopFlag = true;
+      if (abortController) { try { abortController.abort(); } catch (_) {} }
+      try { if (model && typeof model.reset === 'function') model.reset(); } catch (_) {}
+      try { if (model && typeof model.dispose === 'function') model.dispose(); } catch (_) {}
+      model = null;
+      lastHistoryLen = 0;
+    }
+  } catch (err) {
+    post({ type: 'error', message: (err && err.message) || String(err) });
+  }
+};
+  </script>
   <script type="module">
     // ── WebGPU check ────────────────────────────────────────────
     // WebGPU is required for in-browser GPU models (ONNX), 🎨 Image, 🌫️ Diffuse,
@@ -7597,6 +7715,27 @@ self.onmessage = async (e) => {
         // webml-community/lfm2-webgpu-kernels Space (Q4_0 GGUF, ~140 MB). The
         // engine resolves the repo id → LFM2.5-230M-Q4_0.gguf itself. WebGPU-only
         // (no CPU fallback like wllama), aimed at maximal decode throughput.
+        genConfig: { max_new_tokens: 2048 },
+      },
+      // backend:'gemma4-webgpu' → loaded by the custom-WGSL Gemma4Mobile engine
+      // (gemma-4-e2b.js), a from-scratch WebGPU engine for Gemma 4 E2B (QAT mobile):
+      // hand-written WGSL for QAT int4 matmul (gemm / split-K / sgmat), embed-gather-
+      // norm, RoPE, RMSNorm, GQA + sliding-window attention — reading Google's
+      // QAT-mobile weights directly. Engine resolves the repo id itself and applies
+      // Gemma's chat template internally, so genConfig only carries max_new_tokens.
+      'gemma4-e2b-webgpu': {
+        id: 'google/gemma-4-E2B-it-qat-mobile-transformers',
+        label: 'Gemma 4 E2B · WebGPU kernels',
+        backend: 'gemma4-webgpu',
+        size: '~1.5 GB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 32768,
+        // Google's Gemma 4 E2B QAT-mobile run on the hand-written WebGPU kernels
+        // from the webml-community/gemma-4-webgpu-kernels Space. Quantization-aware
+        // int4 (smaller + higher fidelity than post-hoc q4); ~250 tok/s on an M4 Max.
+        // WebGPU-only (no CPU fallback). Text-only here (this engine is a decoder).
         genConfig: { max_new_tokens: 2048 },
       },
       'smollm2-360m-gguf': {
@@ -12248,7 +12387,9 @@ ${JSON.stringify({ name, result })}
         // generateOnce() — is shared.
         const isWllama = options.backend === 'wllama';
         const isLfm2Webgpu = options.backend === 'lfm2-webgpu';
+        const isGemma4Webgpu = options.backend === 'gemma4-webgpu';
         const w = isLfm2Webgpu ? createLfm2WebgpuWorker()
+          : isGemma4Webgpu ? createGemma4WebgpuWorker()
           : isWllama ? createWllamaWorker()
           : createWorker();
         this._worker = w;
@@ -12284,9 +12425,9 @@ ${JSON.stringify({ name, result })}
             cleanup();
             reject(new Error(ev.message || 'Worker startup failed'));
           });
-          if (isWllama || isLfm2Webgpu) {
-            // lfm2-webgpu ignores contextSize (it reads n_ctx from the GGUF
-            // metadata) but the shared load message shape is harmless.
+          if (isWllama || isLfm2Webgpu || isGemma4Webgpu) {
+            // The custom-WGSL engines ignore contextSize (they read it from the
+            // model metadata) but the shared load message shape is harmless.
             w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0 });
           } else {
             const resumable = localStorage.getItem('lm_resumable_downloads') !== '0';
@@ -13077,6 +13218,25 @@ self.addEventListener('message', async (e) => {
       const w = new Worker(url, { type: 'module' });
       w.addEventListener('error', (e) => {
         console.error('LFM2 WebGPU worker error:', e.message);
+      });
+      return w;
+    }
+
+    // ── Gemma 4 WebGPU-kernels worker factory (custom-WGSL Gemma4Mobile engine) ──
+    // Twin of createLfm2WebgpuWorker(): reads #gemma4WebgpuWorkerSrc, injects the
+    // vendored gemma-4-e2b.js engine's absolute same-origin URL, and builds a blob
+    // module worker that speaks the shared chat protocol.
+    function createGemma4WebgpuWorker() {
+      const src = document.getElementById('gemma4WebgpuWorkerSrc');
+      let code = src ? src.textContent : '';
+      if (!code) throw new Error('Gemma 4 WebGPU worker source missing');
+      const engineUrl = new URL('gemma-4-e2b.js', document.baseURI).href;
+      code = code.replace('__GEMMA4_ENGINE_URL__', engineUrl);
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url, { type: 'module' });
+      w.addEventListener('error', (e) => {
+        console.error('Gemma 4 WebGPU worker error:', e.message);
       });
       return w;
     }
