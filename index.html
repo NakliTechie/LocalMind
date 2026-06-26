@@ -2211,7 +2211,7 @@
                 <li><strong>Voice to text</strong> &mdash; 🗣 button left of the input records mic audio, decodes to 16 kHz mono PCM on-device, and runs Whisper-base via WebGPU to transcribe into the input. ~80 MB first-use download; nothing leaves the device.</li>
                 <li><strong>Python code tool</strong> (agent-capable models) &mdash; model can call <code>run_python</code> to execute Python in a sandboxed Pyodide worker. numpy / pandas / matplotlib auto-install on import. ~10 MB first-use download.</li>
                 <li><strong>Cache management</strong> &mdash; view/clear cached models in Settings</li>
-                <li><strong>Custom models</strong> &mdash; Settings &rarr; paste a Hugging Face ONNX repo id (causal LMs, runs on WebGPU) <em>or a direct GGUF URL</em> (runs via wllama, WebGPU when present / CPU otherwise). ONNX repos are probed via the HF API for the best quant and hard-blocked past the device&rsquo;s WebGPU buffer limit or the 6 GB ceiling. GGUF URLs are sized via a HEAD request; point at the first shard of a split GGUF (&hellip;-00001-of-&hellip;) for files over wllama&rsquo;s 2 GB per-file / ~4 GB total limits.</li>
+                <li><strong>Custom models</strong> &mdash; Settings &rarr; paste a Hugging Face ONNX repo id (causal LMs, runs on WebGPU) <em>or a direct GGUF URL</em> (runs via wllama, WebGPU when present / CPU otherwise). ONNX repos are probed via the HF API for the best quant; oversized models warn (but aren&rsquo;t blocked) so you can try on a capable GPU. GGUF URLs are sized via a HEAD request; point at the first shard of a split GGUF (&hellip;-00001-of-&hellip;) for files over wllama&rsquo;s 2 GB per-file / ~4 GB total limits.</li>
                 <li><strong>Response badges</strong> &mdash; On-device / Agent / Web-enriched</li>
               </ul>
             </div>
@@ -9410,36 +9410,26 @@ self.onmessage = async (e) => {
       }
       const warnings = [];
 
-      // 4. Size check vs WebGPU limits.
+      // 4. Size check vs WebGPU limits — ADVISORY ONLY. We never hard-block on
+      //    size: device limits are conservative, models split across many buffers,
+      //    and a motivated user on a capable GPU should be allowed to try. We warn
+      //    loudly so the failure mode is understood, then let the load proceed.
       const limits = await getWebGPULimits();
       if (limits.ok && limits.maxBufferSize && chosenBytes > 0) {
-        // The single biggest weight tensor must fit in maxBufferSize. We
-        // approximate by assuming the largest file is one buffer's worth.
-        // If even the smallest quant exceeds the limit, hard-block.
         const largestFile = Math.max(0, ...classified.quants[chosenDtype].files.map(f => f.size || 0));
         if (largestFile > limits.maxBufferSize) {
-          throw new Error('largest weight file (' + formatBytes(largestFile) + ') exceeds this device\'s WebGPU buffer limit (' + formatBytes(limits.maxBufferSize) + '). Try a smaller model or a device with more GPU memory.');
-        }
-        // If the total exceeds 4× the buffer limit, it almost certainly
-        // won't fit overall — block it. (Models are usually split across
-        // many buffers, so 4× headroom is generous.)
-        if (chosenBytes > limits.maxBufferSize * 4) {
-          throw new Error('model is ' + formatBytes(chosenBytes) + ' but this device\'s WebGPU buffer limit is ' + formatBytes(limits.maxBufferSize) + ' — too large to load.');
-        }
-        // Warn if chosen size is over half the buffer limit — likely tight
-        if (chosenBytes > limits.maxBufferSize) {
-          warnings.push('size (' + formatBytes(chosenBytes) + ') exceeds the per-buffer WebGPU limit (' + formatBytes(limits.maxBufferSize) + '); load may fail');
+          warnings.push('largest weight file (' + formatBytes(largestFile) + ') exceeds this device\'s WebGPU per-buffer limit (' + formatBytes(limits.maxBufferSize) + ') — load may fail');
+        } else if (chosenBytes > limits.maxBufferSize) {
+          warnings.push('size (' + formatBytes(chosenBytes) + ') exceeds the per-buffer WebGPU limit (' + formatBytes(limits.maxBufferSize) + '); load may be tight or fail');
         }
       } else if (!limits.ok) {
-        warnings.push('could not query WebGPU limits — load may fail if model exceeds device memory');
+        warnings.push('could not query WebGPU limits — load may fail if the model exceeds device memory');
       }
 
-      // 5. Absolute soft cap: anything bigger than 6 GB is impractical in
-      //    a browser tab regardless of GPU.
+      // 5. Large-model heads-up (advisory, never blocking).
       if (chosenBytes > 6 * 1024 * 1024 * 1024) {
-        throw new Error('model is ' + formatBytes(chosenBytes) + ' — too large for in-browser inference. The hard ceiling for LocalMind is 6 GB.');
-      }
-      if (chosenBytes > 2 * 1024 * 1024 * 1024) {
+        warnings.push('very large (' + formatBytes(chosenBytes) + ') — in-browser inference past ~6 GB is impractical on most GPUs and the download is heavy; proceed only on a high-memory GPU');
+      } else if (chosenBytes > 2 * 1024 * 1024 * 1024) {
         warnings.push('large model (' + formatBytes(chosenBytes) + ') — first download will take a while and may not fit on lower-end GPUs');
       }
 
