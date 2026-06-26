@@ -2115,7 +2115,6 @@
                 <li><strong>Qwen3 4B</strong> (~2.8 GB) &mdash; text + agent (tool calling). Standard Qwen3-4B at q4f16, Apache-2.0, 32K context.</li>
                 <li><strong>LFM2.5 230M</strong> (~210 MB) &mdash; text + agent (tool calling). Liquid AI's smallest model (released 2026-06-25) &mdash; a dense LFM2 hybrid post-trained for on-device agents; strong at tool use + data extraction for its size, not for math/code/creative writing. q4, 32K context. The smallest tool-capable model here.</li>
                 <li><strong>LFM2 8B A1B</strong> (~4.8 GB) &mdash; text + agent (tool calling). Liquid AI sparse-MoE (8B total / ~1B active) at q4f16, 32K context. WebGPU-only and large &mdash; needs a capable GPU (Chrome/Edge, ~8 GB+ RAM recommended).</li>
-                <li><strong>Apertus 4B</strong> (~2.7 GB) &mdash; text-only chat. Swiss AI's fully-open, multilingual model (1800+ languages, Apache-2.0); v1.1 distilled from the 8B teacher, q4f16, 32K context. Strong chat, but not exposed for tool calling (the 4B is an unreliable tool caller).</li>
                 <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; text-only, no tool calling. Fallback option.</li>
                 <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
                 <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
@@ -2212,7 +2211,7 @@
                 <li><strong>Voice to text</strong> &mdash; 🗣 button left of the input records mic audio, decodes to 16 kHz mono PCM on-device, and runs Whisper-base via WebGPU to transcribe into the input. ~80 MB first-use download; nothing leaves the device.</li>
                 <li><strong>Python code tool</strong> (agent-capable models) &mdash; model can call <code>run_python</code> to execute Python in a sandboxed Pyodide worker. numpy / pandas / matplotlib auto-install on import. ~10 MB first-use download.</li>
                 <li><strong>Cache management</strong> &mdash; view/clear cached models in Settings</li>
-                <li><strong>Custom models</strong> &mdash; Settings &rarr; paste a Hugging Face ONNX repo id (causal LMs only). The validator probes the HF API, picks the best available quantisation, estimates real load size, and hard-blocks anything that exceeds the device&rsquo;s WebGPU buffer limit or the 6 GB ceiling.</li>
+                <li><strong>Custom models</strong> &mdash; Settings &rarr; paste a Hugging Face ONNX repo id (causal LMs, runs on WebGPU) <em>or a direct GGUF URL</em> (runs via wllama, WebGPU when present / CPU otherwise). ONNX repos are probed via the HF API for the best quant and hard-blocked past the device&rsquo;s WebGPU buffer limit or the 6 GB ceiling. GGUF URLs are sized via a HEAD request; point at the first shard of a split GGUF (&hellip;-00001-of-&hellip;) for files over wllama&rsquo;s 2 GB per-file / ~4 GB total limits.</li>
                 <li><strong>Response badges</strong> &mdash; On-device / Agent / Web-enriched</li>
               </ul>
             </div>
@@ -2433,9 +2432,9 @@
           </select>
         </div>
         <div class="settings-divider" data-tab="models">
-          <label>Custom models <span style="font-weight:400;color:var(--gray-500)">(causal LMs with ONNX exports on Hugging Face)</span></label>
+          <label>Custom models <span style="font-weight:400;color:var(--gray-500)">(HF ONNX repo, or a direct GGUF URL)</span></label>
           <div style="display:flex;gap:6px;margin-top:4px">
-            <input type="text" id="customModelInput" class="settings-input" placeholder="owner/repo e.g. onnx-community/Llama-3.2-1B-Instruct" style="flex:1">
+            <input type="text" id="customModelInput" class="settings-input" placeholder="owner/repo (ONNX) or https://…/model.gguf" style="flex:1">
             <button class="btn-icon" id="customModelAddBtn">Add</button>
           </div>
           <div id="customModelStatus" style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5;min-height:1em"></div>
@@ -2558,13 +2557,11 @@
           <option value="qwen3-4b">Qwen3 4B &middot; Agent (~2.8 GB)</option>
           <option value="lfm2-230m">LFM2.5 230M &middot; Agent (~210 MB)</option>
           <option value="lfm2-8b-a1b">LFM2 8B A1B &middot; Agent (~4.8 GB)</option>
-          <option value="apertus-4b">Apertus 4B &middot; Chat (~2.7 GB)</option>
           <option value="gemma3-1b">Gemma 3 1B &middot; Fast (~760 MB)</option>
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
           <option value="lfm2-230m-gguf">LFM2.5 230M &middot; GGUF (~170 MB)</option>
           <option value="smollm2-360m-gguf">SmolLM2 360M &middot; GGUF (~270 MB)</option>
-          <option value="llama32-1b-gguf">Llama 3.2 1B &middot; GGUF (~810 MB)</option>
           <option value="qwen25-1.5b-gguf">Qwen2.5 1.5B &middot; GGUF (~1.1 GB)</option>
         </select>
       </div>
@@ -7373,7 +7370,7 @@ self.onmessage = async (e) => {
         // smallest WebGPU-compatible variant (~210 MB, the smallest tool-capable
         // model in the list); fp16 (~476 MB) is the higher-quality fallback if
         // q4 quality disappoints. agentCapable per Liquid's tool-use benchmarks —
-        // verify live (small models can be unreliable tool callers, cf. Apertus).
+        // verify live (small models can be unreliable tool callers).
         // Native 128K context; capped to 32K here to bound browser KV memory.
         // Liquid recommends temperature 0.3 / min_p 0.15 / rep 1.05; min_p isn't
         // exposed by Transformers.js generate(), so top_p approximates.
@@ -7399,27 +7396,6 @@ self.onmessage = async (e) => {
         // Liquid recommends temperature 0.3 / min_p 0.15 / rep 1.05; min_p isn't
         // exposed by Transformers.js generate(), so top_p approximates.
         genConfig: { temperature: 0.3, top_k: 20, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.05 },
-      },
-      'apertus-4b': {
-        id: 'onnx-community/Apertus-v1.1-4B-Instruct-ONNX',
-        label: 'Apertus 4B',
-        dtype: 'q4f16',
-        size: '~2.7 GB',
-        type: 'causal',
-        multimodal: false,
-        agentCapable: false,
-        contextSize: 32768,
-        // Swiss AI Apertus v1.1 4B Instruct — fully-open (open data + weights),
-        // multilingual (1800+ languages), Apache-2.0; a pretraining distillation
-        // of the Apertus-8B-2509 teacher. Custom arch (xIELU + QK-norm) runs via
-        // transformers.js >=4.0.0 (pinned @4 = 4.2.0). Stock onnx-community
-        // q4f16 export. CHAT-ONLY (agentCapable:false): live testing showed the
-        // 4B is an excellent multilingual chat model but an unreliable tool
-        // caller — it hallucinated tool names, truncated JSON, emitted empty
-        // args, and sometimes refused, even at low temperature. The tool-call
-        // parser handles the recoverable slips, but the model can't be trusted
-        // to drive tools, so we don't expose them. Chat-tuned sampling.
-        genConfig: { temperature: 0.7, top_k: 40, top_p: 0.9, max_new_tokens: 2048, repetition_penalty: 1.1 },
       },
       'gemma3-1b': {
         id: 'onnx-community/gemma-3-1b-it-ONNX-GQA',
@@ -7491,17 +7467,6 @@ self.onmessage = async (e) => {
         agentCapable: true,
         contextSize: 4096,
         genConfig: { temperature: 0.3, top_k: 40, top_p: 0.9, max_new_tokens: 1024 },
-      },
-      'llama32-1b-gguf': {
-        id: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf',
-        label: 'Llama 3.2 1B · GGUF',
-        backend: 'wllama',
-        size: '~810 MB',
-        type: 'causal',
-        multimodal: false,
-        agentCapable: true,
-        contextSize: 8192,
-        genConfig: { temperature: 0.6, top_k: 40, top_p: 0.9, max_new_tokens: 1024 },
       },
       'qwen25-1.5b-gguf': {
         id: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf',
@@ -9510,6 +9475,61 @@ self.onmessage = async (e) => {
       return { entry, warnings };
     }
 
+    // Build a custom wllama entry from a direct GGUF URL. Unlike the ONNX path
+    // (which probes an HF repo + picks a quant), a GGUF is a single self-describing
+    // file — chat template + tokenizer travel inside it — so we just validate the
+    // URL, size it via a HEAD request, and route it through the wllama backend.
+    // Split GGUF: point at the first shard (…-00001-of-000NN.gguf); wllama loads
+    // the rest automatically. wllama is wasm32, so the practical ceiling is ~4 GB
+    // total and 2 GB per file — we warn (not block) past those.
+    async function buildGgufCustomEntry(url) {
+      let u;
+      try { u = new URL(url); } catch { throw new Error('invalid URL'); }
+      if (!/^https?:$/.test(u.protocol)) throw new Error('GGUF URL must be http(s)');
+      if (!/\.gguf$/i.test(u.pathname)) throw new Error('not a .gguf URL (expected a link ending in .gguf)');
+      const fname = decodeURIComponent(u.pathname.split('/').pop() || 'model.gguf');
+      const warnings = [];
+
+      // Split-shard detection: NAME-00001-of-000NN.gguf
+      const split = fname.match(/-(\d{5})-of-(\d{5})\.gguf$/i);
+      if (split && split[1] !== '00001') {
+        throw new Error('for a split GGUF, point at the first shard (…-00001-of-' + split[2] + '.gguf)');
+      }
+
+      // Best-effort size via HEAD (CORS may block on some hosts → size unknown).
+      let bytes = 0;
+      try {
+        const r = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(10000) });
+        if (r.ok) { const cl = r.headers.get('content-length'); if (cl) bytes = Number(cl) || 0; }
+      } catch {}
+      if (split) {
+        const shards = parseInt(split[2], 10);
+        if (bytes) bytes *= shards; // rough total (assumes even shards)
+        warnings.push('split GGUF — wllama loads all ' + shards + ' shards from the first');
+      }
+
+      // wllama (wasm32) ceilings: ~4 GB total, 2 GB per file.
+      if (bytes && bytes > 4 * 1024 * 1024 * 1024) {
+        warnings.push('~' + formatBytes(bytes) + ' likely exceeds wllama’s ~4 GB in-browser ceiling (wasm32) — may fail to load');
+      } else if (!split && bytes && bytes > 2 * 1024 * 1024 * 1024) {
+        warnings.push('single GGUF over 2 GB exceeds wllama’s per-file limit — use a split GGUF (…-00001-of-…)');
+      }
+
+      const entry = {
+        id: url,
+        label: fname.replace(/\.gguf$/i, '').replace(/-\d{5}-of-\d{5}$/i, '').slice(0, 40) + ' · GGUF (custom)',
+        backend: 'wllama',
+        size: bytes ? '~' + formatBytes(bytes) : 'size unknown',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: false,
+        contextSize: 4096,
+        genConfig: { temperature: 0.7, top_k: 40, top_p: 0.9, max_new_tokens: 1024 },
+        custom: true,
+      };
+      return { entry, warnings };
+    }
+
     function loadCustomModelsFromStorage() {
       try {
         const raw = localStorage.getItem('lm_custom_models');
@@ -9637,17 +9657,19 @@ self.onmessage = async (e) => {
 
     async function handleAddCustomModel() {
       const id = customModelInput.value.trim();
-      if (!id) { setCustomStatus('enter a model id', 'err'); return; }
+      if (!id) { setCustomStatus('enter a model id or GGUF URL', 'err'); return; }
       if (MODELS[id]) { setCustomStatus('already added', 'err'); return; }
+      // A direct .gguf URL → wllama backend; an owner/repo id → HF ONNX probe.
+      const isGguf = /^https?:\/\/.+\.gguf$/i.test(id);
       customModelAddBtn.disabled = true;
-      setCustomStatus('Probing Hugging Face…');
+      setCustomStatus(isGguf ? 'Checking GGUF…' : 'Probing Hugging Face…');
       try {
-        const { entry, warnings } = await probeHuggingFaceModel(id);
+        const { entry, warnings } = isGguf ? await buildGgufCustomEntry(id) : await probeHuggingFaceModel(id);
         addCustomModelToRegistry(entry);
         saveCustomModelsToStorage();
         renderCustomModelList();
         customModelInput.value = '';
-        let msg = 'Added (' + entry.dtype + ', ' + entry.size + '). Select it from the model dropdown to load.';
+        let msg = 'Added (' + (entry.dtype || entry.backend || 'gguf') + ', ' + entry.size + '). Select it from the model dropdown to load.';
         if (warnings && warnings.length) {
           msg += '\nWarning: ' + warnings.join('; ');
           // Use a softer colour so the user notices but knows it's not a fatal error
@@ -13621,10 +13643,11 @@ async function generateCausal(chatMessages, id, genConfig) {
       // generation". LFM2.5 and our other text models are ChatML, so build the
       // prompt by hand (mirrors DiffusionLM.encodePrompt) and tokenize directly,
       // bypassing jinja entirely. Happy path (parseable templates) never hits this.
-      // NOTE: this runs inside the worker-source template literal (const code = `…`),
-      // so newline escapes in string literals must be double-escaped (backslash-backslash-n);
-      // a single-escaped one gets cooked into a real newline at template-eval time
-      // and breaks the worker parse.
+      // NOTE: this code is embedded in the chat worker-source template literal, so
+      // newline escapes in its string literals are written as a double backslash
+      // then n; a single-escaped one is cooked into a real newline at template-eval
+      // time and breaks the worker parse. (And no backticks here — they would close
+      // the template literal early.)
       let prompt = '';
       for (const m of chatMessages) {
         const c = typeof m.content === 'string' ? m.content
