@@ -2113,6 +2113,7 @@
                 <li><strong>Ternary Bonsai 4B</strong> (~1.1 GB) &mdash; same capabilities, better quality.</li>
                 <li><strong>Ternary Bonsai 8B</strong> (~2.2 GB) &mdash; best Bonsai quality, 65K context.</li>
                 <li><strong>Qwen3 4B</strong> (~2.8 GB) &mdash; text + agent (tool calling). Standard Qwen3-4B at q4f16, Apache-2.0, 32K context.</li>
+                <li><strong>LFM2.5 230M</strong> (~210 MB) &mdash; text + agent (tool calling). Liquid AI's smallest model (released 2026-06-25) &mdash; a dense LFM2 hybrid post-trained for on-device agents; strong at tool use + data extraction for its size, not for math/code/creative writing. q4, 32K context. The smallest tool-capable model here.</li>
                 <li><strong>LFM2 8B A1B</strong> (~4.8 GB) &mdash; text + agent (tool calling). Liquid AI sparse-MoE (8B total / ~1B active) at q4f16, 32K context. WebGPU-only and large &mdash; needs a capable GPU (Chrome/Edge, ~8 GB+ RAM recommended).</li>
                 <li><strong>Apertus 4B</strong> (~2.7 GB) &mdash; text-only chat. Swiss AI's fully-open, multilingual model (1800+ languages, Apache-2.0); v1.1 distilled from the 8B teacher, q4f16, 32K context. Strong chat, but not exposed for tool calling (the 4B is an unreliable tool caller).</li>
                 <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; text-only, no tool calling. Fallback option.</li>
@@ -2555,11 +2556,13 @@
           <option value="bonsai-ternary-4b">Ternary Bonsai 4B &middot; Agent (~1.1 GB)</option>
           <option value="bonsai-ternary-8b">Ternary Bonsai 8B &middot; Agent (~2.2 GB)</option>
           <option value="qwen3-4b">Qwen3 4B &middot; Agent (~2.8 GB)</option>
+          <option value="lfm2-230m">LFM2.5 230M &middot; Agent (~210 MB)</option>
           <option value="lfm2-8b-a1b">LFM2 8B A1B &middot; Agent (~4.8 GB)</option>
           <option value="apertus-4b">Apertus 4B &middot; Chat (~2.7 GB)</option>
           <option value="gemma3-1b">Gemma 3 1B &middot; Fast (~760 MB)</option>
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
+          <option value="lfm2-230m-gguf">LFM2.5 230M &middot; GGUF (~170 MB)</option>
           <option value="smollm2-360m-gguf">SmolLM2 360M &middot; GGUF (~270 MB)</option>
           <option value="llama32-1b-gguf">Llama 3.2 1B &middot; GGUF (~810 MB)</option>
           <option value="qwen25-1.5b-gguf">Qwen2.5 1.5B &middot; GGUF (~1.1 GB)</option>
@@ -7350,6 +7353,32 @@ self.onmessage = async (e) => {
         // top_p 0.8, top_k 20). Apache-2.0, native tool calling.
         genConfig: { temperature: 0.7, top_k: 20, top_p: 0.8, max_new_tokens: 2048, repetition_penalty: 1.05 },
       },
+      'lfm2-230m': {
+        id: 'LiquidAI/LFM2.5-230M-ONNX',
+        label: 'LFM2.5 230M',
+        dtype: 'q4',
+        size: '~210 MB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 32768,
+        // Liquid AI's LFM2.5-230M (released 2026-06-25) — their smallest model:
+        // a dense LFM2 hybrid (conv + attention) post-trained for on-device
+        // agents, distilled from LFM2.5-350M. Benchmarked strong at tool use +
+        // data extraction (BFCLv3/v4, τ²-Bench) for its size — not for math /
+        // code / creative writing. First-party ONNX export (LiquidAI ships its
+        // own ONNX now, same author trust anchor as the model). model_type lfm2
+        // runs on the pinned @4 (4.2.0). NOTE: this repo exports fp16/q4/q4f32/q8
+        // but NO q4f16 (the dtype the other entries use), so we pick `q4` — the
+        // smallest WebGPU-compatible variant (~210 MB, the smallest tool-capable
+        // model in the list); fp16 (~476 MB) is the higher-quality fallback if
+        // q4 quality disappoints. agentCapable per Liquid's tool-use benchmarks —
+        // verify live (small models can be unreliable tool callers, cf. Apertus).
+        // Native 128K context; capped to 32K here to bound browser KV memory.
+        // Liquid recommends temperature 0.3 / min_p 0.15 / rep 1.05; min_p isn't
+        // exposed by Transformers.js generate(), so top_p approximates.
+        genConfig: { temperature: 0.3, top_k: 20, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.05 },
+      },
       'lfm2-8b-a1b': {
         id: 'onnx-community/LFM2-8B-A1B-ONNX',
         label: 'LFM2 8B A1B',
@@ -7433,6 +7462,25 @@ self.onmessage = async (e) => {
       // but needs no WebGPU). Small instruct models the GGUF ecosystem ships
       // without ONNX exports. genConfig keys map to wllama's
       // max_tokens/temperature/top_p/top_k in the worker.
+      'lfm2-230m-gguf': {
+        id: 'https://huggingface.co/LiquidAI/LFM2.5-230M-GGUF/resolve/main/LFM2.5-230M-Q5_K_M.gguf',
+        label: 'LFM2.5 230M · GGUF',
+        backend: 'wllama',
+        size: '~170 MB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 8192,
+        // Liquid AI's LFM2.5-230M (2026-06-25) as GGUF via wllama — the no-WebGPU
+        // sibling of the ONNX 'lfm2-230m' entry. First-party GGUF, Q5_K_M k-quant
+        // (~170 MB): higher fidelity than a plain 4-bit on an already-tiny model,
+        // and a smaller download than the ONNX q4 (~210 MB). wllama runs it on
+        // WebGPU when present (n_gpu_layers 999) and on CPU/WASM otherwise — this
+        // is the build that delivers the model's "runs anywhere" pitch (Liquid's
+        // own 213 tok/s phone / 42 tok/s Raspberry Pi numbers are llama.cpp/CPU).
+        // wllama's path ignores repetition_penalty; LFM2's recommended temp 0.3.
+        genConfig: { temperature: 0.3, top_k: 20, top_p: 0.95, max_new_tokens: 2048 },
+      },
       'smollm2-360m-gguf': {
         id: 'https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf',
         label: 'SmolLM2 360M · GGUF',
@@ -13560,10 +13608,33 @@ async function generateCausal(chatMessages, id, genConfig) {
   stopping_criteria.reset();
 
   try {
-    const inputs = tokenizer.apply_chat_template(chatMessages, {
-      add_generation_prompt: true,
-      return_dict: true,
-    });
+    let inputs;
+    try {
+      inputs = tokenizer.apply_chat_template(chatMessages, {
+        add_generation_prompt: true,
+        return_dict: true,
+      });
+    } catch (tplErr) {
+      // Fallback for chat templates the pinned transformers.js jinja can't parse
+      // — e.g. LFM2.5 wraps the assistant turn in {% generation %}…{% endgeneration %}
+      // blocks (training-time assistant-mask markers) → "Unknown statement type:
+      // generation". LFM2.5 and our other text models are ChatML, so build the
+      // prompt by hand (mirrors DiffusionLM.encodePrompt) and tokenize directly,
+      // bypassing jinja entirely. Happy path (parseable templates) never hits this.
+      // NOTE: this runs inside the worker-source template literal (const code = `…`),
+      // so newline escapes in string literals must be double-escaped (backslash-backslash-n);
+      // a single-escaped one gets cooked into a real newline at template-eval time
+      // and breaks the worker parse.
+      let prompt = '';
+      for (const m of chatMessages) {
+        const c = typeof m.content === 'string' ? m.content
+          : Array.isArray(m.content) ? m.content.filter(b => b && b.type === 'text').map(b => b.text).join('\\n')
+          : String(m.content == null ? '' : m.content);
+        prompt += '<|im_start|>' + m.role + '\\n' + c + '<|im_end|>\\n';
+      }
+      prompt += '<|im_start|>assistant\\n';
+      inputs = tokenizer(prompt, { add_special_tokens: false });
+    }
 
     const streamer = new TextStreamer(tokenizer, {
       skip_prompt: true,
