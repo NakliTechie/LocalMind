@@ -12052,7 +12052,7 @@ To call a function, output EXACTLY this format (not inside thinking):
 {"name": "function_name", "arguments": {"arg1": "value1"}}
 </tool_call>
 
-CRITICAL: The <tool_call> block must appear in your main response, NEVER inside your thinking/reasoning. Think first, then output the <tool_call> block as your response.
+Only call a tool when the request genuinely needs one (a calculation, a web search, code execution, reading/saving memory). For writing, explanation, analysis, translation, or anything you can answer yourself, respond directly with NO <tool_call> block. When you do call a tool, the <tool_call> block must appear in your main response, never inside your thinking/reasoning.
 
 Rules:
 - Call one tool at a time. Wait for the result before calling another.
