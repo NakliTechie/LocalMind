@@ -10,6 +10,7 @@
 !WEBGPU_KERNELS_PLAN.md
 !LICENSE
 !.gitignore
+!.nojekyll
 !.github
 !.github/**
 !guide/
