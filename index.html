@@ -12084,6 +12084,43 @@ Rules:
       return matches.length === 1 ? matches[0].name : null;
     }
 
+    // Parse Pythonic kwargs from a native LFM2 tool call — e.g.
+    //   query="running shoes", max_price=100, in_stock=true
+    // — into a JS object. Strings may be single- or double-quoted; bare numbers
+    // and booleans/None are coerced. Splits on top-level commas only (quotes and
+    // nested brackets are respected so commas inside values don't split).
+    function _adapterParsePythonicArgs(s) {
+      const out = {};
+      if (!s || !s.trim()) return out;
+      const parts = [];
+      let depth = 0, cur = '', q = null;
+      for (const ch of s) {
+        if (q) { cur += ch; if (ch === q) q = null; continue; }
+        if (ch === '"' || ch === "'") { q = ch; cur += ch; continue; }
+        if (ch === '(' || ch === '[' || ch === '{') depth++;
+        else if (ch === ')' || ch === ']' || ch === '}') depth--;
+        if (ch === ',' && depth <= 0) { parts.push(cur); cur = ''; continue; }
+        cur += ch;
+      }
+      if (cur.trim()) parts.push(cur);
+      for (const p of parts) {
+        const eq = p.indexOf('=');
+        if (eq === -1) continue;
+        const k = p.slice(0, eq).trim();
+        let v = p.slice(eq + 1).trim();
+        if (!k) continue;
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+          v = v.slice(1, -1);
+        } else if (/^-?\d+(\.\d+)?$/.test(v)) {
+          v = Number(v);
+        } else if (v === 'true' || v === 'True') { v = true; }
+        else if (v === 'false' || v === 'False') { v = false; }
+        else if (v === 'None' || v === 'null') { v = null; }
+        out[k] = v;
+      }
+      return out;
+    }
+
     // Scan `str` from index `start` (which must point at '{') and return the
     // first brace-balanced JSON object substring, honouring string literals so
     // braces inside "…" don't miscount. Returns null if never balanced. Used to
@@ -12196,6 +12233,27 @@ Rules:
               if (k && rest.length) args[k.trim()] = rest.join(':').trim().replace(/["']/g, '');
             });
             toolCalls.push({ name: intentMatch[1], arguments: args });
+          }
+        }
+      }
+
+      // 4. Native LFM2-style call: <|tool_call_start|>[ name(arg="v", n=1) ]<|tool_call_end|>
+      // (Pythonic kwargs inside special tokens). LocalMind prompts for <tool_call>
+      // XML, but LFM2 was trained to emit this native format and sometimes does —
+      // which every pass above misses, so the call would be silently discarded and
+      // shown raw. Parse it here. Gated on the distinctive start marker AND a known
+      // tool name, so models that matched above never reach this and a hallucinated
+      // tool name (e.g. a nonexistent "translate") is ignored rather than executed.
+      if (toolCalls.length === 0 && text.indexOf('<|tool_call_start|>') !== -1) {
+        const seg = text.split('<|tool_call_start|>')[1] || '';
+        const callStr = seg.split('<|tool_call_end|>')[0];
+        const m = callStr.match(/([a-zA-Z_]\w*)\s*\(([\s\S]*?)\)\s*\]?\s*$/) || callStr.match(/([a-zA-Z_]\w*)\s*\(([\s\S]*)/);
+        if (m) {
+          const name = m[1];
+          const allowed = !knownToolNames || !knownToolNames.length || knownToolNames.indexOf(name) !== -1;
+          if (allowed) {
+            toolCalls.push({ name, arguments: _adapterParsePythonicArgs(m[2]) });
+            cleanText = cleanText.replace(/<\|tool_call_start\|>[\s\S]*?(<\|tool_call_end\|>|$)/, '').trim();
           }
         }
       }
@@ -13961,26 +14019,46 @@ async function generateCausal(chatMessages, id, genConfig) {
         return_dict: true,
       });
     } catch (tplErr) {
-      // Fallback for chat templates the pinned transformers.js jinja can't parse
-      // — e.g. LFM2.5 wraps the assistant turn in {% generation %}…{% endgeneration %}
-      // blocks (training-time assistant-mask markers) → "Unknown statement type:
-      // generation". LFM2.5 and our other text models are ChatML, so build the
-      // prompt by hand (mirrors DiffusionLM.encodePrompt) and tokenize directly,
-      // bypassing jinja entirely. Happy path (parseable templates) never hits this.
-      // NOTE: this code is embedded in the chat worker-source template literal, so
-      // newline escapes in its string literals are written as a double backslash
-      // then n; a single-escaped one is cooked into a real newline at template-eval
-      // time and breaks the worker parse. (And no backticks here — they would close
-      // the template literal early.)
-      let prompt = '';
-      for (const m of chatMessages) {
-        const c = typeof m.content === 'string' ? m.content
-          : Array.isArray(m.content) ? m.content.filter(b => b && b.type === 'text').map(b => b.text).join('\\n')
-          : String(m.content == null ? '' : m.content);
-        prompt += '<|im_start|>' + m.role + '\\n' + c + '<|im_end|>\\n';
+      // The pinned transformers.js jinja can't parse some real templates — e.g.
+      // LFM2.5 wraps the assistant turn in {% generation %}…{% endgeneration %}
+      // (training-time assistant-mask markers) → "Unknown statement type:
+      // generation". First SALVAGE the model's own template by stripping just
+      // those markers — they are inference no-ops, so the template renders
+      // identically without them, and we keep the model's native structure
+      // (proper BOS, tool scaffolding) instead of dropping to bare ChatML.
+      // Plain split/join only — no regex/backslashes — because this code is
+      // embedded in the chat worker-source template literal, where a single
+      // backslash escape is cooked at template-eval time and breaks the parse.
+      // (And no backticks — they would close the template literal early.)
+      let salvaged = false;
+      try {
+        let raw = tokenizer.chat_template;
+        if (typeof raw === 'string' && raw.indexOf('generation') !== -1) {
+          const forms = ['{% generation %}', '{%- generation -%}', '{%- generation %}', '{% generation -%}', '{% endgeneration %}', '{%- endgeneration -%}', '{%- endgeneration %}', '{% endgeneration -%}'];
+          for (const f of forms) raw = raw.split(f).join('');
+          inputs = tokenizer.apply_chat_template(chatMessages, {
+            add_generation_prompt: true,
+            return_dict: true,
+            chat_template: raw,
+          });
+          salvaged = true;
+        }
+      } catch (e2) { salvaged = false; }
+      if (!salvaged) {
+        // Last resort: build ChatML by hand (mirrors DiffusionLM.encodePrompt) and
+        // tokenize directly, bypassing jinja. Newline escapes are a double
+        // backslash then n (single-escaped is cooked into a real newline at
+        // template-eval time and breaks the worker parse).
+        let prompt = '';
+        for (const m of chatMessages) {
+          const c = typeof m.content === 'string' ? m.content
+            : Array.isArray(m.content) ? m.content.filter(b => b && b.type === 'text').map(b => b.text).join('\\n')
+            : String(m.content == null ? '' : m.content);
+          prompt += '<|im_start|>' + m.role + '\\n' + c + '<|im_end|>\\n';
+        }
+        prompt += '<|im_start|>assistant\\n';
+        inputs = tokenizer(prompt, { add_special_tokens: false });
       }
-      prompt += '<|im_start|>assistant\\n';
-      inputs = tokenizer(prompt, { add_special_tokens: false });
     }
 
     const streamer = new TextStreamer(tokenizer, {
