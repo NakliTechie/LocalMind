@@ -39,10 +39,16 @@ Pick whatever fits your hardware — all three are local, nothing leaves your de
 | **In-browser GGUF** | A GGUF model loaded into the tab (llama.cpp → WebAssembly) | The huge GGUF ecosystem, no setup; runs on CPU even without a GPU |
 | **Your own server** | Point it at Ollama / LM Studio on your machine | Big models (7B–70B+) at full speed |
 
+### Custom WebGPU engine (the default)
+
+The default model, **Gemma 4 E2B**, runs on a **from-scratch WebGPU inference engine** — every kernel (matmul, attention, RoPE, RMSNorm, the int4 dequant) is hand-written WGSL, reading the quantized weights directly with **no ONNX runtime and no llama.cpp**. It's tuned purely for in-tab decode throughput (~250 tok/s on an M4 Max). A second model, **LFM2.5 230M**, runs on the same approach. Both are WebGPU-only.
+
+These two engines are ported, largely verbatim, from the open-source [`webml-community`](https://huggingface.co/webml-community) Spaces on Hugging Face — [`gemma-4-webgpu-kernels`](https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels) and [`lfm2-webgpu-kernels`](https://huggingface.co/spaces/webml-community/lfm2-webgpu-kernels) — whose authors did the hard work of writing the kernels. The Gemma engine also has a standalone home at [tylerstraub/gemma4-webgpu](https://github.com/tylerstraub/gemma4-webgpu). LocalMind's contribution is the integration: adapting each engine's stream into the shared chat protocol and slotting it in next to the other backends. Full credit for the WGSL kernels goes upstream.
+
 ## Try it in 30 seconds
 
 1. Open **[naklitechie.github.io/LocalMind](https://naklitechie.github.io/LocalMind)** in Chrome or Edge.
-2. Pick a model — the default is small (~470 MB).
+2. Pick a model — the default is **Gemma 4 E2B** (~2 GB, on the custom WebGPU engine); or choose a smaller one like the ~470 MB Bonsai 1.7B to start faster.
 3. Wait for the one-time download, then chat.
 
 To run it yourself, it's one HTML file with no build step:

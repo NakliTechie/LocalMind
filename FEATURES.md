@@ -20,7 +20,7 @@ Pick a model from the dropdown. It downloads once, caches in the browser, and ru
 | **Gemma 4 E2B** | ~1.5 GB | WebGPU | Text + image + audio + agent | Multimodal on any device |
 | **Gemma 4 E4B** | ~4.9 GB | WebGPU | Text + image + audio + agent | Best multimodal quality |
 | **LFM2.5 230M · WebGPU kernels** | ~140 MB | Custom WGSL (in-tab) | Text + agent | LFM2.5 230M on a from-scratch WebGPU engine — every kernel hand-written WGSL |
-| **Gemma 4 E2B · WebGPU kernels** | ~1.5 GB | Custom WGSL (in-tab) | Text + agent | Gemma 4 E2B (QAT int4) on hand-written WGSL kernels; ~250 tok/s on an M4 Max |
+| **Gemma 4 E2B · WebGPU kernels** | ~2 GB | Custom WGSL (in-tab) | Text + agent | Gemma 4 E2B (QAT int4) on hand-written WGSL kernels; ~250 tok/s on an M4 Max. **Default model.** |
 | **SmolLM2 360M · GGUF** | ~270 MB | wllama (in-tab) | Text + agent | Tiniest; runs on CPU without WebGPU |
 | **Llama 3.2 1B · GGUF** | ~810 MB | wllama (in-tab) | Text + agent | Popular GGUF instruct model |
 | **Qwen2.5 1.5B · GGUF** | ~1.1 GB | wllama (in-tab) | Text + agent | More capable GGUF option |

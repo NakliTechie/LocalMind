@@ -2116,7 +2116,7 @@
                 <li><strong>LFM2.5 230M</strong> (~210 MB) &mdash; text + agent (tool calling). Liquid AI's smallest model (released 2026-06-25) &mdash; a dense LFM2 hybrid post-trained for on-device agents; strong at tool use + data extraction for its size, not for math/code/creative writing. q4, 32K context. The smallest tool-capable model here.</li>
                 <li><strong>LFM2 8B A1B</strong> (~4.8 GB) &mdash; text + agent (tool calling). Liquid AI sparse-MoE (8B total / ~1B active) at q4f16, 32K context. WebGPU-only and large &mdash; needs a capable GPU (Chrome/Edge, ~8 GB+ RAM recommended).</li>
                 <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
-                <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~1.5 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only; ~250 tok/s on an M4 Max.</li>
+                <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only; ~250 tok/s on an M4 Max.</li>
                 <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; text-only, no tool calling. Fallback option.</li>
                 <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
                 <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
@@ -2553,7 +2553,7 @@
         <span class="flex-spacer" style="flex:1"></span>
         <span class="api-chip" id="apiChip" title="window.localmind API is enabled — click to view activity log">API</span>
         <select class="model-select" id="modelSelect" title="Choose model">
-          <option value="bonsai-ternary-1.7b" selected>Ternary Bonsai 1.7B &middot; Agent (~470 MB)</option>
+          <option value="bonsai-ternary-1.7b">Ternary Bonsai 1.7B &middot; Agent (~470 MB)</option>
           <option value="bonsai-ternary-4b">Ternary Bonsai 4B &middot; Agent (~1.1 GB)</option>
           <option value="bonsai-ternary-8b">Ternary Bonsai 8B &middot; Agent (~2.2 GB)</option>
           <option value="qwen3-4b">Qwen3 4B &middot; Agent (~2.8 GB)</option>
@@ -2564,7 +2564,7 @@
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
           <option value="lfm2-230m-gguf">LFM2.5 230M &middot; GGUF (~170 MB)</option>
           <option value="lfm2-230m-webgpu">LFM2.5 230M &middot; WebGPU kernels (~140 MB)</option>
-          <option value="gemma4-e2b-webgpu">Gemma 4 E2B &middot; WebGPU kernels (~1.5 GB)</option>
+          <option value="gemma4-e2b-webgpu" selected>Gemma 4 E2B &middot; WebGPU kernels (~2 GB)</option>
           <option value="smollm2-360m-gguf">SmolLM2 360M &middot; GGUF (~270 MB)</option>
           <option value="qwen25-1.5b-gguf">Qwen2.5 1.5B &middot; GGUF (~1.1 GB)</option>
         </select>
@@ -7727,7 +7727,7 @@ self.onmessage = async (e) => {
         id: 'google/gemma-4-E2B-it-qat-mobile-transformers',
         label: 'Gemma 4 E2B · WebGPU kernels',
         backend: 'gemma4-webgpu',
-        size: '~1.5 GB',
+        size: '~2 GB',
         type: 'causal',
         multimodal: false,
         agentCapable: true,
@@ -13212,7 +13212,7 @@ self.addEventListener('message', async (e) => {
       let code = src ? src.textContent : '';
       if (!code) throw new Error('LFM2 WebGPU worker source missing');
       const engineUrl = new URL('lfm2_5.js', document.baseURI).href;
-      code = code.replace('__LFM2_ENGINE_URL__', engineUrl);
+      code = code.replaceAll('__LFM2_ENGINE_URL__', engineUrl);
       const blob = new Blob([code], { type: 'application/javascript' });
       const url = URL.createObjectURL(blob);
       const w = new Worker(url, { type: 'module' });
@@ -13231,7 +13231,7 @@ self.addEventListener('message', async (e) => {
       let code = src ? src.textContent : '';
       if (!code) throw new Error('Gemma 4 WebGPU worker source missing');
       const engineUrl = new URL('gemma-4-e2b.js', document.baseURI).href;
-      code = code.replace('__GEMMA4_ENGINE_URL__', engineUrl);
+      code = code.replaceAll('__GEMMA4_ENGINE_URL__', engineUrl);
       const blob = new Blob([code], { type: 'application/javascript' });
       const url = URL.createObjectURL(blob);
       const w = new Worker(url, { type: 'module' });
