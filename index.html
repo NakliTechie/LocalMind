@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="author" content="Chirag Patnaik">
-  <meta name="version" content="2.3.0">
+  <meta name="version" content="2.4.0">
   <meta name="description" content="Private AI chatbot running Gemma entirely in your browser. No server, no API keys, no data leaves your device.">
   <title>LocalMind — Private AI Chat in Your Browser</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
@@ -485,6 +485,28 @@
     .tts-modal-bar { height: 6px; background: var(--gray-200); border-radius: 4px; overflow: hidden; }
     .tts-modal-fill { height: 100%; width: 0%; background: var(--indigo-500); transition: width 0.2s; }
     .tts-modal-pct { font-size: 0.75rem; color: var(--gray-500); margin-top: 6px; text-align: center; }
+
+    /* 🎙 Voice mode (v1.1) */
+    .voice-stage { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 18px 10px 10px; }
+    .voice-mic {
+      width: 88px; height: 88px; border-radius: 50%;
+      border: 2px solid var(--indigo-500); background: var(--surface, #fff);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: transform .1s, background .15s, box-shadow .15s;
+      -webkit-user-select: none; user-select: none; touch-action: none;
+    }
+    .voice-mic:active { transform: scale(0.96); }
+    .voice-mic-icon { font-size: 2rem; pointer-events: none; }
+    .voice-mic.listening { background: var(--indigo-500); animation: voicePulse 1.2s infinite; }
+    .voice-mic.thinking { border-color: var(--gray-400); opacity: 0.85; }
+    .voice-mic.speaking { border-color: var(--indigo-500); background: rgba(102,126,234,0.12); }
+    @keyframes voicePulse {
+      0%   { box-shadow: 0 0 0 0 rgba(102,126,234,0.5); }
+      70%  { box-shadow: 0 0 0 16px rgba(102,126,234,0); }
+      100% { box-shadow: 0 0 0 0 rgba(102,126,234,0); }
+    }
+    .voice-status { font-size: 0.82rem; color: var(--gray-600); text-align: center; max-width: 520px; line-height: 1.5; }
+    .voice-transcript { font-size: 0.9rem; color: var(--gray-800); text-align: center; min-height: 1.2em; max-width: 520px; font-style: italic; }
 
     /* Collapsible tool-trace block (step labels + tool-call blocks) that
        sits above the bubble when expanded. Default collapsed; toggle
@@ -2134,7 +2156,7 @@
               <p><a href="guide/index.html" target="_blank" rel="noopener"><strong>&#128214; New here? Read the User guide &rarr;</strong></a></p>
               <p>Only your search queries touch the network (and only when you choose to). All reasoning stays on your device. Models are cached after first download &mdash; future visits load instantly.</p>
               <p><strong>Requirements:</strong> Chrome 113+ or Edge 113+ (WebGPU).</p>
-              <div class="help-note">v2.3.0 &middot; Powered by Transformers.js &middot; models from Prism ML, Alibaba, Liquid AI, Google &amp; Kokoro.</div>
+              <div class="help-note">v2.4.0 &middot; Powered by Transformers.js &middot; models from Prism ML, Alibaba, Liquid AI, Google, Kokoro &amp; Moonshine.</div>
             </div>
             <div class="help-tab-content" data-tab="models">
               <h4>Available Models</h4>
@@ -2242,6 +2264,7 @@
                 <li><strong>Artifact preview</strong> &mdash; <code>```html</code> / <code>```svg</code> / <code>```artifact</code> code blocks get a live sandboxed iframe below the code (<code>sandbox=&quot;allow-scripts&quot;</code>, no same-origin). Safe to run model-generated UI inline.</li>
                 <li><strong>Voice to text</strong> &mdash; 🗣 button left of the input records mic audio, decodes to 16 kHz mono PCM on-device, and runs Whisper-base via WebGPU to transcribe into the input. ~80 MB first-use download; nothing leaves the device.</li>
                 <li><strong>Read aloud</strong> &mdash; 🔊 button under any reply speaks it via Kokoro-82M (runs on WASM, so it never competes with the chat model). Streams sentence-by-sentence; English + Hindi voices in Settings. ~80 MB first-use download; nothing leaves the device.</li>
+                <li><strong>Voice mode</strong> &mdash; 🎙 chip opens a hands-free loop: hold the mic (or hold <strong>V</strong>) to talk, release to send. Moonshine transcribes on-device (English; other languages fall back to Whisper), the model answers, and Kokoro reads the reply back. Turn-based; the chat model stays loaded. ~180 MB first-use download.</li>
                 <li><strong>Python code tool</strong> (agent-capable models) &mdash; model can call <code>run_python</code> to execute Python in a sandboxed Pyodide worker. numpy / pandas / matplotlib auto-install on import. ~10 MB first-use download.</li>
                 <li><strong>Cache management</strong> &mdash; view/clear cached models in Settings</li>
                 <li><strong>Custom models</strong> &mdash; Settings &rarr; paste a Hugging Face ONNX repo id (causal LMs, runs on WebGPU) <em>or a direct GGUF URL</em> (runs via wllama, WebGPU when present / CPU otherwise). ONNX repos are probed via the HF API for the best quant; oversized models warn (but aren&rsquo;t blocked) so you can try on a capable GPU. GGUF URLs are sized via a HEAD request; point at the first shard of a split GGUF (&hellip;-00001-of-&hellip;) for files over wllama&rsquo;s 2 GB per-file / ~4 GB total limits.</li>
@@ -2641,6 +2664,7 @@
         <button class="mode-chip" id="chipImage" title="Generate an image from a prompt — on-device diffusion (WebGPU)">&#127912; Image</button>
         <button class="mode-chip" id="chipDiffuse" title="Experimental: masked-diffusion text generation — watch the answer denoise (WebGPU)">&#127787;&#65039; Diffuse</button>
         <button class="mode-chip" id="chipOCR" title="Extract text from an image or PDF on-device — GLM-OCR (WebGPU)">&#128196; OCR</button>
+        <button class="mode-chip" id="chipVoice" title="Hands-free voice conversation — talk, it transcribes, answers, and reads back (on-device)">&#127897;&#65039; Voice</button>
         <span class="mode-hint" id="modeHint"></span>
       </div>
       <div class="mode-extra" id="comparePanel">
@@ -2743,6 +2767,16 @@
         <!-- Honest degraded state when WebGPU is absent (no error wall) -->
         <div id="ocrNoGpu" hidden class="ocr-nogpu">
           This device can&rsquo;t run the GLM-OCR engine in-browser &mdash; it needs <strong>WebGPU</strong> (Chrome or Edge, or <code>chrome://flags/#enable-unsafe-webgpu</code>). A lighter recognizer for low-end devices is planned for a later release. The rest of LocalMind keeps working.
+        </div>
+      </div>
+      <div class="mode-extra" id="voicePanel" role="region" aria-label="Voice conversation">
+        <div class="mode-extra-head">Voice &middot; <span class="memory-count">Moonshine STT + Kokoro TTS &middot; on-device</span></div>
+        <div class="voice-stage">
+          <button type="button" class="voice-mic" id="voiceMicBtn" aria-label="Hold to talk, release to send">
+            <span class="voice-mic-icon" id="voiceMicIcon">&#127897;&#65039;</span>
+          </button>
+          <div class="voice-status" id="voiceStatus" role="status" aria-live="polite">Hold the mic (or press and hold <b>V</b>) to talk. Release to send &mdash; it transcribes, answers, and reads the reply back. Everything stays on your device.</div>
+          <div class="voice-transcript" id="voiceTranscript" aria-live="polite"></div>
         </div>
       </div>
 
@@ -7651,6 +7685,46 @@ self.onmessage = async (e) => {
   }
 };
   </script>
+  <script type="text/worker" id="sttWorkerSrc">
+// STT worker — Moonshine streaming speech-to-text via transformers.js. English-
+// first and fast (beats Whisper Large v3 at a fraction of the params); runs on
+// WASM by default so it never contends with the chat model's WebGPU. On-device
+// only — the sole network touch is the one-time model fetch. (Non-English turns
+// route to the existing Whisper worker on the main thread instead.)
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+env.allowLocalModels = false;
+env.allowRemoteModels = true;
+
+let asr = null;
+let curModel = '';
+
+self.onmessage = async (e) => {
+  const d = e.data || {};
+  try {
+    if (d.type === 'load') {
+      const model = d.model || 'onnx-community/moonshine-base-ONNX';
+      if (!asr || curModel !== model) {
+        asr = await pipeline('automatic-speech-recognition', model, {
+          device: d.device || 'wasm',
+          dtype: d.dtype || 'q4',
+          progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
+        });
+        curModel = model;
+      }
+      self.postMessage({ type: 'ready' });
+      return;
+    }
+    if (d.type === 'transcribe') {
+      if (!asr) { self.postMessage({ type: 'error', id: d.id, message: 'STT not loaded' }); return; }
+      const out = await asr(d.pcm);
+      self.postMessage({ type: 'text', id: d.id, text: (out && out.text) || '' });
+      return;
+    }
+  } catch (err) {
+    self.postMessage({ type: 'error', id: d.id, message: (err && err.message) || String(err) });
+  }
+};
+  </script>
   <script type="module">
     // ── WebGPU check ────────────────────────────────────────────
     // WebGPU is required for in-browser GPU models (ONNX), 🎨 Image, 🌫️ Diffuse,
@@ -9676,6 +9750,24 @@ self.onmessage = async (e) => {
         },
         stop() { ttsStopAll(); },
         get ready() { return TTS.ready; },
+      }),
+      stt: Object.freeze({
+        async transcribe(input) {
+          const start = Date.now();
+          try {
+            // Copy a Float32Array (its buffer is transferred to the worker); decode a Blob.
+            const pcm = (input instanceof Float32Array) ? input.slice()
+              : (input instanceof Blob) ? await decodeToWhisperPCM(input)
+              : (() => { throw new Error('transcribe expects a Blob or Float32Array (16 kHz mono)'); })();
+            const text = await voiceTranscribe(pcm);
+            logApiCall({ method: 'stt.transcribe', outcome: 'ok', durationMs: Date.now() - start });
+            return text;
+          } catch (err) {
+            logApiCall({ method: 'stt.transcribe', outcome: 'err', error: err.message, durationMs: Date.now() - start });
+            throw err;
+          }
+        },
+        get ready() { return STT.ready; },
       }),
     });
 
@@ -13431,6 +13523,22 @@ self.addEventListener('message', async (e) => {
       return w;
     }
 
+    // ── STT worker factory (Moonshine streaming speech-to-text, Voice mode) ──
+    // Reads the inert #sttWorkerSrc block (imports transformers.js from CDN).
+    // WASM by default, so it never takes WebGPU from the chat model.
+    function createSTTWorker() {
+      const src = document.getElementById('sttWorkerSrc');
+      const code = src ? src.textContent : '';
+      if (!code) throw new Error('STT worker source missing');
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url, { type: 'module' });
+      w.addEventListener('error', (e) => {
+        console.error('STT worker error:', e.message);
+      });
+      return w;
+    }
+
     // ── wllama worker factory (in-browser GGUF via llama.cpp WASM) ──
     // Reads the inert #wllamaWorkerSrc block (it imports wllama from CDN
     // itself). Speaks the ONNX chat worker protocol, so it slots straight
@@ -15845,8 +15953,12 @@ self.addEventListener('message', async (e) => {
         button: btn,
         onState: (state, msg) => {
           if (state === 'loading') setSpeakBtn(btn, 'loading');
-          else if (state === 'speaking') setSpeakBtn(btn, 'speaking');
-          else { setSpeakBtn(btn, 'idle'); if (state === 'error' && msg) showToast('Read-aloud failed: ' + msg); }
+          else if (state === 'speaking') { setSpeakBtn(btn, 'speaking'); if (activeMode === 'voice') voiceSetState('speaking', 'Speaking…'); }
+          else {
+            setSpeakBtn(btn, 'idle');
+            if (state === 'error' && msg) showToast('Read-aloud failed: ' + msg);
+            if (activeMode === 'voice') voiceSetState('idle', 'Ready — hold the mic to talk.');
+          }
         },
       }).catch((e) => {
         setSpeakBtn(btn, 'idle');
@@ -15871,6 +15983,208 @@ self.addEventListener('message', async (e) => {
         btn.addEventListener('click', () => speakBubble(btn, text));
       }
       bubble.appendChild(btn);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🎙 Voice mode (Voice v1.1) — push-to-talk → Moonshine STT → chat
+    // (through the normal send path) → Kokoro read-back. Turn-based; the
+    // chat model stays resident (STT + TTS ride WASM, no GPU contention).
+    // 100% on-device; the only network is the one-time model fetch.
+    // ═══════════════════════════════════════════════════════════════
+    const STT = { worker: null, ready: false, loading: null, seq: 0, waiters: new Map() };
+
+    function sttCanUseWebGPU() {
+      try {
+        const m = (typeof MODELS !== 'undefined' && activeModelKey) ? MODELS[activeModelKey] : null;
+        return !!navigator.gpu && m && m.backend === 'endpoint';
+      } catch (_) { return false; }
+    }
+
+    function sttModelCached() {
+      return caches.open('transformers-cache').then(c => c.keys())
+        .then(keys => keys.some(r => /moonshine/i.test(r.url))).catch(() => false);
+    }
+
+    function sttEnsureWorker() {
+      if (STT.ready) return Promise.resolve();
+      if (STT.loading) return STT.loading;
+      STT.loading = (async () => {
+        STT.worker = createSTTWorker();
+        STT.worker.addEventListener('message', sttOnMessage);
+        await new Promise((resolve, reject) => {
+          STT._resolve = resolve; STT._reject = reject;
+          const device = sttCanUseWebGPU() ? 'webgpu' : 'wasm';
+          const dtype = device === 'webgpu' ? 'fp32' : 'q4';
+          STT.worker.postMessage({ type: 'load', device, dtype, model: 'onnx-community/moonshine-base-ONNX' });
+        });
+        STT.ready = true; STT.loading = null;
+      })();
+      return STT.loading;
+    }
+
+    function sttOnMessage(e) {
+      const d = e.data || {};
+      if (d.type === 'progress') { voiceModeProgress(d.data); return; }
+      if (d.type === 'ready') { if (STT._resolve) { const r = STT._resolve; STT._resolve = null; r(); } return; }
+      const w = d.id != null ? STT.waiters.get(d.id) : null;
+      if (d.type === 'text') { if (w) w.resolve(d.text || ''); return; }
+      if (d.type === 'error') {
+        if (w) w.reject(new Error(d.message));
+        else if (STT._reject) { const r = STT._reject; STT._reject = null; STT.loading = null; r(new Error(d.message)); }
+        return;
+      }
+    }
+
+    // Moonshine transcription of a 16 kHz mono Float32Array (its buffer is transferred).
+    function sttTranscribeMoonshine(pcm) {
+      const id = 'stt' + (++STT.seq);
+      return new Promise((resolve, reject) => {
+        STT.waiters.set(id, {
+          resolve: (t) => { STT.waiters.delete(id); resolve(t); },
+          reject: (e) => { STT.waiters.delete(id); reject(e); },
+        });
+        STT.worker.postMessage({ type: 'transcribe', pcm, id }, [pcm.buffer]);
+      });
+    }
+
+    // Language routing: English → Moonshine (fast, streams partials); everything
+    // else → the existing Whisper worker (multilingual one-shot, no partials).
+    async function voiceTranscribe(pcm) {
+      const lang = localStorage.getItem('lm_voice_language') || 'en';
+      if (lang === 'en') { await sttEnsureWorker(); return sttTranscribeMoonshine(pcm); }
+      await ensureVoiceWorker();
+      const id = Math.random().toString(36).slice(2);
+      return new Promise((resolve, reject) => {
+        const onMsg = (e) => {
+          if (e.data.id && e.data.id !== id) return;
+          if (e.data.type === 'transcription') { voiceWorker.removeEventListener('message', onMsg); resolve(e.data.text || ''); }
+          else if (e.data.type === 'error') { voiceWorker.removeEventListener('message', onMsg); reject(new Error(e.data.message)); }
+        };
+        voiceWorker.addEventListener('message', onMsg);
+        voiceWorker.postMessage({ type: 'transcribe', pcm, lang, id }, [pcm.buffer]);
+      });
+    }
+
+    // ── Voice-mode recorder + state machine ──
+    const VM = { recording: false, recorder: null, stream: null, chunks: [], partialTimer: null, partialBusy: false, state: 'idle', needsDownload: false };
+
+    function voiceEl(id) { return document.getElementById(id); }
+
+    function voiceSetState(state, msg) {
+      const mic = voiceEl('voiceMicBtn'), icon = voiceEl('voiceMicIcon'), status = voiceEl('voiceStatus');
+      if (mic) {
+        mic.classList.remove('listening', 'thinking', 'speaking');
+        if (state === 'listening') { mic.classList.add('listening'); if (icon) icon.innerHTML = '&#128308;'; }      // 🔴
+        else if (state === 'thinking') { mic.classList.add('thinking'); if (icon) icon.innerHTML = '&#8987;'; }      // ⌛
+        else if (state === 'speaking') { mic.classList.add('speaking'); if (icon) icon.innerHTML = '&#128266;'; }    // 🔊
+        else if (icon) icon.innerHTML = '&#127897;&#65039;';                                                          // 🎙
+      }
+      if (msg != null && status) status.textContent = msg;
+      VM.state = state;
+    }
+
+    function voiceModeProgress(p) {
+      if (activeMode !== 'voice' || !p) return;
+      const status = voiceEl('voiceStatus');
+      if (!status) return;
+      if (p.status === 'progress' && p.total) {
+        const v = Math.round((p.loaded / p.total) * 100);
+        status.textContent = 'Downloading voice recognizer — ' + v + '%';
+      } else if (p.status === 'ready' || p.status === 'done') {
+        status.textContent = 'Almost ready…';
+      }
+    }
+
+    // First-use load (STT now; TTS lazy-loads on the first read-back). Triggered
+    // by the mic's first tap when models aren't cached — explicit, no surprise fetch.
+    async function voiceLoadModels() {
+      voiceSetState('thinking', 'Downloading voice models (~180 MB), once — then offline…');
+      try { await sttEnsureWorker(); }
+      catch (e) { voiceSetState('idle', 'Voice recognizer failed to load: ' + (e.message || e)); return false; }
+      VM.needsDownload = false;
+      voiceSetState('idle', 'Ready — hold the mic (or press and hold V) to talk.');
+      return true;
+    }
+
+    async function voiceStartRecording() {
+      if (VM.recording || VM.state === 'thinking' || VM.state === 'speaking') return;
+      if (VM.needsDownload) { await voiceLoadModels(); return; }   // first tap = consent to download
+      // Stop any read-back that's still playing (barge-in on a new turn is allowed pre-record).
+      ttsStopAll();
+      try { await sttEnsureWorker(); }
+      catch (e) { voiceSetState('idle', 'Voice recognizer failed to load: ' + (e.message || e)); return; }
+      try { VM.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+      catch (e) { voiceSetState('idle', 'Mic access denied — you can still type below.'); return; }
+      VM.chunks = [];
+      VM.recorder = new MediaRecorder(VM.stream);
+      VM.recorder.addEventListener('dataavailable', (e) => { if (e.data.size > 0) VM.chunks.push(e.data); });
+      VM.recorder.addEventListener('stop', () => voiceOnRecorderStop());
+      VM.recorder.start(1000);   // timeslice → periodic chunks feed the live partial transcript
+      VM.recording = true;
+      const t = voiceEl('voiceTranscript'); if (t) t.textContent = '';
+      voiceSetState('listening', 'Listening… release to send.');
+      VM.partialTimer = setInterval(voiceDoPartial, 1200);
+    }
+
+    async function voiceDoPartial() {
+      if (!VM.recording || VM.partialBusy || VM.chunks.length === 0) return;
+      if ((localStorage.getItem('lm_voice_language') || 'en') !== 'en') return;   // partials: Moonshine only
+      VM.partialBusy = true;
+      try {
+        const blob = new Blob(VM.chunks, { type: (VM.recorder && VM.recorder.mimeType) || 'audio/webm' });
+        const pcm = await decodeToWhisperPCM(blob);
+        const text = await sttTranscribeMoonshine(pcm);
+        if (VM.recording && text) { const t = voiceEl('voiceTranscript'); if (t) t.textContent = text; }
+      } catch (_) {} finally { VM.partialBusy = false; }
+    }
+
+    function voiceStopRecording() {
+      if (!VM.recording) return;
+      VM.recording = false;
+      if (VM.partialTimer) { clearInterval(VM.partialTimer); VM.partialTimer = null; }
+      try { VM.recorder.stop(); } catch (_) {}
+    }
+
+    async function voiceOnRecorderStop() {
+      try { VM.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+      VM.stream = null;
+      const blob = new Blob(VM.chunks, { type: (VM.recorder && VM.recorder.mimeType) || 'audio/webm' });
+      VM.recorder = null;
+      if (!blob.size) { voiceSetState('idle', 'No audio captured — hold the mic and speak.'); return; }
+      voiceSetState('thinking', 'Transcribing…');
+      let text = '';
+      try { const pcm = await decodeToWhisperPCM(blob); text = (await voiceTranscribe(pcm)).trim(); }
+      catch (e) { voiceSetState('idle', 'Transcription failed: ' + (e.message || e)); return; }
+      if (!text) { voiceSetState('idle', 'No speech detected — hold the mic and speak.'); return; }
+      const t = voiceEl('voiceTranscript'); if (t) t.textContent = text;
+      // Feed the normal chat path (the FIFO in runInference); the reply renders
+      // in the transcript and finishGeneration reads it back (voice-mode auto-play).
+      chatInput.value = text;
+      chatInput.dispatchEvent(new Event('input'));
+      voiceSetState('thinking', 'Thinking…');
+      try { await sendMessage(); }
+      catch (e) { voiceSetState('idle', 'Send failed: ' + (e.message || e)); return; }
+      // If the reply wasn't voiced (e.g. unsupported language), return to idle.
+      if (VM.state !== 'speaking') voiceSetState('idle', 'Ready — hold the mic to talk.');
+    }
+
+    async function onEnterVoiceMode() {
+      voiceSetState('idle');
+      const [sttC, ttsC] = await Promise.all([sttModelCached(), ttsModelCached()]);
+      VM.needsDownload = !(sttC && ttsC);
+      if (VM.needsDownload) {
+        voiceSetState('idle', 'Tap the mic once to download the voice models (Moonshine STT + Kokoro TTS, ~230 MB total), once — then it runs offline.');
+      } else {
+        voiceSetState('idle', 'Hold the mic (or press and hold V) to talk. Release to send — it transcribes, answers, and reads the reply back.');
+      }
+    }
+
+    function onLeaveVoiceMode() {
+      if (VM.recording) voiceStopRecording();
+      try { if (VM.stream) VM.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+      VM.stream = null;
+      ttsStopAll();
+      voiceSetState('idle');
     }
 
     function finishGeneration(response, sources, usedTools) {
@@ -15956,10 +16270,14 @@ self.addEventListener('message', async (e) => {
         }
         // 🔊 Read-aloud button (Voice v1.0)
         addSpeakButton(bubble, response);
-        // Auto-play the reply if the user opted in (and the language is voiced).
-        if (response && response.trim() && ttsSettings().autoplay && ttsVoiceForText(response, 'af_heart')) {
+        // Auto-read the reply: ALWAYS in Voice mode (v1.1), else only if the user
+        // enabled auto-play. Skip (and reset the mic) if the language isn't voiced.
+        const voiceReadback = (activeMode === 'voice');
+        if (response && response.trim() && ttsVoiceForText(response, 'af_heart') && (voiceReadback || ttsSettings().autoplay)) {
           const sb = bubble.querySelector('.speak-btn:not(:disabled)');
           if (sb) speakBubble(sb, response);
+        } else if (voiceReadback) {
+          voiceSetState('idle', 'Ready — hold the mic to talk.');
         }
       }
       currentAssistantEl = null;
@@ -16208,6 +16526,9 @@ self.addEventListener('message', async (e) => {
     const ocrConsentCancel = document.getElementById('ocrConsentCancel');
     const ocrProgressFill = document.getElementById('ocrProgressFill');
     const ocrProgressText = document.getElementById('ocrProgressText');
+    const voicePanel     = document.getElementById('voicePanel');
+    const chipVoice      = document.getElementById('chipVoice');
+    const voiceMicBtn    = document.getElementById('voiceMicBtn');
     let ocrOutMode = 'text';        // 'text' | 'markdown'
     let ocrFile = null;             // currently selected File (image or PDF)
     let ocrBusy = false;
@@ -16222,11 +16543,13 @@ self.addEventListener('message', async (e) => {
       chipImage.classList.toggle('active', activeMode === 'image');
       chipDiffuse.classList.toggle('active', activeMode === 'diffuse');
       chipOCR.classList.toggle('active', activeMode === 'ocr');
+      if (chipVoice) chipVoice.classList.toggle('active', activeMode === 'voice');
       comparePanel.classList.toggle('open', activeMode === 'compare');
       batchPanel.classList.toggle('open', activeMode === 'batch');
       imagePanel.classList.toggle('open', activeMode === 'image');
       diffusePanel.classList.toggle('open', activeMode === 'diffuse');
       ocrPanel.classList.toggle('open', activeMode === 'ocr');
+      if (voicePanel) voicePanel.classList.toggle('open', activeMode === 'voice');
       if (activeMode === 'batch') chatInput.placeholder = 'One prompt per line — Shift+Enter for newlines, then Send…';
       else if (activeMode === 'compare') chatInput.placeholder = 'Ask once — every ticked model answers, then a judge picks…';
       else if (activeMode === 'research') chatInput.placeholder = 'Ask a research question…';
@@ -16240,6 +16563,7 @@ self.addEventListener('message', async (e) => {
         activeMode === 'image' ? 'On-device diffusion — frees the chat model while active.' :
         activeMode === 'diffuse' ? 'Masked-diffusion text — the answer fills in non-linearly. Frees the chat model.' :
         activeMode === 'ocr' ? 'Extracts text from images / PDFs on-device. Frees the chat model while active.' :
+        activeMode === 'voice' ? 'Hands-free: talk, it answers and reads back. The chat model stays loaded (voice runs on WASM).' :
         (activeMode === 'chat' && searchOn) ? 'This message will be web-enriched.' : '';
     }
     function setExclusiveMode(mode) {
@@ -16248,7 +16572,9 @@ self.addEventListener('message', async (e) => {
       if (prev === 'image' && activeMode !== 'image') onLeaveImageMode();
       if (prev === 'diffuse' && activeMode !== 'diffuse') onLeaveDiffuseMode();
       if (prev === 'ocr' && activeMode !== 'ocr') onLeaveOCRMode();
+      if (prev === 'voice' && activeMode !== 'voice') onLeaveVoiceMode();
       if (activeMode === 'ocr') onEnterOCRMode();
+      if (activeMode === 'voice') onEnterVoiceMode();
       refreshModeUI();
     }
     function needsSearchOrConfigure(what) {
@@ -16267,6 +16593,29 @@ self.addEventListener('message', async (e) => {
     // OCR chip stays enabled even without WebGPU — it degrades to an honest
     // "needs WebGPU" panel state rather than an error wall (spec hard-rule #5).
     chipOCR.addEventListener('click', () => { if (!generating && !ocrBusy) setExclusiveMode('ocr'); });
+    // 🎙 Voice mode chip. Stays enabled without WebGPU (STT/TTS ride WASM).
+    if (chipVoice) chipVoice.addEventListener('click', () => { if (!generating) setExclusiveMode('voice'); });
+    // Push-to-talk: hold the mic (pointer) or hold V (when not typing). Release = send.
+    if (voiceMicBtn) {
+      const down = (e) => { if (activeMode !== 'voice') return; e.preventDefault(); voiceStartRecording(); };
+      const up = (e) => { if (activeMode !== 'voice') return; e.preventDefault(); voiceStopRecording(); };
+      voiceMicBtn.addEventListener('pointerdown', down);
+      voiceMicBtn.addEventListener('pointerup', up);
+      voiceMicBtn.addEventListener('pointerleave', up);
+      voiceMicBtn.addEventListener('pointercancel', up);
+    }
+    // Hold-V shortcut, only in voice mode and only when the text input isn't focused
+    // (so it never eats typing). Resolved against the input-focus guard, not a global key.
+    let vKeyDown = false;
+    document.addEventListener('keydown', (e) => {
+      if (activeMode !== 'voice' || e.repeat) return;
+      if ((e.key === 'v' || e.key === 'V') && document.activeElement !== chatInput && !vKeyDown) {
+        vKeyDown = true; e.preventDefault(); voiceStartRecording();
+      }
+    });
+    document.addEventListener('keyup', (e) => {
+      if ((e.key === 'v' || e.key === 'V') && vKeyDown) { vKeyDown = false; if (activeMode === 'voice') voiceStopRecording(); }
+    });
     imageStepsInput.addEventListener('input', () => { imageStepsVal.textContent = imageStepsInput.value; });
     imageReroll.addEventListener('click', () => { if (generating || !lastImagePrompt) return; imageSeedInput.value = ''; runImageGen(lastImagePrompt); });
     // Phone/tablet check (touch + small viewport) — used to gate heavy capabilities.
