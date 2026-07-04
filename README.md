@@ -20,7 +20,7 @@ It began as a private chatbot and grew into a small **AI workbench**: chat, imag
 - 🎨 **Generate images** — text-to-image on your GPU, right in the tab.
 - 🌫️ **Watch text "denoise"** — an experimental diffusion-text mode (a different way of generating).
 - 🌐 **Search the web** *(optional)* — bring your own free search key; answers come back with clickable sources.
-- 📄 **Chat with your documents** — drop in PDFs, Word docs, notes, or a whole folder and ask questions across them. It remembers across sessions.
+- 📄 **Chat with your documents** — drop in PDFs, Word docs, notes, or a whole folder and ask questions across them. Multilingual search (100+ languages, via a multilingual‑e5 embedder) — ask in one language about documents in another. It remembers across sessions.
 - 🔎 **Extract text from images & PDFs (OCR)** — drop in a photo, screenshot, or scanned PDF and get back clean, selectable text or Markdown — tables and formulas included. Runs entirely on your GPU (GLM-OCR); the document never leaves your device. Needs WebGPU (Chrome/Edge); the model downloads once (~1.4 GB), then works offline. You can also point it at the model folder on disk for zero runtime fetch.
 - 🖼️ **See & hear** — some models accept images and audio; voice-to-text works on any model.
 - 🔊 **Voice in and out** — read any reply aloud (🔊, Kokoro-82M, English + Hindi), or go fully hands-free (🎙 **Voice mode**): hold to talk, it transcribes (Moonshine), answers, and reads back. Both run on-device; nothing leaves your machine.

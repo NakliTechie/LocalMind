@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="author" content="Chirag Patnaik">
-  <meta name="version" content="2.4.0">
+  <meta name="version" content="2.5.0">
   <meta name="description" content="Private AI chatbot running Gemma entirely in your browser. No server, no API keys, no data leaves your device.">
   <title>LocalMind — Private AI Chat in Your Browser</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
@@ -2156,7 +2156,7 @@
               <p><a href="guide/index.html" target="_blank" rel="noopener"><strong>&#128214; New here? Read the User guide &rarr;</strong></a></p>
               <p>Only your search queries touch the network (and only when you choose to). All reasoning stays on your device. Models are cached after first download &mdash; future visits load instantly.</p>
               <p><strong>Requirements:</strong> Chrome 113+ or Edge 113+ (WebGPU).</p>
-              <div class="help-note">v2.4.0 &middot; Powered by Transformers.js &middot; models from Prism ML, Alibaba, Liquid AI, Google, Kokoro &amp; Moonshine.</div>
+              <div class="help-note">v2.5.0 &middot; Powered by Transformers.js &middot; models from Prism ML, Alibaba, Liquid AI, Google, Kokoro &amp; Moonshine &middot; multilingual document search via e5.</div>
             </div>
             <div class="help-tab-content" data-tab="models">
               <h4>Available Models</h4>
@@ -9036,12 +9036,18 @@ self.onmessage = async (e) => {
       try { updateSyncStatus(); } catch {}
     }
 
+    // Embedding-model marker. Bumping this triggers a one-time background
+    // re-index (migrated all-MiniLM → multilingual-e5-small, 2026-07-04).
+    // Both are 384-dim, so the length guard alone can't tell them apart —
+    // hence a per-chunk `embModel` tag, and search only scores matching chunks.
+    const EMBED_TAG = 'me5-small';
+
     async function searchByVector(queryVec, topK = 5, threshold = 0.3) {
       const chunks = await getAllChunks();
-      const scored = chunks.map(c => ({
-        ...c,
-        score: cosineSimilarity(queryVec, c.embedding),
-      })).filter(c => c.score >= threshold);
+      const scored = chunks
+        .filter(c => c.embModel === EMBED_TAG && c.embedding && c.embedding.length === queryVec.length)
+        .map(c => ({ ...c, score: cosineSimilarity(queryVec, c.embedding) }))
+        .filter(c => c.score >= threshold);
       scored.sort((a, b) => b.score - a.score);
       return scored.slice(0, topK);
     }
@@ -9103,6 +9109,7 @@ self.onmessage = async (e) => {
         id: `${now}-${i}-${Math.random().toString(36).slice(2, 6)}`,
         text: t,
         embedding: vectors[i],
+        embModel: EMBED_TAG,
         category: category || 'fact',
         source: source || 'user',
         timestamp: now,
@@ -9112,8 +9119,46 @@ self.onmessage = async (e) => {
     }
 
     async function searchMemory(query, topK = 5) {
-      const vec = await LocalMind.runtime.embed(query);
+      const vec = await LocalMind.runtime.embed(query, 'query');
       return searchByVector(vec, topK);
+    }
+
+    // One-time background re-index when the embedding model changes (bumped
+    // EMBED_TAG). Old-model chunks are filtered OUT of search (see
+    // searchByVector), so retrieval degrades gracefully to already-migrated
+    // chunks while this runs — never mixed-model garbage. Re-embeds in batches
+    // from each chunk's stored `text`, behind a progress toast. Runs once per
+    // session, triggered when the embedding worker first becomes ready.
+    let _embMigrationChecked = false;
+    let _embMigrating = false;
+    async function maybeMigrateEmbeddings() {
+      if (_embMigrationChecked || _embMigrating) return;
+      _embMigrationChecked = true;
+      let chunks;
+      try { chunks = await getAllChunks(); } catch { return; }
+      const stale = chunks.filter(c => c && c.text && c.embModel !== EMBED_TAG);
+      if (stale.length === 0) return;
+      _embMigrating = true;
+      const total = stale.length;
+      let done = 0;
+      showToast('Upgrading search index (' + total + ' item' + (total > 1 ? 's' : '') + ')…');
+      try {
+        const BATCH = 16;
+        for (let i = 0; i < stale.length; i += BATCH) {
+          const batch = stale.slice(i, i + BATCH);
+          const vectors = await LocalMind.runtime.embed(batch.map(c => c.text), 'document');
+          const updated = batch.map((c, j) => ({ ...c, embedding: vectors[j], embModel: EMBED_TAG }));
+          await storeChunks(updated);
+          done += batch.length;
+          if (total > BATCH) showToast('Upgrading search index — ' + done + '/' + total);
+        }
+        showToast('Search index upgraded to the multilingual model.');
+      } catch (e) {
+        console.error('Embedding migration failed:', e);
+        _embMigrationChecked = false;   // let it retry next session
+      } finally {
+        _embMigrating = false;
+      }
     }
 
     // ── Self-improving skills ───────────────────────────────────
@@ -13254,6 +13299,7 @@ ${JSON.stringify({ name, result })}
                 self._embReady = true;
                 self._embWorker.removeEventListener('message', handler);
                 resolve();
+                maybeMigrateEmbeddings();
               } else if (e.data.type === 'error') {
                 self._embWorker.removeEventListener('message', handler);
                 reject(new Error(e.data.message));
@@ -13269,6 +13315,7 @@ ${JSON.stringify({ name, result })}
               self._embReady = true;
               self._embWorker.removeEventListener('message', handler);
               resolve();
+              maybeMigrateEmbeddings();
             } else if (e.data.type === 'error') {
               self._embWorker.removeEventListener('message', handler);
               reject(new Error(e.data.message));
@@ -13279,7 +13326,10 @@ ${JSON.stringify({ name, result })}
         });
       },
 
-      embed(texts /*, options */) {
+      // kind: 'document' (default, stored chunks) | 'query' (retrieval). e5 uses
+      // asymmetric task prefixes, so queries and passages must be embedded
+      // differently — the worker prepends the matching prefix.
+      embed(texts, kind) {
         const self = this;
         const wasString = typeof texts === 'string';
         const arr = wasString ? [texts] : texts;
@@ -13305,7 +13355,7 @@ ${JSON.stringify({ name, result })}
               }
             };
             self._embWorker.addEventListener('message', handler);
-            self._embWorker.postMessage({ type: 'embed', texts: arr, id });
+            self._embWorker.postMessage({ type: 'embed', texts: arr, id, kind: kind || 'document' });
           });
         }));
         return this._embQueue.then(vectors => wasString ? vectors[0] : vectors);
@@ -13453,11 +13503,15 @@ env.allowRemoteModels = true;
 let embedder = null;
 
 self.addEventListener('message', async (e) => {
-  const { type, texts, id } = e.data;
+  const { type, texts, id, kind } = e.data;
   if (type === 'load') {
     try {
-      embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+      // multilingual-e5-small: 100+ languages, 384-dim (same as the old MiniLM,
+      // so the vector store keeps its size), runs on WASM. Requires the e5
+      // 'query: ' / 'passage: ' task prefixes (applied below).
+      embedder = await pipeline('feature-extraction', 'Xenova/multilingual-e5-small', {
         device: 'wasm',
+        dtype: 'q8',
         progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
       });
       self.postMessage({ type: 'ready' });
@@ -13466,9 +13520,10 @@ self.addEventListener('message', async (e) => {
     }
   } else if (type === 'embed') {
     try {
+      const prefix = (kind === 'query') ? 'query: ' : 'passage: ';
       const results = [];
       for (const text of texts) {
-        const output = await embedder(text, { pooling: 'mean', normalize: true });
+        const output = await embedder(prefix + text, { pooling: 'mean', normalize: true });
         results.push(Array.from(output.data));
       }
       self.postMessage({ type: 'embeddings', vectors: results, id });
@@ -15371,7 +15426,7 @@ self.addEventListener('message', async (e) => {
         try {
           const userText = typeof userContent === 'string' ? userContent : text;
           if (userText) {
-            const qVec = await LocalMind.runtime.embed(userText);
+            const qVec = await LocalMind.runtime.embed(userText, 'query');
             const hits = await searchByVector(qVec, 12, 0.3);
             // Learned skills → injected as instructions (auto-apply; self-improving loop).
             // Retrieval already filtered to skills relevant to THIS request, so the
