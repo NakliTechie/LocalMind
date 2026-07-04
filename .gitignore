@@ -9,6 +9,7 @@
 !FEATURES.md
 !WEBGPU_KERNELS_PLAN.md
 !WEBGPU_KERNELS_GENERALISATION.md
+!VOICE-LOOP-HANDOFF.md
 !LICENSE
 !.gitignore
 !.nojekyll
@@ -31,3 +32,7 @@
 
 # local-only working notes — never pushed (also covered by the `*` rule above)
 plan/
+
+# macOS cruft (re-ignore: the guide/** whitelist above would otherwise include it)
+.DS_Store
+*/.DS_Store

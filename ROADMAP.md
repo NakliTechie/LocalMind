@@ -152,3 +152,77 @@ Blocked on repro data from the Brave reporter (console log). **~40 lines.**
 | KV cache quantization (2x context) | ONNX Runtime WebGPU support | Unknown |
 | KV cache offload to system RAM | WebGPU API limitation | Unknown |
 | Cross-device sync | OAuth complexity in single-file app | Low priority |
+
+## Tier 5 — the July 2026 wave
+
+**Added:** July 1, 2026. Give the bench a **mouth** (it already has ears), refresh
+the slots the transformers.js v4 frontier moved past, and make the Edge-First ladder
+*automatic* instead of a manual model picker. Anchor = the voice loop. Everything
+else is a registry entry or a worker swap. LocalMind is Edge-First / on-device;
+every item runs fully local, zero new egress. New models load from HF/CDN; any new
+engine is a vendored sibling like `lfm2_5.js` / `gemma-4-e2b.js`.
+
+### 1. 🎙 Voice — the bench gets a mouth  · **ANCHOR, handoff written** (`VOICE-LOOP-HANDOFF.md`)
+
+Whisper gives ears; nothing reads back. Two milestones, one spec, ship v1.0 first:
+- **v1.0 — 🔊 Read aloud.** Per-bubble speak button. **Kokoro-82M** (Apache-2.0,
+  ~80 MB) via `kokoro-js`, WASM default (never contends with the chat model's
+  WebGPU), sentence-streamed. Hindi + 8 other languages.
+- **v1.1 — 🎙 Voice mode.** Push-to-talk loop, on-device: **Moonshine** streaming
+  STT → chat model (through the existing FIFO) → Kokoro TTS. Turn-based, not
+  full-duplex. Whisper stays as the multilingual fallback. Agent face:
+  `localmind.tts.speak()` + `localmind.stt.transcribe()`.
+
+Non-negotiable: zero new network calls (kills the no-data-leaves thesis otherwise;
+same reason the Web Speech API stays rejected).
+
+### 2. RAG upgrade — MiniLM → EmbeddingGemma-300M
+
+Best open MTEB model <500M, 100+ languages, transformers.js support, <200 MB RAM,
+Matryoshka 768→128 so the store need not grow. **The one real cost:** new embeddings
+are incompatible with the existing store → a mandatory re-index. Ships *with* a
+migration: version-stamp the IndexedDB vector store, detect model change on boot,
+re-embed the corpus behind a progress bar, keep old vectors until re-embed completes.
+**~150 lines + migration.**
+
+### 3. GPT-OSS 20B in-tab — the headline flex
+
+transformers.js v4 runs **GPT-OSS 20B** at q4f16, ~60 tok/s on an M4 Pro Max. One
+MODELS registry entry on the ONNX path; soft-warn on the ~13 GB load, hard-block on
+the existing 6 GB / per-buffer ceiling. **~30 lines.**
+
+### 4. Qwen3.5 family (0.8B–9B) — supersede stock Qwen3
+
+Replaces the `qwen3-4b` lineage: 262K context, 200+ languages, dual-mode thinking,
+tool-tuned (clean `<tool_call>` JSON — the format the parser already speaks).
+Registry entries once ONNX/GGUF exports land; 0.8B = multilingual on-device sweet
+spot, 4B/8B = agent tier. Guardrail: the 0.8B thinking-loops — ship with
+`/no_think`-style defaults. **~30 lines per entry.**
+
+### 5. Auto-escalation router — Edge-First as an agent loop  · **NEW PATTERN**
+
+Today the ladder is real but the rung is chosen by hand. NVIDIA's SLM-first result
+(run the small local model every step, escalate only the low-confidence / schema-fail
+turn, ~80–90% stay local) is Edge-First as a runtime. A lightweight router: small
+local model runs the turn; a cheap confidence gate (schema-parse fail, refusal/empty,
+self-rated low) escalates *that turn* up the ladder — bigger local → BYOK cloud (C1)
+→ relay (C2) — then drops back local. Off by default, one toggle, every escalation
+logged. **~250–400 lines.** Most doctrine-native item in the tier; specced separately
+when it reaches the front of the queue.
+
+### WGSL-kernel track — re-prioritise, don't re-plan
+
+v4's C++ WebGPU rewrite (~4× via custom GroupQueryAttention / MatMulNBits / QMoE
+**on the ONNX path we already ride**) closes the exact gap the bespoke Qwen3 engine
+targeted (Risk #4 in `WEBGPU_KERNELS_GENERALISATION.md`, now real). Revised call: the
+durable win is **ternary (Bonsai 1.58-bit) via a `TQ2_0` GEMV** — the one thing ONNX/v4
+can't represent. Keep Phase 0 as written (the vehicle); **re-benchmark Qwen3-4B on v4
+before committing Phase 1**; treat the ternary `TQ2_0` GEMV as the actual moat.
+Supersedes Tier-3 #5's framing where they conflict.
+
+### Sequencing
+
+**1 (voice v1.0 → v1.1)** is the anchor, handed off now. **2** (embeddings) and
+**3** (GPT-OSS) are independent, small, land in parallel. **4** (Qwen3.5) is registry
+work gated on export availability. **5** (router) is the strategic item, specced when
+it reaches the front.
