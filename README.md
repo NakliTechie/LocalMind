@@ -23,6 +23,7 @@ It began as a private chatbot and grew into a small **AI workbench**: chat, imag
 - 📄 **Chat with your documents** — drop in PDFs, Word docs, notes, or a whole folder and ask questions across them. It remembers across sessions.
 - 🔎 **Extract text from images & PDFs (OCR)** — drop in a photo, screenshot, or scanned PDF and get back clean, selectable text or Markdown — tables and formulas included. Runs entirely on your GPU (GLM-OCR); the document never leaves your device. Needs WebGPU (Chrome/Edge); the model downloads once (~1.4 GB), then works offline. You can also point it at the model folder on disk for zero runtime fetch.
 - 🖼️ **See & hear** — some models accept images and audio; voice-to-text works on any model.
+- 🔊 **Voice in and out** — talk to it (🗣 voice-to-text) and have replies read back to you (🔊 read-aloud, Kokoro-82M, English + Hindi voices). Both run on-device; nothing leaves your machine.
 - 🧠 **It remembers** — a private, on-device memory you can browse, search, and tidy up.
 - 🔌 **Use *any* model** — point it at your own Ollama / LM Studio, or load a GGUF model straight into the tab.
 - 📱 **Phone to desktop** — installable as an app; works offline.
@@ -44,6 +45,8 @@ Pick whatever fits your hardware — all three are local, nothing leaves your de
 The default model, **LFM2.5 230M**, runs on a **from-scratch WebGPU inference engine** — every kernel (matmul, attention, RoPE, RMSNorm, the int4 dequant) is hand-written WGSL, reading the quantized weights directly with **no ONNX runtime and no llama.cpp**. At ~140 MB it downloads in seconds and decodes at *hundreds* of tokens/sec, so you're chatting almost immediately. A larger model, **Gemma 4 E2B**, runs on the same approach when you want more capability (~250 tok/s on an M4 Max). Both are WebGPU-only.
 
 These two engines are ported, largely verbatim, from the open-source [`webml-community`](https://huggingface.co/webml-community) Spaces on Hugging Face — [`gemma-4-webgpu-kernels`](https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels) and [`lfm2-webgpu-kernels`](https://huggingface.co/spaces/webml-community/lfm2-webgpu-kernels). `webml-community` is the home of [**Transformers.js**](https://github.com/huggingface/transformers.js), the in-browser ML library by **[Xenova](https://github.com/xenova) (Joshua Lochner)** at Hugging Face — the foundation this entire project is built on, and where these WebGPU-kernel engines come from. The Gemma engine also has a standalone home at [tylerstraub/gemma4-webgpu](https://github.com/tylerstraub/gemma4-webgpu). LocalMind's contribution is the integration: adapting each engine's stream into the shared chat protocol and slotting it in next to the other backends. **Full credit for Transformers.js and the WGSL kernels goes upstream.**
+
+**Read-aloud** uses [**Kokoro-82M**](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) via [`kokoro-js`](https://www.npmjs.com/package/kokoro-js), running on WebAssembly so it never competes with the chat model's GPU. Voice-to-text uses Whisper-base. Both run entirely on-device.
 
 ## Try it in 30 seconds
 

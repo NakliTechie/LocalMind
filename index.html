@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="author" content="Chirag Patnaik">
-  <meta name="version" content="2.2.0">
+  <meta name="version" content="2.3.0">
   <meta name="description" content="Private AI chatbot running Gemma entirely in your browser. No server, no API keys, no data leaves your device.">
   <title>LocalMind — Private AI Chat in Your Browser</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
@@ -455,6 +455,36 @@
       color: var(--gray-600);
       border-color: var(--gray-400);
     }
+
+    /* 🔊 Read-aloud (Voice v1.0) */
+    .speak-btn.tts-speaking {
+      color: var(--indigo-600);
+      border-color: var(--indigo-500);
+    }
+    .speak-btn:disabled { cursor: default; }
+    .tts-modal-overlay {
+      position: fixed; inset: 0; z-index: 2000;
+      background: rgba(15, 23, 42, 0.45);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .tts-modal {
+      background: var(--surface, #fff); color: var(--gray-800);
+      max-width: 380px; width: calc(100% - 40px);
+      border-radius: 12px; padding: 20px 22px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+    }
+    .tts-modal-title { font-weight: 600; font-size: 0.98rem; margin-bottom: 8px; }
+    .tts-modal-msg { font-size: 0.85rem; line-height: 1.5; color: var(--gray-600); margin-bottom: 16px; }
+    .tts-modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .tts-modal-actions button {
+      padding: 7px 14px; font-size: 0.82rem; border-radius: 6px; cursor: pointer;
+      border: 1px solid var(--gray-200); background: none; color: var(--gray-600);
+    }
+    .tts-modal-ok { background: var(--indigo-500) !important; color: #fff !important; border-color: var(--indigo-500) !important; }
+    .tts-modal-progress { margin: 6px 0 4px; }
+    .tts-modal-bar { height: 6px; background: var(--gray-200); border-radius: 4px; overflow: hidden; }
+    .tts-modal-fill { height: 100%; width: 0%; background: var(--indigo-500); transition: width 0.2s; }
+    .tts-modal-pct { font-size: 0.75rem; color: var(--gray-500); margin-top: 6px; text-align: center; }
 
     /* Collapsible tool-trace block (step labels + tool-call blocks) that
        sits above the bubble when expanded. Default collapsed; toggle
@@ -2104,7 +2134,7 @@
               <p><a href="guide/index.html" target="_blank" rel="noopener"><strong>&#128214; New here? Read the User guide &rarr;</strong></a></p>
               <p>Only your search queries touch the network (and only when you choose to). All reasoning stays on your device. Models are cached after first download &mdash; future visits load instantly.</p>
               <p><strong>Requirements:</strong> Chrome 113+ or Edge 113+ (WebGPU).</p>
-              <div class="help-note">v2.0.0 &middot; Powered by Transformers.js &middot; models from Prism ML, Alibaba, Liquid AI &amp; Google.</div>
+              <div class="help-note">v2.3.0 &middot; Powered by Transformers.js &middot; models from Prism ML, Alibaba, Liquid AI, Google &amp; Kokoro.</div>
             </div>
             <div class="help-tab-content" data-tab="models">
               <h4>Available Models</h4>
@@ -2211,6 +2241,7 @@
                 <li><strong>Math &amp; diagrams</strong> &mdash; inline <code>$\int x^2 dx$</code> and display <code>$$\\sum_{i=1}^n i$$</code> math render via KaTeX; <code>```mermaid</code> blocks render as SVG via lazy-loaded Mermaid.</li>
                 <li><strong>Artifact preview</strong> &mdash; <code>```html</code> / <code>```svg</code> / <code>```artifact</code> code blocks get a live sandboxed iframe below the code (<code>sandbox=&quot;allow-scripts&quot;</code>, no same-origin). Safe to run model-generated UI inline.</li>
                 <li><strong>Voice to text</strong> &mdash; 🗣 button left of the input records mic audio, decodes to 16 kHz mono PCM on-device, and runs Whisper-base via WebGPU to transcribe into the input. ~80 MB first-use download; nothing leaves the device.</li>
+                <li><strong>Read aloud</strong> &mdash; 🔊 button under any reply speaks it via Kokoro-82M (runs on WASM, so it never competes with the chat model). Streams sentence-by-sentence; English + Hindi voices in Settings. ~80 MB first-use download; nothing leaves the device.</li>
                 <li><strong>Python code tool</strong> (agent-capable models) &mdash; model can call <code>run_python</code> to execute Python in a sandboxed Pyodide worker. numpy / pandas / matplotlib auto-install on import. ~10 MB first-use download.</li>
                 <li><strong>Cache management</strong> &mdash; view/clear cached models in Settings</li>
                 <li><strong>Custom models</strong> &mdash; Settings &rarr; paste a Hugging Face ONNX repo id (causal LMs, runs on WebGPU) <em>or a direct GGUF URL</em> (runs via wllama, WebGPU when present / CPU otherwise). ONNX repos are probed via the HF API for the best quant; oversized models warn (but aren&rsquo;t blocked) so you can try on a capable GPU. GGUF URLs are sized via a HEAD request; point at the first shard of a split GGUF (&hellip;-00001-of-&hellip;) for files over wllama&rsquo;s 2 GB per-file / ~4 GB total limits.</li>
@@ -2432,6 +2463,36 @@
             <option value="ar">Arabic</option>
             <option value="ko">Korean</option>
           </select>
+        </div>
+        <div class="settings-divider" data-tab="general">
+          <label for="ttsVoiceSelect">Read aloud <span style="font-weight:400;color:var(--gray-500)">(🔊 on each reply &mdash; Kokoro-82M, on-device; Hindi replies auto-route to a Hindi voice)</span></label>
+          <select id="ttsVoiceSelect" class="settings-select">
+            <optgroup label="English (US) — female">
+              <option value="af_heart">Heart (default)</option>
+              <option value="af_bella">Bella</option>
+              <option value="af_nicole">Nicole</option>
+            </optgroup>
+            <optgroup label="English (US) — male">
+              <option value="am_adam">Adam</option>
+              <option value="am_michael">Michael</option>
+              <option value="am_puck">Puck</option>
+            </optgroup>
+            <optgroup label="English (UK)">
+              <option value="bf_emma">Emma (female)</option>
+              <option value="bm_george">George (male)</option>
+            </optgroup>
+            <optgroup label="Hindi">
+              <option value="hf_alpha">Alpha (female)</option>
+              <option value="hm_omega">Omega (male)</option>
+            </optgroup>
+          </select>
+          <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+            <label for="ttsSpeedRange" style="font-weight:400;white-space:nowrap">Speed <span id="ttsSpeedVal" style="color:var(--gray-500)">1.0×</span></label>
+            <input type="range" id="ttsSpeedRange" min="0.5" max="2" step="0.1" value="1" style="flex:1">
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:400;cursor:pointer">
+            <input type="checkbox" id="ttsAutoplayToggle"> Auto-play replies as they finish
+          </label>
         </div>
         <div class="settings-divider" data-tab="models">
           <label>Custom models <span style="font-weight:400;color:var(--gray-500)">(HF ONNX repo, or a direct GGUF URL)</span></label>
@@ -7521,6 +7582,75 @@ self.onmessage = async (e) => {
   }
 };
   </script>
+  <script type="text/worker" id="ttsWorkerSrc">
+// TTS worker — Kokoro-82M read-aloud via kokoro-js (CDN bundle; brings its own
+// isolated transformers build, so no clash with the chat worker's @4). Runs on
+// WASM by default so it never contends with the chat model's WebGPU. Streams
+// sentence-by-sentence: each RawAudio chunk is transferred to the main thread
+// for gapless Web-Audio playback. 100% on-device — the only network touch is
+// the one-time model fetch from Hugging Face.
+import { KokoroTTS, TextSplitterStream } from 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm';
+
+let tts = null;
+const cancelled = new Set();
+
+self.onmessage = async (e) => {
+  const d = e.data || {};
+  try {
+    if (d.type === 'load') {
+      if (!tts) {
+        tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
+          dtype: d.dtype || 'q8',
+          device: d.device || 'wasm',
+          progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
+        });
+      }
+      let voices = [];
+      try {
+        voices = (typeof tts.list_voices === 'function')
+          ? tts.list_voices()
+          : Object.keys(tts.voices || {});
+      } catch (_) {}
+      self.postMessage({ type: 'ready', voices });
+      return;
+    }
+
+    if (d.type === 'cancel') { cancelled.add(d.id); return; }
+
+    if (d.type === 'speak') {
+      if (!tts) { self.postMessage({ type: 'error', id: d.id, message: 'TTS not loaded' }); return; }
+      const id = d.id;
+      cancelled.delete(id);
+      const splitter = new TextSplitterStream();
+      const stream = tts.stream(splitter, { voice: d.voice || 'af_heart', speed: d.speed || 1 });
+      splitter.push(String(d.text || ''));
+      splitter.close();
+      let sent = 0;
+      for await (const chunk of stream) {
+        if (cancelled.has(id)) break;
+        const audio = chunk && chunk.audio;
+        const pcm = audio && (audio.audio || audio.data);
+        if (!pcm || !pcm.length) continue;
+        const sr = audio.sampling_rate || audio.sampleRate || 24000;
+        // Copy into a standalone transferable buffer (the RawAudio's own buffer
+        // may be reused by the engine, so we never transfer it directly).
+        const copy = new Float32Array(pcm.length);
+        copy.set(pcm);
+        sent++;
+        self.postMessage(
+          { type: 'chunk', id, pcm: copy, sampleRate: sr, sentence: (chunk.text || '') },
+          [copy.buffer]
+        );
+      }
+      cancelled.delete(id);
+      self.postMessage({ type: 'end', id, chunks: sent });
+      return;
+    }
+  } catch (err) {
+    self.postMessage({ type: 'error', id: d.id, message: (err && err.message) || String(err) });
+  }
+};
+  </script>
   <script type="module">
     // ── WebGPU check ────────────────────────────────────────────
     // WebGPU is required for in-browser GPU models (ONNX), 🎨 Image, 🌫️ Diffuse,
@@ -8677,7 +8807,8 @@ self.onmessage = async (e) => {
     const SYNC_DB = 'localmind_sync';
     // Non-secret settings to mirror — API keys (lm_search_key) deliberately excluded.
     const SYNC_SETTINGS_KEYS = ['lm_search_provider', 'lm_searxng_url', 'lm_planner_enabled',
-      'lm_resumable_downloads', 'lm_auto_backup', 'lm_sam_model', 'lm_voice_language', 'lm_api_enabled'];
+      'lm_resumable_downloads', 'lm_auto_backup', 'lm_sam_model', 'lm_voice_language', 'lm_api_enabled',
+      'lm_tts_voice', 'lm_tts_speed', 'lm_tts_autoplay'];
 
     function openSyncDB() {
       return new Promise((resolve, reject) => {
@@ -9099,6 +9230,34 @@ self.onmessage = async (e) => {
       try { localStorage.setItem('lm_voice_language', voiceLanguageSelect.value); } catch {}
     });
 
+    // Read-aloud (TTS) settings: voice, speed, autoplay. Defaults af_heart / 1× / off.
+    const ttsVoiceSelect = document.getElementById('ttsVoiceSelect');
+    const ttsSpeedRange = document.getElementById('ttsSpeedRange');
+    const ttsSpeedVal = document.getElementById('ttsSpeedVal');
+    const ttsAutoplayToggle = document.getElementById('ttsAutoplayToggle');
+    if (ttsVoiceSelect) {
+      ttsVoiceSelect.value = localStorage.getItem('lm_tts_voice') || 'af_heart';
+      ttsVoiceSelect.addEventListener('change', () => {
+        try { localStorage.setItem('lm_tts_voice', ttsVoiceSelect.value); } catch {}
+      });
+    }
+    if (ttsSpeedRange) {
+      const s = parseFloat(localStorage.getItem('lm_tts_speed') || '1') || 1;
+      ttsSpeedRange.value = String(s);
+      if (ttsSpeedVal) ttsSpeedVal.textContent = s.toFixed(1) + '×';
+      ttsSpeedRange.addEventListener('input', () => {
+        const v = parseFloat(ttsSpeedRange.value) || 1;
+        if (ttsSpeedVal) ttsSpeedVal.textContent = v.toFixed(1) + '×';
+        try { localStorage.setItem('lm_tts_speed', String(v)); } catch {}
+      });
+    }
+    if (ttsAutoplayToggle) {
+      ttsAutoplayToggle.checked = localStorage.getItem('lm_tts_autoplay') === '1';
+      ttsAutoplayToggle.addEventListener('change', () => {
+        try { localStorage.setItem('lm_tts_autoplay', ttsAutoplayToggle.checked ? '1' : '0'); } catch {}
+      });
+    }
+
     // ── JavaScript API: chip, toggle, activity log ──────────────
     const apiChip = document.getElementById('apiChip');
     const apiEnabledToggle = document.getElementById('apiEnabledToggle');
@@ -9504,6 +9663,20 @@ self.onmessage = async (e) => {
         }),
       }),
       ocr: ocrApi,
+      tts: Object.freeze({
+        speak(text, options) {
+          const start = Date.now();
+          return ttsSpeak(String(text == null ? '' : text), {
+            voice: options && options.voice,
+            speed: options && options.speed,
+          }).then(
+            (r) => { logApiCall({ method: 'tts.speak', outcome: (r && r.state === 'error') ? 'err' : 'ok', durationMs: Date.now() - start }); return r; },
+            (err) => { logApiCall({ method: 'tts.speak', outcome: 'err', error: err.message, durationMs: Date.now() - start }); throw err; }
+          );
+        },
+        stop() { ttsStopAll(); },
+        get ready() { return TTS.ready; },
+      }),
     });
 
     function attachLocalmindAPI() {
@@ -11879,6 +12052,7 @@ self.onmessage = async (e) => {
         } else {
           bubble.innerHTML = renderMarkdown(msg.content);
           postProcessBubble(bubble);
+          addSpeakButton(bubble, typeof msg.content === 'string' ? msg.content : '');
         }
         el.appendChild(bubble);
         chatArea.appendChild(el);
@@ -13236,6 +13410,23 @@ self.addEventListener('message', async (e) => {
       const w = new Worker(url, { type: 'module' });
       w.addEventListener('error', (e) => {
         console.error('Image worker error:', e.message);
+      });
+      return w;
+    }
+
+    // ── TTS worker factory (Kokoro-82M read-aloud) ──
+    // Reads the inert #ttsWorkerSrc block (it imports kokoro-js from CDN itself).
+    // WASM by default, so it never takes WebGPU from the chat model — the two
+    // coexist (chat on WebGPU, TTS on WASM). Only one TTS worker is ever alive.
+    function createTTSWorker() {
+      const src = document.getElementById('ttsWorkerSrc');
+      const code = src ? src.textContent : '';
+      if (!code) throw new Error('TTS worker source missing');
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url, { type: 'module' });
+      w.addEventListener('error', (e) => {
+        console.error('TTS worker error:', e.message);
       });
       return w;
     }
@@ -15407,6 +15598,281 @@ self.addEventListener('message', async (e) => {
       }
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // 🔊 Read aloud — Kokoro-82M TTS (Voice v1.0)
+    // Lazy WASM worker + sentence-streamed Web-Audio playback + a per-bubble
+    // speak button. 100% on-device; the sole network touch is the one-time
+    // ~80 MB model fetch, gated behind an explicit consent prompt. WASM by
+    // default so it never contends with the chat model's WebGPU.
+    // ═══════════════════════════════════════════════════════════════
+    const TTS = {
+      worker: null, ready: false, loading: null, voices: [],
+      ctx: null, seq: 0, sessions: new Map(), active: null, _modal: null,
+    };
+
+    function ttsGetCtx() {
+      if (!TTS.ctx) { const AC = window.AudioContext || window.webkitAudioContext; TTS.ctx = new AC(); }
+      return TTS.ctx;
+    }
+
+    // Autoplay-blocked degrade: if the context is suspended (no user gesture yet),
+    // resume it on the next interaction so queued speech starts playing then.
+    function ttsArmResumeOnGesture(ctx) {
+      if (TTS._armed) return;
+      TTS._armed = true;
+      const resume = () => {
+        try { ctx.resume().catch(() => {}); } catch (_) {}
+        TTS._armed = false;
+        window.removeEventListener('pointerdown', resume);
+        window.removeEventListener('keydown', resume);
+      };
+      window.addEventListener('pointerdown', resume, { once: true });
+      window.addEventListener('keydown', resume, { once: true });
+    }
+
+    function ttsSettings() {
+      return {
+        voice: localStorage.getItem('lm_tts_voice') || 'af_heart',
+        speed: parseFloat(localStorage.getItem('lm_tts_speed') || '1') || 1,
+        autoplay: localStorage.getItem('lm_tts_autoplay') === '1',
+      };
+    }
+
+    // Language routing. Kokoro covers many languages; LocalMind's v1.0 read-aloud
+    // ships English + Hindi and DISABLES the button for scripts it doesn't voice
+    // (rather than mispronounce). Returns a voice id, or null = unsupported.
+    function ttsVoiceForText(text, settingVoice) {
+      if (/[ऀ-ॿ]/.test(text)) return 'hf_alpha';   // Devanagari → Hindi
+      // Scripts v1.0 doesn't voice (JP kana, CJK, Hangul, Arabic, Cyrillic, Hebrew) → disable.
+      if (/[぀-ヿ㐀-䶿一-鿿가-힯؀-ۿЀ-ӿ֐-׿]/.test(text)) return null;
+      return settingVoice || 'af_heart';                     // Latin → selected English voice
+    }
+
+    function ttsModelCached() {
+      return caches.open('transformers-cache')
+        .then(c => c.keys())
+        .then(keys => keys.some(r => /Kokoro-82M/i.test(r.url)))
+        .catch(() => false);
+    }
+
+    // Only borrow WebGPU when the chat model is NOT holding it (endpoint backend →
+    // local GPU free). Detect, never ask. Otherwise WASM keeps the two apart.
+    function ttsCanUseWebGPU() {
+      try {
+        const m = (typeof MODELS !== 'undefined' && activeModelKey) ? MODELS[activeModelKey] : null;
+        return !!navigator.gpu && m && m.backend === 'endpoint';
+      } catch (_) { return false; }
+    }
+
+    // Lazy-create + load the worker. Prompts for consent before the first
+    // download (never surprise-fetches). Resolves when the worker is ready.
+    function ttsEnsureWorker() {
+      if (TTS.ready) return Promise.resolve();
+      if (TTS.loading) return TTS.loading;
+      TTS.loading = (async () => {
+        const cached = await ttsModelCached();
+        if (!cached) {
+          const ok = await ttsConfirmDownload();
+          if (!ok) { TTS.loading = null; throw new Error('cancelled'); }
+        }
+        TTS.worker = createTTSWorker();
+        TTS.worker.addEventListener('message', ttsOnMessage);
+        await new Promise((resolve, reject) => {
+          TTS._resolveReady = resolve; TTS._rejectReady = reject;
+          const device = ttsCanUseWebGPU() ? 'webgpu' : 'wasm';
+          const dtype = device === 'webgpu' ? 'fp32' : 'q8';
+          TTS.worker.postMessage({ type: 'load', device, dtype });
+        });
+        TTS.ready = true; TTS.loading = null;
+      })();
+      return TTS.loading;
+    }
+
+    function ttsOnMessage(e) {
+      const d = e.data || {};
+      if (d.type === 'progress') { ttsProgress(d.data); return; }
+      if (d.type === 'ready') {
+        TTS.voices = d.voices || [];
+        ttsHideModal();
+        if (TTS._resolveReady) { const r = TTS._resolveReady; TTS._resolveReady = null; r(); }
+        return;
+      }
+      const sess = d.id != null ? TTS.sessions.get(d.id) : null;
+      if (d.type === 'chunk') { if (sess) sess.onChunk(d.pcm, d.sampleRate); return; }
+      if (d.type === 'end')   { if (sess) sess.onEnd(); return; }
+      if (d.type === 'error') {
+        if (sess) sess.onError(d.message);
+        else if (TTS._rejectReady) { const r = TTS._rejectReady; TTS._rejectReady = null; TTS.loading = null; r(new Error(d.message)); }
+        return;
+      }
+    }
+
+    // Speak `text`. Resolves when playback finishes (or is stopped). onState
+    // reports 'loading' | 'speaking' | 'done' | 'error'. Cancellable via the
+    // returned session's stop(), tracked on TTS.active.
+    async function ttsSpeak(text, opts) {
+      opts = opts || {};
+      const st = ttsSettings();
+      const voice = opts.voice || ttsVoiceForText(text, st.voice);
+      if (!voice) throw new Error('unsupported-language');
+      const speed = opts.speed || st.speed;
+      if (opts.onState) opts.onState('loading');
+      await ttsEnsureWorker();
+
+      const ctx = ttsGetCtx();
+      // Never `await` resume(): when autoplay is blocked it stays pending until a
+      // user gesture (it doesn't reject), which would deadlock this call. Fire it
+      // and, if still suspended, arm a one-shot gesture to resume — queued audio
+      // then plays on the next interaction (graceful autoplay-blocked degrade).
+      try { if (ctx.state === 'suspended') { ctx.resume().catch(() => {}); ttsArmResumeOnGesture(ctx); } } catch (_) {}
+
+      const id = ++TTS.seq;
+      let nextTime = 0, streamEnded = false, pending = 0, sawAudio = false;
+      const sources = [];
+      return await new Promise((resolve) => {
+        const finish = (state, msg) => {
+          if (session._done) return; session._done = true;
+          TTS.sessions.delete(id);
+          if (TTS.active && TTS.active.id === id) TTS.active = null;
+          if (opts.onState) opts.onState(state, msg);
+          resolve({ state, msg });
+        };
+        const session = {
+          onChunk(pcm, sr) {
+            try {
+              sawAudio = true;
+              const buf = ctx.createBuffer(1, pcm.length, sr);
+              buf.copyToChannel(pcm, 0);
+              const node = ctx.createBufferSource();
+              node.buffer = buf; node.connect(ctx.destination);
+              const startAt = Math.max(ctx.currentTime + 0.02, nextTime);
+              node.start(startAt);
+              nextTime = startAt + buf.duration;
+              pending++;
+              sources.push(node);
+              if (opts.onState) opts.onState('speaking');
+              node.onended = () => { pending--; if (streamEnded && pending <= 0) finish('done'); };
+            } catch (_) {}
+          },
+          onEnd() { streamEnded = true; if (pending <= 0) finish(sawAudio ? 'done' : 'error', sawAudio ? undefined : 'no audio produced'); },
+          onError(msg) { sources.forEach(s => { try { s.stop(); } catch (_) {} }); finish('error', msg); },
+          stop() {
+            try { TTS.worker.postMessage({ type: 'cancel', id }); } catch (_) {}
+            sources.forEach(s => { try { s.stop(); } catch (_) {} });
+            finish('done');
+          },
+        };
+        TTS.sessions.set(id, session);
+        TTS.active = { id, button: opts.button || null, session };
+        TTS.worker.postMessage({ type: 'speak', id, text, voice, speed });
+      });
+    }
+
+    function ttsStopAll() {
+      TTS.sessions.forEach(s => { try { s.stop && s.stop(); } catch (_) {} });
+      TTS.sessions.clear();
+      TTS.active = null;
+    }
+
+    // ── Consent + download-progress modal (shown only when uncached) ──
+    function ttsConfirmDownload() {
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'tts-modal-overlay';
+        overlay.innerHTML =
+          '<div class="tts-modal">' +
+            '<div class="tts-modal-title">🔊 Download voice model?</div>' +
+            '<div class="tts-modal-msg">Read-aloud uses <b>Kokoro-82M</b> (~80&nbsp;MB), downloaded once and cached for offline use. It runs entirely on your device — nothing is sent anywhere.</div>' +
+            '<div class="tts-modal-progress" hidden><div class="tts-modal-bar"><div class="tts-modal-fill"></div></div><div class="tts-modal-pct">Preparing…</div></div>' +
+            '<div class="tts-modal-actions">' +
+              '<button class="tts-modal-cancel">Cancel</button>' +
+              '<button class="tts-modal-ok">Download &amp; play</button>' +
+            '</div>' +
+          '</div>';
+        document.body.appendChild(overlay);
+        TTS._modal = overlay;
+        const cancel = () => { ttsHideModal(); resolve(false); };
+        overlay.querySelector('.tts-modal-cancel').addEventListener('click', cancel);
+        overlay.querySelector('.tts-modal-ok').addEventListener('click', () => {
+          overlay.querySelector('.tts-modal-actions').style.display = 'none';
+          overlay.querySelector('.tts-modal-msg').style.display = 'none';
+          overlay.querySelector('.tts-modal-progress').hidden = false;
+          resolve(true);   // proceed; modal stays open as a progress view until ready
+        });
+      });
+    }
+
+    function ttsProgress(p) {
+      const modal = TTS._modal;
+      if (!modal || !p) return;
+      const fill = modal.querySelector('.tts-modal-fill');
+      const pct = modal.querySelector('.tts-modal-pct');
+      if (p.status === 'progress' && p.total) {
+        const v = Math.round((p.loaded / p.total) * 100);
+        if (fill) fill.style.width = v + '%';
+        if (pct) pct.textContent = (p.file ? String(p.file).split('/').pop() + ' — ' : '') + v + '%';
+      } else if (p.status === 'done') {
+        if (fill) fill.style.width = '100%';
+      } else if (pct && p.status) {
+        pct.textContent = p.status + '…';
+      }
+    }
+
+    function ttsHideModal() {
+      if (TTS._modal) { try { TTS._modal.remove(); } catch (_) {} TTS._modal = null; }
+    }
+
+    // ── Per-bubble speak button ──
+    function setSpeakBtn(btn, state) {
+      btn._ttsState = state;
+      btn.classList.toggle('tts-speaking', state === 'speaking');
+      if (state === 'loading') { btn.innerHTML = '⌛'; btn.title = 'Loading voice…'; }
+      else if (state === 'speaking') { btn.innerHTML = '⏹'; btn.title = 'Stop'; }
+      else { btn.innerHTML = '🔊'; btn.title = 'Read aloud'; }
+    }
+
+    function speakBubble(btn, text) {
+      // Toggle: clicking the active/loading button stops it.
+      if (btn._ttsState === 'speaking' || btn._ttsState === 'loading') {
+        if (TTS.active && TTS.active.session) { try { TTS.active.session.stop(); } catch (_) {} }
+        setSpeakBtn(btn, 'idle');
+        return;
+      }
+      // Stop any other speak in flight, and reset its button.
+      if (TTS.active && TTS.active.button && TTS.active.button !== btn) setSpeakBtn(TTS.active.button, 'idle');
+      ttsStopAll();
+      ttsSpeak(text, {
+        button: btn,
+        onState: (state, msg) => {
+          if (state === 'loading') setSpeakBtn(btn, 'loading');
+          else if (state === 'speaking') setSpeakBtn(btn, 'speaking');
+          else { setSpeakBtn(btn, 'idle'); if (state === 'error' && msg) showToast('Read-aloud failed: ' + msg); }
+        },
+      }).catch((e) => {
+        setSpeakBtn(btn, 'idle');
+        if (e && e.message && e.message !== 'cancelled') showToast('Read-aloud unavailable: ' + e.message);
+      });
+    }
+
+    // Add a 🔊 button to an assistant bubble. Disabled (with a tooltip) for
+    // languages v1.0 doesn't voice, so it never mispronounces.
+    function addSpeakButton(bubble, text) {
+      if (!bubble || !text || !text.trim()) return;
+      const btn = document.createElement('button');
+      btn.className = 'save-md-btn speak-btn';
+      btn.style.marginLeft = '6px';
+      if (ttsVoiceForText(text, 'af_heart') === null) {
+        btn.innerHTML = '🔊';
+        btn.disabled = true;
+        btn.style.opacity = '0.4';
+        btn.title = 'Read-aloud isn’t available for this language yet';
+      } else {
+        setSpeakBtn(btn, 'idle');
+        btn.addEventListener('click', () => speakBubble(btn, text));
+      }
+      bubble.appendChild(btn);
+    }
+
     function finishGeneration(response, sources, usedTools) {
       generating = false;
       if (response) {
@@ -15487,6 +15953,13 @@ self.addEventListener('message', async (e) => {
             traceBtn.innerHTML = label();
           });
           bubble.appendChild(traceBtn);
+        }
+        // 🔊 Read-aloud button (Voice v1.0)
+        addSpeakButton(bubble, response);
+        // Auto-play the reply if the user opted in (and the language is voiced).
+        if (response && response.trim() && ttsSettings().autoplay && ttsVoiceForText(response, 'af_heart')) {
+          const sb = bubble.querySelector('.speak-btn:not(:disabled)');
+          if (sb) speakBubble(sb, response);
         }
       }
       currentAssistantEl = null;
