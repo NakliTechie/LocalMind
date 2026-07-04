@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="author" content="Chirag Patnaik">
-  <meta name="version" content="2.5.0">
+  <meta name="version" content="2.6.0">
   <meta name="description" content="Private AI chatbot running Gemma entirely in your browser. No server, no API keys, no data leaves your device.">
   <title>LocalMind — Private AI Chat in Your Browser</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
@@ -2156,7 +2156,7 @@
               <p><a href="guide/index.html" target="_blank" rel="noopener"><strong>&#128214; New here? Read the User guide &rarr;</strong></a></p>
               <p>Only your search queries touch the network (and only when you choose to). All reasoning stays on your device. Models are cached after first download &mdash; future visits load instantly.</p>
               <p><strong>Requirements:</strong> Chrome 113+ or Edge 113+ (WebGPU).</p>
-              <div class="help-note">v2.5.0 &middot; Powered by Transformers.js &middot; models from Prism ML, Alibaba, Liquid AI, Google, Kokoro &amp; Moonshine &middot; multilingual document search via e5.</div>
+              <div class="help-note">v2.6.0 &middot; Powered by Transformers.js &middot; models from Prism ML, Alibaba, Liquid AI, Google, Kokoro &amp; Moonshine &middot; multilingual document search via e5 &middot; auto-escalation to your local endpoint (opt-in).</div>
             </div>
             <div class="help-tab-content" data-tab="models">
               <h4>Available Models</h4>
@@ -2417,6 +2417,10 @@
         <label class="toggle-row" id="tokenSaverRow">
           <input type="checkbox" id="tokenSaverToggle" checked>
           Token saver <span style="font-weight:400;color:var(--gray-500)">(concise replies + compress large tool / search / page output &mdash; recommended for small models)</span>
+        </label>
+        <label class="toggle-row" id="autoEscalationRow">
+          <input type="checkbox" id="autoEscalationToggle">
+          Auto-escalate hard turns <span style="font-weight:400;color:var(--gray-500)">(when the local model fumbles a turn &mdash; malformed tool call or empty answer &mdash; re-run just that turn on your <b>connected local endpoint</b>, then drop back. Needs an endpoint; every escalation is logged.)</span>
         </label>
         </div>
         <div class="settings-divider" data-tab="data">
@@ -8882,7 +8886,7 @@ self.onmessage = async (e) => {
     // Non-secret settings to mirror — API keys (lm_search_key) deliberately excluded.
     const SYNC_SETTINGS_KEYS = ['lm_search_provider', 'lm_searxng_url', 'lm_planner_enabled',
       'lm_resumable_downloads', 'lm_auto_backup', 'lm_sam_model', 'lm_voice_language', 'lm_api_enabled',
-      'lm_tts_voice', 'lm_tts_speed', 'lm_tts_autoplay'];
+      'lm_tts_voice', 'lm_tts_speed', 'lm_tts_autoplay', 'lm_auto_escalation'];
 
     function openSyncDB() {
       return new Promise((resolve, reject) => {
@@ -9243,6 +9247,13 @@ self.onmessage = async (e) => {
       plannerEnabled = plannerToggle.checked;
       try { localStorage.setItem('lm_planner_enabled', plannerEnabled ? '1' : '0'); } catch {}
     });
+    const autoEscalationToggle = document.getElementById('autoEscalationToggle');
+    if (autoEscalationToggle) {
+      autoEscalationToggle.checked = (localStorage.getItem('lm_auto_escalation') === '1');
+      autoEscalationToggle.addEventListener('change', () => {
+        try { localStorage.setItem('lm_auto_escalation', autoEscalationToggle.checked ? '1' : '0'); } catch {}
+      });
+    }
     const cameraOverlay = document.getElementById('cameraOverlay');
     const cameraPreview = document.getElementById('cameraPreview');
     const camCaptureBtn = document.getElementById('camCaptureBtn');
@@ -15366,6 +15377,55 @@ self.addEventListener('message', async (e) => {
       };
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // Auto-escalation router (Tier 5) — Edge-First as a runtime. The small
+    // local model runs every agent turn; when a turn fails a cheap confidence
+    // gate, THAT turn is re-run on the configured local endpoint (a bigger
+    // model on the user's own server), then control drops straight back to
+    // local. Off by default; every escalation is logged + auditable.
+    // Endpoint-only v1 — the only cheap escalation target that exists (swapping
+    // the resident WebGPU model is too costly to automate, and no cloud/relay
+    // backend exists). See plan/escalation-router-design.md.
+    // ═══════════════════════════════════════════════════════════════
+    let escalatedThisMessage = null;   // endpoint label if the current reply was escalated
+
+    function escalationEnabled() {
+      try { return localStorage.getItem('lm_auto_escalation') === '1'; } catch { return false; }
+    }
+
+    // Escalation target: a configured local-endpoint model, usable only when the
+    // active model is NOT already the endpoint. Returns { base, model, label } or
+    // null (→ router stays inert + honestly logged, never an automatic model swap).
+    function escalationTarget() {
+      try {
+        if (LocalMind.runtime.isEndpoint && LocalMind.runtime.isEndpoint()) return null;
+        for (const k of Object.keys(MODELS)) {
+          const m = MODELS[k];
+          if (m && m.backend === 'endpoint' && m.endpointBase && m.endpointModel) {
+            return { base: m.endpointBase, model: m.endpointModel, label: m.label || m.endpointModel };
+          }
+        }
+      } catch {}
+      return null;
+    }
+
+    // Cheap, deterministic confidence gate on a Tier-0 turn — no extra model
+    // call. Escalate on: a turn error; an attempted-but-unparseable tool call
+    // (malformed JSON); or truly empty output. Returns { escalate, reason }.
+    function escalationGate(turn, hasTools) {
+      if (!turn) return { escalate: false };
+      if (turn.error) return { escalate: true, reason: 'error' };
+      const text = turn.fullText || '';
+      if (hasTools && (!turn.toolCalls || turn.toolCalls.length === 0) &&
+          /<tool_call|tool_call_start|"name"\s*:\s*"/.test(text)) {
+        return { escalate: true, reason: 'tool_parse_fail' };
+      }
+      if ((!turn.toolCalls || turn.toolCalls.length === 0) && text.trim().length === 0) {
+        return { escalate: true, reason: 'empty' };
+      }
+      return { escalate: false };
+    }
+
     async function sendMessage() {
       const text = chatInput.value.trim();
       if ((!text && attachments.length === 0) || !modelReady || generating) return;
@@ -15580,6 +15640,7 @@ self.addEventListener('message', async (e) => {
       // each tool through TOOL_REGISTRY, and feeds results back as
       // tool-role messages on the next iteration.
       const MAX_TOOL_ITERATIONS = 3;
+      escalatedThisMessage = null;
       let loopMessages = [...chatMessages];
       const allSources = [...searchSources];
       let toolsUsedInLoop = false;
@@ -15640,11 +15701,47 @@ self.addEventListener('message', async (e) => {
         return { fullText, toolCalls, doneReason, error };
       }
 
+      // Run one turn on the resident local model, then escalate that turn to the
+      // endpoint if it fails the confidence gate (router; opt-in, off by default).
+      async function runTurnMaybeEscalate(turnMessages, turnThinking) {
+        const turn = await runOneAgentTurn(turnMessages, turnThinking);
+        if (!escalationEnabled() || turn._escalated) return turn;
+        const gate = escalationGate(turn, tools && tools.length > 0);
+        if (!gate.escalate) return turn;
+        const ep = escalationTarget();
+        if (!ep) {
+          // Router on, but nothing to escalate to — log it; never swap the local model.
+          logApiCall({ method: 'escalate', outcome: 'err', reason: gate.reason, error: 'no endpoint configured' });
+          return turn;
+        }
+        const fromLabel = (MODELS[activeModelKey] && MODELS[activeModelKey].label) || activeModelKey;
+        logApiCall({ method: 'escalate', outcome: 'ok', reason: gate.reason, from: fromLabel, to: ep.label });
+        // Wipe the failed Tier-0 output from the visible bubble before re-running.
+        currentAssistantText = '';
+        if (currentAssistantEl) updateAssistantBubble(currentAssistantEl.bubble, '');
+        // Route THIS turn to the endpoint by flipping the runtime discriminator —
+        // WITHOUT terminating the resident worker, so we drop straight back after.
+        const rt = LocalMind.runtime;
+        const prevBackend = rt._backend, prevEndpoint = rt._endpoint;
+        rt._backend = 'endpoint';
+        rt._endpoint = { base: ep.base, model: ep.model };
+        let escTurn;
+        try {
+          escTurn = await runOneAgentTurn(turnMessages, false);
+        } finally {
+          rt._backend = prevBackend;
+          rt._endpoint = prevEndpoint;
+        }
+        escTurn._escalated = true;
+        escalatedThisMessage = ep.label;
+        return escTurn;
+      }
+
       for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
         // Disable thinking on follow-up iterations to avoid tool
         // calls inside thinking blocks.
         const iterThinking = iter === 0 ? enableThinking : false;
-        const turn = await runOneAgentTurn(loopMessages, iterThinking);
+        const turn = await runTurnMaybeEscalate(loopMessages, iterThinking);
 
         // After the first iteration, scrub data from media blocks so
         // subsequent passes carry the chat-template position tokens
@@ -16277,6 +16374,16 @@ self.addEventListener('message', async (e) => {
           badge.innerHTML = `<span class="msg-source-badge on-device">On-device</span>`;
         }
         bubble.insertBefore(badge, bubble.firstChild);
+        // Auto-escalation: mark replies that were escalated to the endpoint.
+        if (escalatedThisMessage) {
+          const escBadge = document.createElement('span');
+          escBadge.className = 'msg-source-badge';
+          escBadge.style.cssText = 'margin-left:6px;background:rgba(180,120,20,0.12);color:#8a5a00';
+          escBadge.title = 'This turn was escalated to your local endpoint (' + escalatedThisMessage + ')';
+          escBadge.textContent = '↑ ' + escalatedThisMessage;
+          badge.appendChild(escBadge);
+          escalatedThisMessage = null;
+        }
         // Save as Markdown button
         if (response && response.length > 20) {
           const saveBtn = document.createElement('button');
