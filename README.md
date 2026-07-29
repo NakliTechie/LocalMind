@@ -46,6 +46,12 @@ The default model, **LFM2.5 230M**, runs on a **from-scratch WebGPU inference en
 
 These two engines are ported, largely verbatim, from the open-source [`webml-community`](https://huggingface.co/webml-community) Spaces on Hugging Face — [`gemma-4-webgpu-kernels`](https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels) and [`lfm2-webgpu-kernels`](https://huggingface.co/spaces/webml-community/lfm2-webgpu-kernels). `webml-community` is the home of [**Transformers.js**](https://github.com/huggingface/transformers.js), the in-browser ML library by **[Xenova](https://github.com/xenova) (Joshua Lochner)** at Hugging Face — the foundation this entire project is built on, and where these WebGPU-kernel engines come from. The Gemma engine also has a standalone home at [tylerstraub/gemma4-webgpu](https://github.com/tylerstraub/gemma4-webgpu). LocalMind's contribution is the integration: adapting each engine's stream into the shared chat protocol and slotting it in next to the other backends. **Full credit for Transformers.js and the WGSL kernels goes upstream.**
 
+The LFM2 engine is exposed through the DOM-free
+[`inference-worker.js`](./inference-worker.js) boundary used by LocalMind
+itself. NakliOS vendors that same tested worker and engine for its shared
+`naklios.ai` service; protocol details and isolation responsibilities are in
+[`INFERENCE-PROTOCOL.md`](./INFERENCE-PROTOCOL.md).
+
 **Read-aloud** uses [**Kokoro-82M**](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) via [`kokoro-js`](https://www.npmjs.com/package/kokoro-js); **Voice mode** transcribes with [**Moonshine**](https://huggingface.co/onnx-community/moonshine-base-ONNX) (English) and keeps Whisper-base as the multilingual fallback. All of it runs on WebAssembly so it never competes with the chat model's GPU — and entirely on-device.
 
 ## Try it in 30 seconds

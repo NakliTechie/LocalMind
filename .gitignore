@@ -1,6 +1,8 @@
 *
 !index.html
 !lfm2_5.js
+!inference-worker.js
+!INFERENCE-PROTOCOL.md
 !gemma-4-e2b.js
 !README.md
 !ROADMAP.md
@@ -22,6 +24,8 @@
 !demo/capture-gif.py
 !demo/capture-gif-tour.py
 !demo/make-montage.py
+!scripts/
+!scripts/**
 
 # wrangler files
 .wrangler

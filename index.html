@@ -7388,123 +7388,6 @@ self.onmessage = async (e) => {
 };
   </script>
 
-  <!-- LFM2.5 custom-WGSL WebGPU engine worker (from webml-community/lfm2-webgpu-kernels).
-       Unlike wllama (generic llama.cpp/WASM) and the ONNX path (onnxruntime-web), this is
-       a from-scratch WebGPU inference engine: every kernel — RoPE, RMSNorm, Q4_0/Q8_0
-       dequant, the LFM2 short-conv depthwise+gating, GQA attention, the GEMVs — is
-       hand-written WGSL, reading a Q4_0 GGUF directly. The engine (lfm2_5.js, exporting
-       `Lfm2Mobile`) is imported by absolute URL injected by createLfm2WebgpuWorker(). It
-       runs its OWN ranged GGUF download + CacheStorage cache and needs only WebGPU (no
-       SharedArrayBuffer / COOP-COEP). It speaks the shared chat worker protocol below. -->
-  <script type="text/worker" id="lfm2WebgpuWorkerSrc">
-// The factory replaces __LFM2_ENGINE_URL__ with the engine's absolute same-origin URL.
-const ENGINE_URL = '__LFM2_ENGINE_URL__';
-
-let Lfm2Mobile = null;
-let model = null;
-let abortController = null;
-let stopFlag = false;
-let lastHistoryLen = 0; // tracks conversation length to reset KV state on a fresh chat
-
-const GGUF_FILE = 'LFM2.5-230M-Q4_0.gguf';
-const post = (m) => self.postMessage(m);
-
-self.onmessage = async (e) => {
-  const d = e.data || {};
-  try {
-    if (d.type === 'load') {
-      if (!Lfm2Mobile) ({ Lfm2Mobile } = await import(ENGINE_URL));
-      post({ type: 'progress', data: { status: 'initiate', file: GGUF_FILE } });
-      model = await Lfm2Mobile.load(d.modelId, {
-        onProgress: (ev) => {
-          if (!ev) return;
-          if (ev.status === 'weights') {
-            // Engine emits byte counts during download and a fraction over the
-            // GPU-upload tail. Drive the shared 'progress_total' bar off whichever
-            // is present (loaded/total preferred; otherwise synthesise from fraction).
-            const loaded = typeof ev.loaded === 'number' ? ev.loaded : null;
-            const total = typeof ev.total === 'number' ? ev.total : null;
-            if (loaded != null && total != null && total > 0) {
-              post({ type: 'progress', data: { status: 'progress_total', file: GGUF_FILE, loaded, total } });
-            } else if (typeof ev.fraction === 'number') {
-              post({ type: 'progress', data: { status: 'progress_total', file: GGUF_FILE, loaded: Math.round(ev.fraction * 1000), total: 1000 } });
-            }
-          } else if (ev.status === 'tokenizer') {
-            post({ type: 'progress', data: { status: 'loading', file: 'tokenizer' } });
-          } else if (ev.status === 'init') {
-            post({ type: 'progress', data: { status: 'initiate', file: 'WebGPU device' } });
-          }
-        },
-      });
-      lastHistoryLen = 0;
-      // Compile every decode pipeline + ramp the GPU clock so the first reply is
-      // at steady-state speed. Best-effort — a warmup failure shouldn't block load.
-      try { if (typeof model.warmup === 'function') await model.warmup(); } catch (_) {}
-      post({ type: 'ready', backend: 'webgpu' });
-    } else if (d.type === 'generate') {
-      if (!model) { post({ type: 'error', message: 'LFM2 WebGPU model not loaded' }); return; }
-      stopFlag = false;
-      const cfg = d.generationConfig || {};
-      // The engine applies LFM2's ChatML template internally; it expects
-      // {role, content} with text content. Strip multimodal blocks to text and
-      // coerce any non-standard role (e.g. tool) to 'user' so the template holds.
-      const msgs = (d.messages || []).map((m) => {
-        let role = m.role;
-        if (role !== 'system' && role !== 'user' && role !== 'assistant') role = 'user';
-        const content = typeof m.content === 'string' ? m.content
-          : Array.isArray(m.content) ? m.content.filter((b) => b && b.type === 'text').map((b) => b.text).join('\n')
-          : String(m.content == null ? '' : m.content);
-        return { role, content };
-      });
-      // The engine keeps internal KV/conversation state across generate() calls
-      // (LocalMind always sends the full history, which the engine prefix-caches).
-      // On a fresh conversation (first turn, or the history shrank — e.g. New Chat)
-      // clear that state so a stale prefix can't bleed in. Matches the source
-      // Space, which calls reset() on Clear.
-      const turnCount = msgs.filter((m) => m.role !== 'system').length;
-      if ((turnCount <= 1 || msgs.length < lastHistoryLen) && typeof model.reset === 'function') {
-        try { model.reset(); } catch (_) {}
-      }
-      lastHistoryLen = msgs.length;
-      abortController = new AbortController();
-      let prev = '';
-      try {
-        // generate() yields { text } as CUMULATIVE full text; the shared protocol
-        // streams per-token DELTAS, so diff against what we've already sent.
-        const stream = model.generate(msgs, {
-          maxNewTokens: cfg.max_new_tokens || cfg.max_tokens || 1024,
-          signal: abortController.signal,
-        });
-        for await (const out of stream) {
-          if (stopFlag) break;
-          const full = out && typeof out.text === 'string' ? out.text : '';
-          if (full.length > prev.length) {
-            post({ type: 'token', token: full.slice(prev.length) });
-            prev = full;
-          }
-        }
-      } catch (err) {
-        const s = String((err && err.message) || err);
-        if (!(stopFlag || s.toLowerCase().includes('abort'))) throw err;
-      }
-      post({ type: 'complete' });
-    } else if (d.type === 'stop') {
-      stopFlag = true;
-      if (abortController) { try { abortController.abort(); } catch (_) {} }
-    } else if (d.type === 'unload') {
-      stopFlag = true;
-      if (abortController) { try { abortController.abort(); } catch (_) {} }
-      try { if (model && typeof model.reset === 'function') model.reset(); } catch (_) {}
-      try { if (model && typeof model.dispose === 'function') model.dispose(); } catch (_) {}
-      model = null;
-      lastHistoryLen = 0;
-    }
-  } catch (err) {
-    post({ type: 'error', message: (err && err.message) || String(err) });
-  }
-};
-  </script>
-
   <!-- Gemma 4 E2B (QAT mobile) custom-WGSL WebGPU engine worker (from
        webml-community/gemma-4-webgpu-kernels). Sibling of the LFM2 engine above:
        a from-scratch WebGPU engine (gemma-4-e2b.js, exporting `Gemma4Mobile`) whose
@@ -13623,22 +13506,11 @@ self.addEventListener('message', async (e) => {
     }
 
     // ── LFM2 WebGPU-kernels worker factory (custom-WGSL LFM2.5 engine) ──
-    // Reads the inert #lfm2WebgpuWorkerSrc block, which dynamically imports the
-    // vendored Lfm2Mobile engine (lfm2_5.js — every kernel hand-written WGSL,
-    // from webml-community/lfm2-webgpu-kernels). A blob worker can't resolve a
-    // relative module specifier (it'd resolve against blob:…), so we inject the
-    // engine's absolute same-origin URL before building the blob. Speaks the
-    // shared chat worker protocol, so it slots into the runtime adapter +
-    // attachWorkerHandlers() with no special path.
+    // The DOM-free worker is also the versioned vendoring boundary consumed by
+    // NakliOS. Keeping LocalMind on the same entry point prevents runtime drift.
     function createLfm2WebgpuWorker() {
-      const src = document.getElementById('lfm2WebgpuWorkerSrc');
-      let code = src ? src.textContent : '';
-      if (!code) throw new Error('LFM2 WebGPU worker source missing');
-      const engineUrl = new URL('lfm2_5.js', document.baseURI).href;
-      code = code.replaceAll('__LFM2_ENGINE_URL__', engineUrl);
-      const blob = new Blob([code], { type: 'application/javascript' });
-      const url = URL.createObjectURL(blob);
-      const w = new Worker(url, { type: 'module' });
+      const url = new URL('inference-worker.js', document.baseURI);
+      const w = new Worker(url, { type: 'module', name: 'localmind-inference-v1' });
       w.addEventListener('error', (e) => {
         console.error('LFM2 WebGPU worker error:', e.message);
       });
