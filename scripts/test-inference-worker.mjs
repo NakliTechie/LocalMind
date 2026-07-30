@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { extractImageWorkerSource } from './extract-image-worker.mjs';
 
 const source = await readFile(new URL('../inference-worker.js', import.meta.url), 'utf8');
 const onnxSource = await readFile(new URL('../onnx-inference-worker.js', import.meta.url), 'utf8');
+const imageSource = await readFile(new URL('../image-inference-worker.js', import.meta.url), 'utf8');
+const indexSource = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const protocol = await readFile(new URL('../INFERENCE-PROTOCOL.md', import.meta.url), 'utf8');
 await import(new URL('../host-model-catalog.js', import.meta.url));
 const catalog = globalThis.LocalMindHostCatalog;
@@ -28,5 +31,20 @@ assert.deepEqual(
   ['lfm2-230m-webgpu', 'gemma4-e2b', 'gemma4-e4b', 'qwen3-4b'],
 );
 assert.ok(catalog.models.every((model) => model.worker));
+assert.equal(catalog.defaultImageKey, 'flux2-klein-4b-webgpu');
+assert.deepEqual(
+  catalog.imageModels.map((model) => model.key),
+  ['flux2-klein-4b-webgpu'],
+);
+assert.equal(
+  imageSource,
+  extractImageWorkerSource(indexSource),
+  'the published image worker must be regenerated from LocalMind index.html',
+);
+assert.match(imageSource, /localmind\.image\.v1/);
+assert.match(imageSource, /prism-ml\/bonsai-image-ternary-4B-mlx-2bit/);
+assert.match(imageSource, /type: 'progress'/);
+assert.match(imageSource, /type: 'image'/);
+assert.match(protocol, /Image protocol/);
 
 console.log('LocalMind inference workers and host catalog: ok');

@@ -90,15 +90,50 @@ const LOCALMIND_HOST_MODELS = Object.freeze([
   }),
 ]);
 
+const LOCALMIND_HOST_IMAGE_MODELS = Object.freeze([
+  Object.freeze({
+    key: 'flux2-klein-4b-webgpu',
+    id: 'prism-ml/bonsai-image-ternary-4B-mlx-2bit',
+    label: 'Bonsai Image · FLUX.2-Klein 4B',
+    family: 'FLUX.2-Klein',
+    runtime: 'custom-webgpu-image',
+    worker: 'image-inference-worker.js',
+    size: '~3.9 GB',
+    sizeBytes: 3_880_000_000,
+    outputFormat: 'png',
+    defaultSize: '512x512',
+    defaultSteps: 4,
+    supportedSizes: Object.freeze([
+      '512x512',
+      '768x768',
+      '1024x1024',
+      '1024x768',
+      '768x1024',
+    ]),
+    description:
+      'Private FLUX.2-Klein image generation in this browser. ' +
+      'The model is cached after its first download.',
+  }),
+]);
+
 const LOCALMIND_DEFAULT_MODEL_KEY = 'lfm2-230m-webgpu';
+const LOCALMIND_DEFAULT_IMAGE_MODEL_KEY = 'flux2-klein-4b-webgpu';
 
 function getLocalMindHostModel(key) {
   return LOCALMIND_HOST_MODELS.find((model) => model.key === key) ||
     LOCALMIND_HOST_MODELS[0];
 }
 
+function getLocalMindHostImageModel(key) {
+  return LOCALMIND_HOST_IMAGE_MODELS.find((model) => model.key === key) ||
+    LOCALMIND_HOST_IMAGE_MODELS[0];
+}
+
 globalThis.LocalMindHostCatalog = Object.freeze({
   models: LOCALMIND_HOST_MODELS,
   defaultKey: LOCALMIND_DEFAULT_MODEL_KEY,
   get: getLocalMindHostModel,
+  imageModels: LOCALMIND_HOST_IMAGE_MODELS,
+  defaultImageKey: LOCALMIND_DEFAULT_IMAGE_MODEL_KEY,
+  getImage: getLocalMindHostImageModel,
 });

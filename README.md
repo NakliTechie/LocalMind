@@ -51,10 +51,15 @@ The LFM2 engine is exposed through the DOM-free
 itself. Hosts can also use the conservative
 [`host-model-catalog.js`](./host-model-catalog.js) and
 [`onnx-inference-worker.js`](./onnx-inference-worker.js) for the supported
-Gemma 4 and Qwen WebGPU paths. NakliOS vendors these tested artifacts for its
-shared `naklios.ai` broker; model selection, cloud/local endpoint credentials,
-consent, and app isolation remain host responsibilities. The worker protocol is
-documented in [`INFERENCE-PROTOCOL.md`](./INFERENCE-PROTOCOL.md).
+Gemma 4 and Qwen WebGPU paths. The same catalog publishes the on-device Bonsai
+FLUX.2-Klein model through
+[`image-inference-worker.js`](./image-inference-worker.js); the worker is
+generated from LocalMind's inline image engine by
+[`scripts/extract-image-worker.mjs`](./scripts/extract-image-worker.mjs).
+NakliOS vendors these tested artifacts for its shared `naklios.ai` broker;
+model selection, cloud/local endpoint credentials, consent, and app isolation
+remain host responsibilities. The worker protocols are documented in
+[`INFERENCE-PROTOCOL.md`](./INFERENCE-PROTOCOL.md).
 
 **Read-aloud** uses [**Kokoro-82M**](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) via [`kokoro-js`](https://www.npmjs.com/package/kokoro-js); **Voice mode** transcribes with [**Moonshine**](https://huggingface.co/onnx-community/moonshine-base-ONNX) (English) and keeps Whisper-base as the multilingual fallback. All of it runs on WebAssembly so it never competes with the chat model's GPU — and entirely on-device.
 
