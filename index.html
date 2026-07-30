@@ -2152,7 +2152,7 @@
               <button class="help-tab" data-tab="try">Things to Try</button>
             </div>
             <div class="help-tab-content active" data-tab="about">
-              <p>A private AI workspace running open models (<strong>Bonsai, Qwen3, LFM2, Gemma</strong>) entirely in your browser via WebGPU &mdash; chat, a model council, deep research, skills, memory, and tool calling, all on-device.</p>
+              <p>A private AI workspace running open models (<strong>Bonsai, Qwen3.5, LFM2, Gemma</strong>) entirely in your browser via WebGPU &mdash; chat, a model council, deep research, skills, memory, and tool calling, all on-device.</p>
               <p><a href="guide/index.html" target="_blank" rel="noopener"><strong>&#128214; New here? Read the User guide &rarr;</strong></a></p>
               <p>Only your search queries touch the network (and only when you choose to). All reasoning stays on your device. Models are cached after first download &mdash; future visits load instantly.</p>
               <p><strong>Requirements:</strong> Chrome 113+ or Edge 113+ (WebGPU).</p>
@@ -2164,7 +2164,7 @@
                 <li><strong>Ternary Bonsai 1.7B</strong> (~470 MB, default) &mdash; text + agent (tool calling). Smallest download with tool calling. 1.58-bit ternary weights, Qwen3 backbone, Apache-2.0.</li>
                 <li><strong>Ternary Bonsai 4B</strong> (~1.1 GB) &mdash; same capabilities, better quality.</li>
                 <li><strong>Ternary Bonsai 8B</strong> (~2.2 GB) &mdash; best Bonsai quality, 65K context.</li>
-                <li><strong>Qwen3 4B</strong> (~2.8 GB) &mdash; text + agent (tool calling). Standard Qwen3-4B at q4f16, Apache-2.0, 32K context.</li>
+                <li><strong>Qwen3.5 4B</strong> (~3 GB) &mdash; text + image + agent (tool calling). Qwen3.5 at q4f16, Apache-2.0; its native 262K context is capped to 32K to keep browser memory bounded.</li>
                 <li><strong>LFM2.5 230M</strong> (~210 MB) &mdash; text + agent (tool calling). Liquid AI's smallest model (released 2026-06-25) &mdash; a dense LFM2 hybrid post-trained for on-device agents; strong at tool use + data extraction for its size, not for math/code/creative writing. q4, 32K context. The smallest tool-capable model here.</li>
                 <li><strong>LFM2 8B A1B</strong> (~4.8 GB) &mdash; text + agent (tool calling). Liquid AI sparse-MoE (8B total / ~1B active) at q4f16, 32K context. WebGPU-only and large &mdash; needs a capable GPU (Chrome/Edge, ~8 GB+ RAM recommended).</li>
                 <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
@@ -2173,7 +2173,7 @@
                 <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
                 <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
               </ul>
-              <h4>Agent Tools (Ternary Bonsai + Qwen3 + LFM2 + Gemma 4)</h4>
+              <h4>Agent Tools (Ternary Bonsai + Qwen3.5 + LFM2 + Gemma 4)</h4>
               <ul>
                 <li><strong>calculate</strong> &mdash; math, percentages, conversions</li>
                 <li><strong>get_current_time</strong> &mdash; date/time with timezone</li>
@@ -2377,7 +2377,7 @@
           <div class="welcome-icon">&#129504;</div>
           <h2>Private AI, right in your browser</h2>
           <p>Models run entirely on your device via WebGPU. Nothing is sent to any server.</p>
-          <p style="font-size:0.78rem;color:var(--gray-400);margin-top:4px">Pick a Ternary Bonsai or Qwen3 model for tool calling and memory; pick a Gemma 4 model for multimodal (image + audio) input.<br>Web search requires an API key (Tavily, Brave) or a self-hosted SearXNG instance.</p>
+          <p style="font-size:0.78rem;color:var(--gray-400);margin-top:4px">Pick a Ternary Bonsai or Qwen3.5 model for tool calling and memory; Qwen3.5 accepts images, while Gemma 4 accepts images and audio.<br>Web search requires an API key (Tavily, Brave) or a self-hosted SearXNG instance.</p>
           <p class="mobile-tip" style="font-size:0.8rem;color:var(--indigo-600);margin:10px auto 0;max-width:340px;padding:9px 12px;background:var(--indigo-100);border-radius:8px;line-height:1.5">&#128241; On a phone, big models won&rsquo;t fit. Point LocalMind at your computer&rsquo;s <strong>Ollama / LM&nbsp;Studio</strong> (Settings &rarr; Models &rarr; Local endpoint) and use any model over your network.</p>
         </div>
       </div>
@@ -2644,7 +2644,7 @@
           <option value="bonsai-ternary-1.7b">Ternary Bonsai 1.7B &middot; Agent (~470 MB)</option>
           <option value="bonsai-ternary-4b">Ternary Bonsai 4B &middot; Agent (~1.1 GB)</option>
           <option value="bonsai-ternary-8b">Ternary Bonsai 8B &middot; Agent (~2.2 GB)</option>
-          <option value="qwen3-4b">Qwen3 4B &middot; Agent (~2.8 GB)</option>
+          <option value="qwen35-4b">Qwen3.5 4B &middot; Vision + Agent (~3 GB)</option>
           <option value="lfm2-230m">LFM2.5 230M &middot; Agent (~210 MB)</option>
           <option value="lfm2-8b-a1b">LFM2 8B A1B &middot; Agent (~4.8 GB)</option>
           <option value="gemma3-1b">Gemma 3 1B &middot; Fast (~760 MB)</option>
@@ -7003,7 +7003,7 @@ reply({ type: 'worker-ready' });
 // recipe (fused fp16 for WebGPU) are in reference/MDLM-algorithm.md.
 
 import * as ortDefault from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.26.0/dist/ort.webgpu.min.mjs';
-import { AutoTokenizer } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+import { AutoTokenizer } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
 
 // Tiny-A2D Qwen3-0.6B MDLM token ids (tokenizer.mask_token_id / <|im_end|>).
 export const MASK_ID = 151669n;
@@ -7578,7 +7578,7 @@ self.onmessage = async (e) => {
 // WASM by default so it never contends with the chat model's WebGPU. On-device
 // only — the sole network touch is the one-time model fetch. (Non-English turns
 // route to the existing Whisper worker on the main thread instead.)
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
 
@@ -7665,17 +7665,23 @@ self.onmessage = async (e) => {
         contextSize: 65536,
         genConfig: { temperature: 0.7, top_k: 20, top_p: 0.8, max_new_tokens: 2048, repetition_penalty: 1.05 },
       },
-      'qwen3-4b': {
-        id: 'onnx-community/Qwen3-4B-ONNX',
-        label: 'Qwen3 4B',
+      'qwen35-4b': {
+        id: 'onnx-community/Qwen3.5-4B-ONNX-OPT',
+        label: 'Qwen3.5 4B',
         dtype: 'q4f16',
-        size: '~2.8 GB',
-        type: 'causal',
-        multimodal: false,
+        size: '~3 GB',
+        type: 'multimodal',
+        modelClass: 'qwen3_5',
+        multimodal: true,
+        imageInput: true,
+        audioInput: false,
+        videoInput: false,
         agentCapable: true,
         contextSize: 32768,
-        // Qwen3 recommended sampling for non-thinking mode (temperature 0.7,
-        // top_p 0.8, top_k 20). Apache-2.0, native tool calling.
+        // Qwen3.5's native context is 262K; LocalMind caps it to 32K to bound
+        // browser KV memory. The model supports vision, but not Gemma-style
+        // audio/video inputs. Non-thinking defaults: temp 0.7, top_p 0.8,
+        // top_k 20. Apache-2.0, native tool calling.
         genConfig: { temperature: 0.7, top_k: 20, top_p: 0.8, max_new_tokens: 2048, repetition_penalty: 1.05 },
       },
       'lfm2-230m': {
@@ -7742,7 +7748,11 @@ self.onmessage = async (e) => {
         dtype: 'q4f16',
         size: '~1.5 GB',
         type: 'multimodal',   // runtime loads this via the multimodal processor path
+        modelClass: 'gemma4',
         multimodal: true,
+        imageInput: true,
+        audioInput: true,
+        videoInput: true,
         agentCapable: true,
         contextSize: 8192,
         genConfig: { temperature: 0.7, top_k: 40, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.1 },
@@ -7753,7 +7763,11 @@ self.onmessage = async (e) => {
         dtype: 'q4f16',
         size: '~4.9 GB',
         type: 'multimodal',   // runtime loads this via the multimodal processor path
+        modelClass: 'gemma4',
         multimodal: true,
+        imageInput: true,
+        audioInput: true,
+        videoInput: true,
         agentCapable: true,
         contextSize: 12288,
         genConfig: { temperature: 0.7, top_k: 40, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.1 },
@@ -11176,16 +11190,17 @@ self.onmessage = async (e) => {
       // The affordances bar shows whenever a model is ready. The 📎 attach
       // button works for EVERY model: documents (PDF/DOCX/TXT/MD/CSV) are
       // extracted to text and embedded into RAG memory, which is model-agnostic.
-      // The 📷 camera and 🎤 audio buttons need a multimodal (Gemma 4) model.
+      // Camera and microphone controls follow per-modality capabilities.
       inputAffordances.classList.toggle('visible', modelReady);
-      cameraBtn.style.display = isMultimodal ? '' : 'none';
-      micBtn.style.display = isMultimodal ? '' : 'none';
-      // Text-only models: restrict the picker to documents (no image/audio/video).
-      fileInput.setAttribute('accept', isMultimodal
-        ? 'image/*,audio/*,video/mp4,.txt,.md,.json,.csv,.pdf,.docx'
-        : '.txt,.md,.json,.csv,.pdf,.docx');
+      cameraBtn.style.display = caps?.image ? '' : 'none';
+      micBtn.style.display = caps?.audio ? '' : 'none';
+      const accepted = ['.txt', '.md', '.json', '.csv', '.pdf', '.docx'];
+      if (caps?.image) accepted.unshift('image/*');
+      if (caps?.audio) accepted.unshift('audio/*');
+      if (caps?.video) accepted.unshift('video/mp4');
+      fileInput.setAttribute('accept', accepted.join(','));
       attachBtn.title = isMultimodal
-        ? 'Attach an image, audio, video, or document'
+        ? 'Attach supported media or a document'
         : 'Attach a document (PDF, DOCX, TXT, MD, CSV) → memory';
       thinkingRow.classList.toggle('hidden', !isMultimodal);
       plannerRow.classList.toggle('hidden', !isAgent);
@@ -11279,32 +11294,31 @@ self.onmessage = async (e) => {
 
     function handleFiles(files) {
       const caps = LocalMind.runtime.capabilities();
-      const canMedia = !!(caps && (caps.image || caps.audio || caps.video));
       for (const file of files) {
-        const isMedia = file.type.startsWith('image/') || file.type.startsWith('audio/')
-          || file.type === 'video/mp4' || /\.mp4$/i.test(file.name);
-        if (isMedia && !canMedia) {
-          // Text-only model: it can't consume image/audio/video. Documents still
-          // pass through below (they're embedded into RAG memory, not sent to the
-          // model). Guards against media picked via an "all files" override.
-          showToast('This model is text-only — attach a document (PDF, DOCX, TXT, MD, CSV), or switch to a Gemma 4 model for images/audio.');
+        const isImage = file.type.startsWith('image/');
+        const isAudio = file.type.startsWith('audio/');
+        const isVideo = file.type === 'video/mp4' || /\.mp4$/i.test(file.name);
+        const unsupportedMedia = (isImage && !caps?.image) ||
+          (isAudio && !caps?.audio) || (isVideo && !caps?.video);
+        if (unsupportedMedia) {
+          showToast('The selected model does not support this media type. Documents still work with every model.');
           continue;
         }
-        if (file.type.startsWith('image/')) {
+        if (isImage) {
           addAttachment({
             type: 'image',
             blob: file,
             thumb: URL.createObjectURL(file),
             name: file.name,
           });
-        } else if (file.type.startsWith('audio/')) {
+        } else if (isAudio) {
           addAttachment({
             type: 'audio',
             blob: file,
             thumb: URL.createObjectURL(file),
             name: file.name,
           });
-        } else if (file.type === 'video/mp4' || file.name.endsWith('.mp4')) {
+        } else if (isVideo) {
           addAttachment({
             type: 'video',
             blob: file,
@@ -12632,6 +12646,7 @@ ${JSON.stringify({ name, result })}
         options = options || {};
         const dtype = options.dtype || 'q4f16';
         const modelType = options.modelType || 'causal';
+        const modelClass = options.modelClass || '';
         const onProgress = options.onProgress;
         const caps = options.capabilities || {
           text: true, image: false, audio: false, video: false,
@@ -12694,7 +12709,7 @@ ${JSON.stringify({ name, result })}
             w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0 });
           } else {
             const resumable = localStorage.getItem('lm_resumable_downloads') !== '0';
-            w.postMessage({ type: 'load', modelId, dtype, modelType, resumable });
+            w.postMessage({ type: 'load', modelId, dtype, modelType, modelClass, resumable });
           }
         });
 
@@ -13388,7 +13403,7 @@ ${JSON.stringify({ name, result })}
 import {
   env,
   pipeline,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
@@ -13564,7 +13579,7 @@ import {
   Sam3TrackerModel,
   AutoProcessor,
   RawImage,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
@@ -13705,7 +13720,7 @@ import {
   RawImage,
   TextStreamer,
   InterruptableStoppingCriteria,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
@@ -13878,7 +13893,7 @@ import {
   AutoTokenizer,
   WhisperForConditionalGeneration,
   full,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
@@ -13954,7 +13969,8 @@ self.addEventListener('message', async (e) => {
     // ── Generation worker factory ───────────────────────────────
     // Pattern from huggingface/transformers.js-examples (Llama 3.2 WebGPU).
     // Uses AutoModelForCausalLM + AutoTokenizer (not pipeline) for causal models.
-    // Uses Gemma4ForConditionalGeneration + AutoProcessor for multimodal models.
+    // Uses each curated conditional-generation class + AutoProcessor for
+    // multimodal models (Gemma 4 and Qwen3.5).
     // GQA variant required for Gemma 3 1B (issue #1469: regular variant crashes).
     function createWorker() {
       const code = `
@@ -14169,15 +14185,16 @@ __rdbCleanup();
 // would race the 'load' postMessage from the main thread — it can arrive
 // before the module-body handler is registered and get dropped. Kick off
 // the import eagerly and have the message handler await it.
-let env, AutoTokenizer, AutoModelForCausalLM, AutoProcessor, Gemma4ForConditionalGeneration, load_image, TextStreamer, InterruptableStoppingCriteria;
+let env, AutoTokenizer, AutoModelForCausalLM, AutoProcessor, Gemma4ForConditionalGeneration, Qwen3_5ForConditionalGeneration, load_image, TextStreamer, InterruptableStoppingCriteria;
 let stopping_criteria;
 
-const __modReady = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm').then((m) => {
+const __modReady = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm').then((m) => {
   env = m.env;
   AutoTokenizer = m.AutoTokenizer;
   AutoModelForCausalLM = m.AutoModelForCausalLM;
   AutoProcessor = m.AutoProcessor;
   Gemma4ForConditionalGeneration = m.Gemma4ForConditionalGeneration;
+  Qwen3_5ForConditionalGeneration = m.Qwen3_5ForConditionalGeneration;
   load_image = m.load_image;
   TextStreamer = m.TextStreamer;
   InterruptableStoppingCriteria = m.InterruptableStoppingCriteria;
@@ -14222,7 +14239,7 @@ async function loadCausal(modelId, dtype) {
   self.postMessage({ type: 'ready' });
 }
 
-async function loadMultimodal(modelId, dtype) {
+async function loadMultimodal(modelId, dtype, modelClass) {
   processor = null; tokenizer = null; model = null;
 
   processor = await AutoProcessor.from_pretrained(modelId, {
@@ -14230,7 +14247,13 @@ async function loadMultimodal(modelId, dtype) {
   });
   tokenizer = processor.tokenizer;
 
-  model = await Gemma4ForConditionalGeneration.from_pretrained(modelId, {
+  const ConditionalGenerationModel = modelClass === 'qwen3_5'
+    ? Qwen3_5ForConditionalGeneration
+    : Gemma4ForConditionalGeneration;
+  if (!ConditionalGenerationModel) {
+    throw new Error('Transformers.js 4.2.0 does not export ' + modelClass);
+  }
+  model = await ConditionalGenerationModel.from_pretrained(modelId, {
     dtype: dtype,
     device: 'webgpu',
     progress_callback: progressCallback,
@@ -14238,7 +14261,7 @@ async function loadMultimodal(modelId, dtype) {
 
   // Warmup
   self.postMessage({ type: 'warmup' });
-  const warmupInputs = tokenizer('a');
+  const warmupInputs = await processor('a', null, null, { add_special_tokens: false });
   await model.generate({ ...warmupInputs, max_new_tokens: 1 });
 
   loadedType = 'multimodal';
@@ -14401,13 +14424,13 @@ async function generateMultimodal(chatMessages, id, attachmentData, enableThinki
 
 self.addEventListener('message', async (e) => {
   await __modReady;  // Transformers.js may still be loading on first message
-  const { type, messages, id, modelId, dtype, modelType, attachments: attData, enableThinking, generationConfig, resumable } = e.data;
+  const { type, messages, id, modelId, dtype, modelType, modelClass, attachments: attData, enableThinking, generationConfig, resumable } = e.data;
 
   if (type === 'load') {
     if (resumable === false) __resumableEnabled = false;
     try {
       if (modelType === 'multimodal') {
-        await loadMultimodal(modelId, dtype);
+        await loadMultimodal(modelId, dtype, modelClass || 'gemma4');
       } else {
         await loadCausal(modelId, dtype);
       }
@@ -14627,13 +14650,14 @@ self.addEventListener('message', async (e) => {
       LocalMind.runtime.loadModel(m.id, {
         dtype: m.dtype,
         modelType: m.type,
+        modelClass: m.modelClass,
         backend: m.backend,          // 'wllama' → adapter uses the wllama worker
         contextSize: m.contextSize,  // n_ctx for the GGUF load
         capabilities: {
           text: true,
-          image: !!m.multimodal,
-          audio: !!m.multimodal,
-          video: !!m.multimodal,
+          image: m.imageInput ?? !!m.multimodal,
+          audio: m.audioInput ?? !!m.multimodal,
+          video: m.videoInput ?? !!m.multimodal,
           toolCalling: !!m.agentCapable,
           maxContextTokens: m.contextSize || 0,
         },
@@ -15061,10 +15085,13 @@ self.addEventListener('message', async (e) => {
       if (!m || m.backend) return false;
       try {
         await LocalMind.runtime.loadModel(m.id, {
-          dtype: m.dtype, modelType: m.type,
+          dtype: m.dtype, modelType: m.type, modelClass: m.modelClass,
           capabilities: {
-            text: true, image: !!m.multimodal, audio: !!m.multimodal,
-            video: !!m.multimodal, toolCalling: !!m.agentCapable,
+            text: true,
+            image: m.imageInput ?? !!m.multimodal,
+            audio: m.audioInput ?? !!m.multimodal,
+            video: m.videoInput ?? !!m.multimodal,
+            toolCalling: !!m.agentCapable,
             maxContextTokens: m.contextSize || 0,
           },
         });

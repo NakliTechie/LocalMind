@@ -2,7 +2,8 @@
 
 LocalMind exposes DOM-free inference artifacts for hosts. `inference-worker.js`
 runs the default custom-WGSL LFM2.5 engine. `onnx-inference-worker.js` runs the
-curated Gemma 4 and Qwen models through Transformers.js/WebGPU.
+curated Gemma 4 and Qwen3.5 models through pinned Transformers.js
+4.2.0/WebGPU.
 `image-inference-worker.js` runs the Bonsai FLUX.2-Klein image engine through
 WebGPU. It is generated from LocalMind's inline workbench engine so the
 standalone app and host artifact cannot silently drift.
@@ -31,8 +32,8 @@ worker.postMessage({
 });
 ```
 
-The Transformers.js worker additionally accepts the catalog's `dtype` and
-`modelType` fields:
+The Transformers.js worker additionally accepts the catalog's `dtype`,
+`modelType`, and `modelClass` fields:
 
 ```js
 worker.postMessage({
@@ -41,8 +42,12 @@ worker.postMessage({
   modelId: 'onnx-community/gemma-4-E2B-it-ONNX',
   dtype: 'q4f16',
   modelType: 'multimodal',
+  modelClass: 'gemma4',
 });
 ```
+
+`modelClass` is `gemma4` or `qwen3_5` for the curated multimodal entries and
+is omitted for ordinary causal-language models.
 
 The worker emits `progress` events followed by `ready`. Model weights use the
 engine's Cache Storage cache and are downloaded only when absent.

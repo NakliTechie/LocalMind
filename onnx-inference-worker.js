@@ -7,7 +7,7 @@
 
 const PROTOCOL = 'localmind.inference.v1';
 const TRANSFORMERS_URL =
-  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
 
 let transformers = null;
 let processor = null;
@@ -15,6 +15,7 @@ let tokenizer = null;
 let model = null;
 let loadedModelId = null;
 let loadedType = null;
+let loadedModelClass = null;
 let stoppingCriteria = null;
 let activeRequestId = null;
 
@@ -42,6 +43,7 @@ async function unload() {
   model = null;
   loadedModelId = null;
   loadedType = null;
+  loadedModelClass = null;
   activeRequestId = null;
 }
 
@@ -49,11 +51,14 @@ async function loadModel(request) {
   const id = request.id;
   const modelId = String(request.modelId || '');
   const modelType = request.modelType === 'multimodal' ? 'multimodal' : 'causal';
+  const modelClass = request.modelClass === 'qwen3_5' ? 'qwen3_5' :
+    modelType === 'multimodal' ? 'gemma4' : 'auto-causal';
   const dtype = request.dtype || 'q4f16';
   activeRequestId = id == null ? null : id;
 
   if (!modelId) throw new Error('modelId is required');
-  if (model && loadedModelId === modelId && loadedType === modelType) {
+  if (model && loadedModelId === modelId && loadedType === modelType &&
+      loadedModelClass === modelClass) {
     post({ type: 'ready', backend: 'webgpu', model: modelId }, id);
     return;
   }
@@ -67,7 +72,13 @@ async function loadModel(request) {
       progress_callback,
     });
     tokenizer = processor.tokenizer;
-    model = await mod.Gemma4ForConditionalGeneration.from_pretrained(modelId, {
+    const ConditionalGenerationModel = modelClass === 'qwen3_5'
+      ? mod.Qwen3_5ForConditionalGeneration
+      : mod.Gemma4ForConditionalGeneration;
+    if (!ConditionalGenerationModel) {
+      throw new Error(`Transformers.js 4.2.0 does not export ${modelClass}`);
+    }
+    model = await ConditionalGenerationModel.from_pretrained(modelId, {
       dtype,
       device: 'webgpu',
       progress_callback,
@@ -85,10 +96,13 @@ async function loadModel(request) {
   }
 
   post({ type: 'progress', data: { status: 'warmup', file: modelId } }, id);
-  const warmupInputs = tokenizer('a');
+  const warmupInputs = modelType === 'multimodal'
+    ? await processor('a', null, null, { add_special_tokens: false })
+    : tokenizer('a');
   await model.generate({ ...warmupInputs, max_new_tokens: 1 });
   loadedModelId = modelId;
   loadedType = modelType;
+  loadedModelClass = modelClass;
   activeRequestId = null;
   post({ type: 'ready', backend: 'webgpu', model: modelId }, id);
 }

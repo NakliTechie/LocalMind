@@ -92,8 +92,8 @@ COMPARE_JS = r"""
     '<div style="font-weight:600;color:' + (accent ? 'var(--indigo-600)' : 'var(--gray-700)') + ';margin-bottom:4px">' + label + '</div><div>' + text + '</div></div>';
   const html = '<div style="font-size:0.85rem">' +
     card('Ternary Bonsai 1.7B', 'WebGPU is a browser API for running GPU workloads, including local AI models.', false) +
-    card('Qwen3 4B', 'WebGPU exposes the GPU to web apps for high-performance compute and graphics — the basis for in-browser LLMs.', false) +
-    card('⚖️ Judge · Qwen3 4B', 'Both are accurate. <strong>Winner:</strong> Qwen3 4B — it adds the why (in-browser LLMs) without losing concision.', true) +
+    card('Qwen3.5 4B', 'WebGPU exposes the GPU to web apps for high-performance compute and graphics — the basis for in-browser LLMs.', false) +
+    card('⚖️ Judge · Qwen3.5 4B', 'Both are accurate. <strong>Winner:</strong> Qwen3.5 4B — it adds the why (in-browser LLMs) without losing concision.', true) +
     '</div>';
   document.getElementById('chatArea').insertAdjacentHTML('beforeend',
     '<div class="msg user"><div class="msg-bubble"><span>What is WebGPU?</span></div></div>' +

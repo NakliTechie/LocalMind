@@ -21,15 +21,23 @@ assert.match(source, /request\.type === 'unload'/);
 assert.match(source, /config\.reset === true/);
 assert.match(protocol, /Only one generation can be active/);
 assert.match(onnxSource, /localmind\.inference\.v1/);
-assert.match(onnxSource, /@huggingface\/transformers@4/);
+assert.match(onnxSource, /@huggingface\/transformers@4\.2\.0/);
 assert.match(onnxSource, /Gemma4ForConditionalGeneration/);
+assert.match(onnxSource, /Qwen3_5ForConditionalGeneration/);
 assert.match(onnxSource, /AutoModelForCausalLM/);
 assert.match(onnxSource, /request\.type === 'unload'/);
+assert.doesNotMatch(onnxSource, /transformers@4\/\+esm/);
+assert.match(indexSource, /Qwen3_5ForConditionalGeneration/);
+assert.doesNotMatch(indexSource, /transformers@4\/\+esm/);
 assert.equal(catalog.defaultKey, 'lfm2-230m-webgpu');
 assert.deepEqual(
   catalog.models.map((model) => model.key),
-  ['lfm2-230m-webgpu', 'gemma4-e2b', 'gemma4-e4b', 'qwen3-4b'],
+  ['lfm2-230m-webgpu', 'gemma4-e2b', 'gemma4-e4b', 'qwen35-4b'],
 );
+const qwen35 = catalog.get('qwen35-4b');
+assert.equal(qwen35.id, 'onnx-community/Qwen3.5-4B-ONNX-OPT');
+assert.equal(qwen35.modelType, 'multimodal');
+assert.equal(qwen35.modelClass, 'qwen3_5');
 assert.ok(catalog.models.every((model) => model.worker));
 assert.equal(catalog.defaultImageKey, 'flux2-klein-4b-webgpu');
 assert.deepEqual(

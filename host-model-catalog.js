@@ -40,6 +40,7 @@ const LOCALMIND_HOST_MODELS = Object.freeze([
     sizeBytes: 1_500_000_000,
     contextTokens: 8_192,
     modelType: 'multimodal',
+    modelClass: 'gemma4',
     description: 'Stronger small model. Text is enabled through the host SDK.',
     generationConfig: Object.freeze({
       temperature: 0.7,
@@ -60,6 +61,7 @@ const LOCALMIND_HOST_MODELS = Object.freeze([
     sizeBytes: 4_900_000_000,
     contextTokens: 12_288,
     modelType: 'multimodal',
+    modelClass: 'gemma4',
     description: 'Most capable built-in choice. Best on high-memory systems.',
     generationConfig: Object.freeze({
       temperature: 0.7,
@@ -69,18 +71,21 @@ const LOCALMIND_HOST_MODELS = Object.freeze([
     }),
   }),
   Object.freeze({
-    key: 'qwen3-4b',
-    id: 'onnx-community/Qwen3-4B-ONNX',
-    label: 'Qwen3 4B',
-    family: 'Qwen3',
+    key: 'qwen35-4b',
+    id: 'onnx-community/Qwen3.5-4B-ONNX-OPT',
+    label: 'Qwen3.5 4B',
+    family: 'Qwen3.5',
     runtime: 'transformers-webgpu',
     worker: 'onnx-inference-worker.js',
     dtype: 'q4f16',
-    size: '~2.8 GB',
-    sizeBytes: 2_800_000_000,
+    size: '~3 GB',
+    sizeBytes: 3_010_000_000,
     contextTokens: 32_768,
-    modelType: 'causal',
-    description: 'Stable multilingual reasoning and instruction model.',
+    modelType: 'multimodal',
+    modelClass: 'qwen3_5',
+    description:
+      'Stronger multilingual reasoning, tool use, and vision. Native 262K ' +
+      'context is capped to 32K to bound browser memory.',
     generationConfig: Object.freeze({
       temperature: 0.7,
       top_k: 20,

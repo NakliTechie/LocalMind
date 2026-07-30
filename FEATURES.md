@@ -13,7 +13,7 @@ Pick a model from the dropdown. It downloads once, caches in the browser, and ru
 | **Ternary Bonsai 1.7B** (default) | ~470 MB | WebGPU | Text + agent (tools) | Smallest download with tool calling; strong reasoning |
 | **Ternary Bonsai 4B** | ~1.1 GB | WebGPU | Text + agent | Same, better quality |
 | **Ternary Bonsai 8B** | ~2.2 GB | WebGPU | Text + agent | Best Bonsai quality; 65K context |
-| **Qwen3 4B** | ~2.8 GB | WebGPU | Text + agent | Stock Qwen3 at q4f16; native tool calling |
+| **Qwen3.5 4B** | ~3 GB | WebGPU | Text + image + agent | Qwen3.5 at q4f16; native tool calling; 262K native context capped to 32K in-browser |
 | **LFM2 8B A1B** | ~4.8 GB | WebGPU | Text + agent | Liquid AI sparse-MoE (8B total / ~1B active); needs a capable GPU + ~8 GB RAM |
 | **Apertus 4B** | ~2.7 GB | WebGPU | Text (chat) | Swiss AI fully-open multilingual (1800+ languages); v1.1 distilled from the 8B; chat-only |
 | **Gemma 3 1B** | ~760 MB | WebGPU | Text only | Lightweight fallback |
@@ -60,7 +60,7 @@ Large models on the browser's WebGPU backend can occasionally run out of GPU mem
 
 ## Agent tools
 
-Tool-capable models (Bonsai, Qwen3, LFM2, Gemma 4) decide when to use tools based on your question.
+Tool-capable models (Bonsai, Qwen3.5, LFM2, Gemma 4) decide when to use tools based on your question.
 
 | Tool | What it does |
 |---|---|

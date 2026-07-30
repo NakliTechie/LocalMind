@@ -51,7 +51,7 @@ The LFM2 engine is exposed through the DOM-free
 itself. Hosts can also use the conservative
 [`host-model-catalog.js`](./host-model-catalog.js) and
 [`onnx-inference-worker.js`](./onnx-inference-worker.js) for the supported
-Gemma 4 and Qwen WebGPU paths. The same catalog publishes the on-device Bonsai
+Gemma 4 and Qwen3.5 WebGPU paths. The same catalog publishes the on-device Bonsai
 FLUX.2-Klein model through
 [`image-inference-worker.js`](./image-inference-worker.js); the worker is
 generated from LocalMind's inline image engine by

@@ -58,7 +58,7 @@ Three generation paradigms live in the one file: **autoregressive chat** (ONNX +
 - **Stream cancellation on consumer early-break** — JS API's streaming iterator posts `{type:'stop'}` to the worker on `return()`, so `for await` + `break` doesn't leave the worker chugging to `max_tokens` while the next call waits in the FIFO
 - **Resumable model downloads** — HF CDN fetches checkpoint to IndexedDB every 5 MB
   - Monkey-patched `self.fetch` inside the main model worker; HEAD → ETag-keyed chunk store → Range request for missing tail
-  - Dynamic import of `transformers@4` so the patch lands before the module captures `globalThis.fetch`; `env.fetch = self.fetch` as belt-and-braces
+  - Dynamic import of pinned `transformers@4.2.0` so the patch lands before the module captures `globalThis.fetch`; `env.fetch = self.fetch` as belt-and-braces
   - Fallback to original fetch on any error in the resumable path — model still loads, just can't resume
   - Settings toggle (default on) as a kill switch
   - Worker-boot cleanup drops IDB chunks for URLs already in Cache Storage
@@ -116,7 +116,7 @@ The worker hardcodes `Gemma4ForConditionalGeneration`. To support other multimod
 
 **~120 lines.**
 
-### 3. SRI for `transformers@4 +esm`
+### 3. SRI for `transformers@4.2.0 +esm`
 The `+esm` jsDelivr endpoint internally redirects to content-addressed URLs, so a static hash can't be pinned without hardcoding the resolved URL. Either pin the resolved URL (brittle across releases) or self-host the bundle.
 
 ### 4. Pyodide plot capture
@@ -191,12 +191,12 @@ transformers.js v4 runs **GPT-OSS 20B** at q4f16, ~60 tok/s on an M4 Pro Max. On
 MODELS registry entry on the ONNX path; soft-warn on the ~13 GB load, hard-block on
 the existing 6 GB / per-buffer ceiling. **~30 lines.**
 
-### 4. Qwen3.5 family (0.8B–9B) — supersede stock Qwen3
+### 4. Qwen3.5 family (0.8B–9B) — 4B landed; add more tiers when useful
 
-Replaces the `qwen3-4b` lineage: 262K context, 200+ languages, dual-mode thinking,
+The 4B entry now replaces the `qwen3-4b` lineage: 262K context, 200+ languages, dual-mode thinking,
 tool-tuned (clean `<tool_call>` JSON — the format the parser already speaks).
-Registry entries once ONNX/GGUF exports land; 0.8B = multilingual on-device sweet
-spot, 4B/8B = agent tier. Guardrail: the 0.8B thinking-loops — ship with
+The 4B ONNX/WebGPU entry is live; 0.8B remains a possible multilingual on-device
+sweet spot and 9B an upper agent tier. Guardrail: the 0.8B thinking-loops — ship with
 `/no_think`-style defaults. **~30 lines per entry.**
 
 ### 5. Auto-escalation router — Edge-First as an agent loop  · **NEW PATTERN**
