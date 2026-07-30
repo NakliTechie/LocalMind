@@ -176,14 +176,20 @@ Whisper gives ears; nothing reads back. Two milestones, one spec, ship v1.0 firs
 Non-negotiable: zero new network calls (kills the no-data-leaves thesis otherwise;
 same reason the Web Speech API stays rejected).
 
-### 2. RAG upgrade — MiniLM → EmbeddingGemma-300M
+### 2. RAG embedder — MiniLM → e5-small (shipped) → next: Qwen3-Embedding-0.6B
 
-Best open MTEB model <500M, 100+ languages, transformers.js support, <200 MB RAM,
-Matryoshka 768→128 so the store need not grow. **The one real cost:** new embeddings
-are incompatible with the existing store → a mandatory re-index. Ships *with* a
-migration: version-stamp the IndexedDB vector store, detect model change on boot,
-re-embed the corpus behind a progress bar, keep old vectors until re-embed completes.
-**~150 lines + migration.**
+The MiniLM → **multilingual-e5-small** swap **shipped** (v2.5.0: 384-dim, WASM, 100+
+languages). EmbeddingGemma-300M — the original pick — turned out unloadable on
+onnxruntime-web (its q4/q8 use `GatherBlockQuantized`, then unimplemented on WASM **and**
+WebGPU). **Verified 2026-07-30: that op is now registered on the WebGPU EP** (ORT-web
+≥1.27.0; still absent on WASM-CPU), so EmbeddingGemma q4/q8 is re-testable there — but the
+cleaner next step is **`onnx-community/Qwen3-Embedding-0.6B-ONNX`** (fp16/q8, 100+ langs,
+Matryoshka): a big multilingual-retrieval jump that sidesteps the block-quant op entirely.
+Ships *with* a migration (dimension change → full re-embed): version-stamp the store,
+re-embed behind a progress bar, keep old vectors until re-embed completes. A **reranker**
+stage (`ms-marco-MiniLM` / `bge-reranker-v2-m3`, both browser-runnable now) is a cheap
+precision add on top. **~150 lines + migration; needs a foreground session for the live
+re-embed.**
 
 ### 3. GPT-OSS 20B in-tab — the headline flex
 
@@ -198,6 +204,11 @@ tool-tuned (clean `<tool_call>` JSON — the format the parser already speaks).
 The 4B ONNX/WebGPU entry is live; 0.8B remains a possible multilingual on-device
 sweet spot and 9B an upper agent tier. Guardrail: the 0.8B thinking-loops — ship with
 `/no_think`-style defaults. **~30 lines per entry.**
+
+Verified 2026-07-30: Qwen3.5's ONNX class (`Qwen3_5ForConditionalGeneration`) instantiates
+on the pinned transformers.js **4.2.0** — there is no browser transformers.js v5 (the "@5"
+is the Python `transformers` library, a name collision). No runtime bump is needed for the
+Qwen3.5 family; the roster now also carries LFM2.5-1.2B and SmolLM3 on 4.2.0.
 
 ### 5. Auto-escalation router — Edge-First as an agent loop  · **NEW PATTERN**
 
