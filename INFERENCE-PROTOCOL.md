@@ -1,9 +1,11 @@
 # LocalMind inference protocol v1
 
-`inference-worker.js` is LocalMind's DOM-free inference boundary. LocalMind uses
-it directly and NakliOS vendors the same file with its `lfm2_5.js` engine.
-This keeps the model runtime independently versioned while allowing NakliOS to
-own consent, scheduling, and app isolation.
+LocalMind exposes DOM-free inference artifacts for hosts. `inference-worker.js`
+runs the default custom-WGSL LFM2.5 engine. `onnx-inference-worker.js` runs the
+curated Gemma 4 and Qwen models through Transformers.js/WebGPU.
+`host-model-catalog.js` is the versioned model metadata shared with NakliOS.
+This keeps model runtimes independently versioned while allowing NakliOS to own
+selection, consent, endpoint credentials, scheduling, and app isolation.
 
 The worker is a module worker:
 
@@ -23,6 +25,19 @@ worker.postMessage({
   type: 'load',
   id: 'load-1',
   modelId: 'LiquidAI/LFM2.5-230M-GGUF',
+});
+```
+
+The Transformers.js worker additionally accepts the catalog's `dtype` and
+`modelType` fields:
+
+```js
+worker.postMessage({
+  type: 'load',
+  id: 'load-gemma',
+  modelId: 'onnx-community/gemma-4-E2B-it-ONNX',
+  dtype: 'q4f16',
+  modelType: 'multimodal',
 });
 ```
 

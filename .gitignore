@@ -2,6 +2,8 @@
 !index.html
 !lfm2_5.js
 !inference-worker.js
+!onnx-inference-worker.js
+!host-model-catalog.js
 !INFERENCE-PROTOCOL.md
 !gemma-4-e2b.js
 !README.md

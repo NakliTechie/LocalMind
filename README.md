@@ -48,9 +48,13 @@ These two engines are ported, largely verbatim, from the open-source [`webml-com
 
 The LFM2 engine is exposed through the DOM-free
 [`inference-worker.js`](./inference-worker.js) boundary used by LocalMind
-itself. NakliOS vendors that same tested worker and engine for its shared
-`naklios.ai` service; protocol details and isolation responsibilities are in
-[`INFERENCE-PROTOCOL.md`](./INFERENCE-PROTOCOL.md).
+itself. Hosts can also use the conservative
+[`host-model-catalog.js`](./host-model-catalog.js) and
+[`onnx-inference-worker.js`](./onnx-inference-worker.js) for the supported
+Gemma 4 and Qwen WebGPU paths. NakliOS vendors these tested artifacts for its
+shared `naklios.ai` broker; model selection, cloud/local endpoint credentials,
+consent, and app isolation remain host responsibilities. The worker protocol is
+documented in [`INFERENCE-PROTOCOL.md`](./INFERENCE-PROTOCOL.md).
 
 **Read-aloud** uses [**Kokoro-82M**](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) via [`kokoro-js`](https://www.npmjs.com/package/kokoro-js); **Voice mode** transcribes with [**Moonshine**](https://huggingface.co/onnx-community/moonshine-base-ONNX) (English) and keeps Whisper-base as the multilingual fallback. All of it runs on WebAssembly so it never competes with the chat model's GPU — and entirely on-device.
 
