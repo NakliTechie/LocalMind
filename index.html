@@ -2169,6 +2169,7 @@
                 <li><strong>LFM2 8B A1B</strong> (~4.8 GB) &mdash; text + agent (tool calling). Liquid AI sparse-MoE (8B total / ~1B active) at q4f16, 32K context. WebGPU-only and large &mdash; needs a capable GPU (Chrome/Edge, ~8 GB+ RAM recommended).</li>
                 <li><strong>LFM2.5 1.2B</strong> (~760 MB) &mdash; text + agent (tool calling). Liquid AI's LFM2.5-1.2B-Instruct (Jan 2026) &mdash; same LFM2 hybrid arch as the 230M default, RL-tuned for instruction following + tool use. q4f16, 32K context.</li>
                 <li><strong>SmolLM3 3B</strong> (~2.1 GB) &mdash; text + agent (tool calling). HuggingFace SmolLM3, Apache-2.0, dual tool interfaces (xml + python), 6 languages. q4f16, 32K context.</li>
+                <li><strong>Gemini Nano</strong> (0 MB) &mdash; Google's on-device model built into Chrome, via the Prompt API. Zero download, no WebGPU. Chrome/Edge only; the option appears here but only runs where your browser exposes <code>self.LanguageModel</code>.</li>
                 <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
                 <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only; ~250 tok/s on an M4 Max.</li>
                 <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; text-only, no tool calling. Fallback option.</li>
@@ -2651,6 +2652,7 @@
           <option value="lfm2-8b-a1b">LFM2 8B A1B &middot; Agent (~4.8 GB)</option>
           <option value="lfm2-1.2b">LFM2.5 1.2B &middot; Agent (~760 MB)</option>
           <option value="smollm3-3b">SmolLM3 3B &middot; Agent (~2.1 GB)</option>
+          <option value="gemini-nano">Gemini Nano &middot; Built into Chrome (0 MB)</option>
           <option value="gemma3-1b">Gemma 3 1B &middot; Fast (~760 MB)</option>
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
@@ -7767,6 +7769,24 @@ self.onmessage = async (e) => {
         // languages. Transformers.js-native ONNX (q4f16). Native 128K context
         // capped to 32K to bound browser KV memory.
         genConfig: { temperature: 0.7, top_k: 40, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.05 },
+      },
+      'gemini-nano': {
+        id: 'chrome-builtin/gemini-nano',
+        label: 'Gemini Nano',
+        backend: 'chrome-ai',
+        dtype: '—',
+        size: '0 MB (built into Chrome)',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: false,
+        contextSize: 4096,
+        // Chrome's built-in Gemini Nano via the Prompt API (self.LanguageModel).
+        // A "zero-byte engine": Chrome ships the weights, so there is NO model
+        // download and NO WebGPU needed (like the endpoint backend). Chrome/Edge
+        // only — feature-detected: if `self.LanguageModel` is absent or the model
+        // is unavailable, the load surfaces a clear message instead of failing
+        // silently. topK is small (Nano's sweet spot); no repetition_penalty knob.
+        genConfig: { temperature: 0.7, top_k: 3, max_new_tokens: 2048 },
       },
       'gemma3-1b': {
         id: 'onnx-community/gemma-3-1b-it-ONNX-GQA',
@@ -14644,6 +14664,7 @@ self.addEventListener('message', async (e) => {
       const m = MODELS[key];
       if (!m) return;
 
+      if (m.backend === 'chrome-ai') { loadChromeAIModel(key, m); return; }
       if (m.backend === 'endpoint') { loadEndpointModel(key, m); return; }
 
       // Any in-flight API load promise is now stale — reject it before the
@@ -14804,6 +14825,138 @@ self.addEventListener('message', async (e) => {
         try { currentInferenceContext.onToken(token); } catch (e) { console.error('streaming onToken threw:', e); }
       }
     }
+    // ── Chrome built-in AI (Gemini Nano via the Prompt API) ──────
+    // A zero-byte chat backend: Chrome ships the Gemini Nano weights, so there
+    // is NO model download and NO WebGPU. Mirrors the endpoint backend — no
+    // worker, mark ready on load, and stream through the SAME token sink
+    // (emitEndpointToken → currentAssistantText + bubble + onToken) so the agent
+    // loop / tools / RAG / research / compare all work unchanged.
+    let chromeAIAbort = null;
+    function chromeAISupported() { return typeof self !== 'undefined' && 'LanguageModel' in self; }
+
+    async function loadChromeAIModel(key, m) {
+      if (loadResolvers) { const r = loadResolvers; loadResolvers = null; try { r.reject(new Error('Load superseded')); } catch {} }
+      try { LocalMind.runtime.unload(); } catch {}   // free any resident WebGPU worker
+      worker = null;
+      activeModelKey = key;
+      clearAttachments();
+      currentDownloadFile = '';
+      const fail = (msg) => {
+        modelReady = false;
+        progressSection.classList.remove('visible');
+        statusBadge.className = 'status-badge error';
+        statusSpinner.style.display = 'none';
+        statusText.textContent = 'Gemini Nano unavailable';
+        chatInput.disabled = true;
+        chatInput.placeholder = msg;
+        sendBtn.disabled = true; if (searchSendBtn) searchSendBtn.disabled = true;
+        modelSelect.disabled = false;
+        showToast(msg);
+        if (loadResolvers) { const r = loadResolvers; loadResolvers = null; try { r.reject(new Error(msg)); } catch {} }
+      };
+      if (!chromeAISupported()) {
+        fail('Gemini Nano needs Chrome/Edge with built-in AI (self.LanguageModel not found). Pick another model.');
+        return;
+      }
+      statusBadge.className = 'status-badge loading';
+      statusSpinner.style.display = '';
+      statusText.textContent = 'Checking Gemini Nano…';
+      progressSection.classList.add('visible');
+      progressFill.style.width = '0%';
+      progressText.textContent = 'Checking Chrome built-in AI…';
+      chatInput.disabled = true; sendBtn.disabled = true;
+      let avail;
+      try { avail = await LanguageModel.availability(); } catch (e) { avail = 'unavailable'; }
+      if (avail === 'unavailable') {
+        fail('Gemini Nano is not available in this browser (may need a newer Chrome or the built-in-AI flag). Pick another model.');
+        return;
+      }
+      // If the model must download, do it now with progress; then discard the
+      // warm session — generate() creates its own per-turn sessions.
+      if (avail === 'downloadable' || avail === 'downloading') {
+        try {
+          progressText.textContent = 'Downloading Gemini Nano (one-time, via Chrome)…';
+          const warm = await LanguageModel.create({
+            monitor(mon) {
+              mon.addEventListener('downloadprogress', (e) => {
+                const pct = Math.round((e.loaded || 0) * 100);
+                progressFill.style.width = pct + '%';
+                progressText.textContent = 'Downloading Gemini Nano — ' + pct + '%';
+              });
+            },
+          });
+          try { warm.destroy(); } catch {}
+        } catch (e) {
+          fail('Gemini Nano download/init failed: ' + ((e && e.message) || e));
+          return;
+        }
+      }
+      modelReady = true;
+      progressSection.classList.remove('visible');
+      statusBadge.className = 'status-badge ready';
+      statusSpinner.style.display = 'none';
+      statusText.textContent = m.label + ' · Chrome';
+      chatInput.disabled = false;
+      chatInput.placeholder = 'Type a message…';
+      sendBtn.disabled = false; if (searchSendBtn) searchSendBtn.disabled = false;
+      if (clearBtn) clearBtn.disabled = false;
+      if (newChatBtn) newChatBtn.disabled = false;
+      modelSelect.disabled = false;
+      updateModelUI();
+      updateBatchCount();
+      showToast('Using Gemini Nano (built into Chrome — 0 download)');
+      if (loadResolvers) { const r = loadResolvers; loadResolvers = null; r.resolve(); }
+    }
+
+    // Flatten the app's chat messages to plain {role, content:string} the Prompt
+    // API accepts, create a per-turn session (system + prior turns as
+    // initialPrompts), then stream. Normalises cumulative- vs delta-style chunks.
+    async function generateViaChromeAI(chatMessages, genConfig) {
+      const cfg = genConfig || {};
+      const toText = (raw) => typeof raw === 'string' ? raw
+        : Array.isArray(raw) ? raw.filter(b => b && b.type === 'text').map(b => b.text).join('\n')
+        : String(raw == null ? '' : raw);
+      const msgs = (chatMessages || []).map(mm => ({ role: mm.role, content: toText(mm.content) }));
+      const sys = msgs.filter(x => x.role === 'system').map(x => x.content).join('\n\n');
+      const convo = msgs.filter(x => x.role === 'user' || x.role === 'assistant');
+      const last = convo.length ? convo[convo.length - 1] : { role: 'user', content: '' };
+      const prior = convo.slice(0, -1);
+      const initialPrompts = [];
+      if (sys) initialPrompts.push({ role: 'system', content: sys });
+      for (const p of prior) initialPrompts.push({ role: p.role, content: p.content });
+      chromeAIAbort = new AbortController();
+      let session = null;
+      try {
+        const createOpts = { signal: chromeAIAbort.signal };
+        if (cfg.temperature != null) createOpts.temperature = cfg.temperature;
+        if (cfg.top_k != null) createOpts.topK = cfg.top_k;
+        if (initialPrompts.length) createOpts.initialPrompts = initialPrompts;
+        session = await LanguageModel.create(createOpts);
+        const stream = session.promptStreaming(last.content, { signal: chromeAIAbort.signal });
+        let acc = '';
+        for await (const chunk of stream) {
+          const s = typeof chunk === 'string' ? chunk : String(chunk == null ? '' : chunk);
+          // Prompt API has shipped both cumulative and delta streaming — normalise.
+          let delta;
+          if (s.length >= acc.length && s.startsWith(acc)) { delta = s.slice(acc.length); acc = s; }
+          else { delta = s; acc += s; }
+          if (delta) emitEndpointToken(delta);
+        }
+      } catch (e) {
+        if (!(e && e.name === 'AbortError')) {
+          const msg = (e && e.message) || String(e);
+          if (currentAssistantEl) {
+            currentAssistantText += `\n\n*Error: ${msg}*`;
+            updateAssistantBubble(currentAssistantEl.bubble, currentAssistantText);
+          } else { showToast('Gemini Nano error: ' + msg); }
+        }
+      } finally {
+        try { session && session.destroy(); } catch {}
+        chromeAIAbort = null;
+      }
+      return currentAssistantText;
+    }
+
     async function generateViaEndpoint(chatMessages, genConfig) {
       const ep = LocalMind.runtime.getEndpoint();
       const cfg = genConfig || {};
@@ -14866,6 +15019,9 @@ self.addEventListener('message', async (e) => {
     }
 
     function generateOnce(chatMessages, attData, enableThinking, genConfig) {
+      if (MODELS[activeModelKey] && MODELS[activeModelKey].backend === 'chrome-ai') {
+        return generateViaChromeAI(chatMessages, genConfig);
+      }
       if (LocalMind.runtime.isEndpoint && LocalMind.runtime.isEndpoint()) {
         return generateViaEndpoint(chatMessages, genConfig);
       }
@@ -17253,6 +17409,11 @@ self.addEventListener('message', async (e) => {
       if (generating) {
         if (ocrBusy) { try { LocalMind.runtime.stopOCR(); } catch {} return; } // interrupt OCR; partial text resolves
         if (imageBusy || diffuseBusy) return; // gen runs to completion — no mid-run stop
+        if (MODELS[activeModelKey] && MODELS[activeModelKey].backend === 'chrome-ai') {
+          if (chromeAIAbort) { try { chromeAIAbort.abort(); } catch {} }
+          generating = false;
+          return;
+        }
         if (LocalMind.runtime.isEndpoint && LocalMind.runtime.isEndpoint()) {
           if (endpointAbort) { try { endpointAbort.abort(); } catch {} }
           generating = false;
@@ -17743,7 +17904,7 @@ self.addEventListener('message', async (e) => {
       for (const opt of Array.from(modelSelect.options)) {
         const mm = MODELS[opt.value];
         if (!mm) continue;
-        const cpuOk = mm.backend === 'wllama' || mm.backend === 'endpoint';
+        const cpuOk = mm.backend === 'wllama' || mm.backend === 'endpoint' || mm.backend === 'chrome-ai';
         if (cpuOk) { if (!firstCpuKey) firstCpuKey = opt.value; }
         else { opt.disabled = true; if (!/needs WebGPU/.test(opt.textContent)) opt.textContent += ' — needs WebGPU'; }
       }
