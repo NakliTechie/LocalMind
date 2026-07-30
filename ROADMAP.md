@@ -208,7 +208,7 @@ sweet spot and 9B an upper agent tier. Guardrail: the 0.8B thinking-loops — sh
 Verified 2026-07-30: Qwen3.5's ONNX class (`Qwen3_5ForConditionalGeneration`) instantiates
 on the pinned transformers.js **4.2.0** — there is no browser transformers.js v5 (the "@5"
 is the Python `transformers` library, a name collision). No runtime bump is needed for the
-Qwen3.5 family; the roster now also carries Granite 4.0, LFM2.5-1.2B, and SmolLM3 on 4.2.0.
+Qwen3.5 family; the roster now also carries LFM2.5-1.2B and SmolLM3 on 4.2.0.
 
 ### 5. Auto-escalation router — Edge-First as an agent loop  · **NEW PATTERN**
 

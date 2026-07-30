@@ -2152,7 +2152,7 @@
               <button class="help-tab" data-tab="try">Things to Try</button>
             </div>
             <div class="help-tab-content active" data-tab="about">
-              <p>A private AI workspace running open models (<strong>Bonsai, Qwen3.5, Granite, LFM2, SmolLM3, Gemma</strong>) entirely in your browser via WebGPU &mdash; chat, a model council, deep research, skills, memory, and tool calling, all on-device.</p>
+              <p>A private AI workspace running open models (<strong>Bonsai, Qwen3.5, LFM2, SmolLM3, Gemma</strong>) entirely in your browser via WebGPU &mdash; chat, a model council, deep research, skills, memory, and tool calling, all on-device.</p>
               <p><a href="guide/index.html" target="_blank" rel="noopener"><strong>&#128214; New here? Read the User guide &rarr;</strong></a></p>
               <p>Only your search queries touch the network (and only when you choose to). All reasoning stays on your device. Models are cached after first download &mdash; future visits load instantly.</p>
               <p><strong>Requirements:</strong> Chrome 113+ or Edge 113+ (WebGPU).</p>
@@ -2167,8 +2167,6 @@
                 <li><strong>Qwen3.5 4B</strong> (~3 GB) &mdash; text + image + agent (tool calling). Qwen3.5 at q4f16, Apache-2.0; its native 262K context is capped to 32K to keep browser memory bounded.</li>
                 <li><strong>LFM2.5 230M</strong> (~210 MB) &mdash; text + agent (tool calling). Liquid AI's smallest model (released 2026-06-25) &mdash; a dense LFM2 hybrid post-trained for on-device agents; strong at tool use + data extraction for its size, not for math/code/creative writing. q4, 32K context. The smallest tool-capable model here.</li>
                 <li><strong>LFM2 8B A1B</strong> (~4.8 GB) &mdash; text + agent (tool calling). Liquid AI sparse-MoE (8B total / ~1B active) at q4f16, 32K context. WebGPU-only and large &mdash; needs a capable GPU (Chrome/Edge, ~8 GB+ RAM recommended).</li>
-                <li><strong>Granite 4.0 Micro 3B</strong> (~2.1 GB) &mdash; text + agent (tool calling). IBM Granite 4.0, Apache-2.0, function-call trained. q4f16, 32K context.</li>
-                <li><strong>Granite 4.0 Nano 1B</strong> (~1.25 GB) &mdash; text + agent. The low-end Granite sibling, Apache-2.0. q4f16, 32K context.</li>
                 <li><strong>LFM2.5 1.2B</strong> (~760 MB) &mdash; text + agent (tool calling). Liquid AI's LFM2.5-1.2B-Instruct (Jan 2026) &mdash; same LFM2 hybrid arch as the 230M default, RL-tuned for instruction following + tool use. q4f16, 32K context.</li>
                 <li><strong>SmolLM3 3B</strong> (~2.1 GB) &mdash; text + agent (tool calling). HuggingFace SmolLM3, Apache-2.0, dual tool interfaces (xml + python), 6 languages. q4f16, 32K context.</li>
                 <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
@@ -2177,7 +2175,7 @@
                 <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
                 <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
               </ul>
-              <h4>Agent Tools (Ternary Bonsai + Qwen3.5 + Granite + LFM2 + SmolLM3 + Gemma 4)</h4>
+              <h4>Agent Tools (Ternary Bonsai + Qwen3.5 + LFM2 + SmolLM3 + Gemma 4)</h4>
               <ul>
                 <li><strong>calculate</strong> &mdash; math, percentages, conversions</li>
                 <li><strong>get_current_time</strong> &mdash; date/time with timezone</li>
@@ -2651,8 +2649,6 @@
           <option value="qwen35-4b">Qwen3.5 4B &middot; Vision + Agent (~3 GB)</option>
           <option value="lfm2-230m">LFM2.5 230M &middot; Agent (~210 MB)</option>
           <option value="lfm2-8b-a1b">LFM2 8B A1B &middot; Agent (~4.8 GB)</option>
-          <option value="granite4-micro">Granite 4.0 Micro 3B &middot; Agent (~2.1 GB)</option>
-          <option value="granite4-nano-1b">Granite 4.0 Nano 1B &middot; Agent (~1.25 GB)</option>
           <option value="lfm2-1.2b">LFM2.5 1.2B &middot; Agent (~760 MB)</option>
           <option value="smollm3-3b">SmolLM3 3B &middot; Agent (~2.1 GB)</option>
           <option value="gemma3-1b">Gemma 3 1B &middot; Fast (~760 MB)</option>
@@ -7738,38 +7734,6 @@ self.onmessage = async (e) => {
         // Liquid recommends temperature 0.3 / min_p 0.15 / rep 1.05; min_p isn't
         // exposed by Transformers.js generate(), so top_p approximates.
         genConfig: { temperature: 0.3, top_k: 20, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.05 },
-      },
-      'granite4-micro': {
-        id: 'onnx-community/granite-4.0-micro-ONNX-web',
-        label: 'Granite 4.0 Micro 3B',
-        dtype: 'q4f16',
-        size: '~2.1 GB',
-        type: 'causal',
-        multimodal: false,
-        agentCapable: true,
-        contextSize: 32768,
-        // IBM Granite 4.0 Micro — 3B dense, Apache-2.0, explicitly function-call
-        // trained (IBM ships a browser tool-calling demo). The `-ONNX-web` repo is
-        // the Transformers.js layout (onnx/model_q4f16.onnx*, q4f16 only — the
-        // pure-transformer, non-SSM/`H` build so onnxruntime-web can run it).
-        // model_type granite runs on the pinned @4 (4.2.0). Native 128K context,
-        // capped to 32K here to bound browser KV memory. agentCapable per IBM's
-        // function-calling training — verify tool reliability live.
-        genConfig: { temperature: 0.7, top_k: 40, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.05 },
-      },
-      'granite4-nano-1b': {
-        id: 'onnx-community/granite-4.0-1b-ONNX-web',
-        label: 'Granite 4.0 Nano 1B',
-        dtype: 'q4f16',
-        size: '~1.25 GB',
-        type: 'causal',
-        multimodal: false,
-        agentCapable: true,
-        contextSize: 32768,
-        // IBM Granite 4.0 Nano 1B — Apache-2.0, tool-tuned, the low-end sibling of
-        // Micro. Transformers.js-layout `-ONNX-web` export (q4f16). Same granite
-        // model_type on the pinned @4. Native 128K context capped to 32K.
-        genConfig: { temperature: 0.7, top_k: 40, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.05 },
       },
       'lfm2-1.2b': {
         id: 'LiquidAI/LFM2.5-1.2B-Instruct-ONNX',
