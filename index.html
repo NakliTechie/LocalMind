@@ -2674,6 +2674,7 @@
         <button class="mode-chip" id="chipImage" title="Generate an image from a prompt — on-device diffusion (WebGPU)">&#127912; Image</button>
         <button class="mode-chip" id="chipDiffuse" title="Experimental: masked-diffusion text generation — watch the answer denoise (WebGPU)">&#127787;&#65039; Diffuse</button>
         <button class="mode-chip" id="chipOCR" title="Extract text from an image or PDF on-device — GLM-OCR (WebGPU)">&#128196; OCR</button>
+        <button class="mode-chip" id="chipVision" title="Point your camera or drop an image — FastVLM describes it on-device (WebGPU)">&#128247; Vision</button>
         <button class="mode-chip" id="chipVoice" title="Hands-free voice conversation — talk, it transcribes, answers, and reads back (on-device)">&#127897;&#65039; Voice</button>
         <span class="mode-hint" id="modeHint"></span>
       </div>
@@ -2787,6 +2788,27 @@
           </button>
           <div class="voice-status" id="voiceStatus" role="status" aria-live="polite">Hold the mic (or press and hold <b>V</b>) to talk. Release to send &mdash; it transcribes, answers, and reads the reply back. Everything stays on your device.</div>
           <div class="voice-transcript" id="voiceTranscript" aria-live="polite"></div>
+        </div>
+      </div>
+
+      <div class="mode-extra" id="visionPanel" role="region" aria-label="Live Vision">
+        <div class="mode-extra-head">Vision &middot; <span class="memory-count">FastVLM-0.5B &middot; on-device (WebGPU)</span></div>
+        <div class="vision-stage">
+          <video id="visionVideo" playsinline muted style="width:100%;max-height:300px;background:#000;border-radius:8px;display:none"></video>
+          <img id="visionStill" alt="" style="width:100%;max-height:300px;object-fit:contain;border-radius:8px;display:none">
+          <div class="vision-caption" id="visionCaption" role="status" aria-live="polite" style="min-height:2.4em;margin-top:8px;font-size:0.95rem;line-height:1.4"></div>
+        </div>
+        <div class="vision-controls" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center">
+          <button type="button" class="image-btn" id="visionCamBtn">&#128247; Start camera</button>
+          <button type="button" class="image-btn" id="visionDescribeBtn" disabled>Describe</button>
+          <button type="button" class="image-btn" id="visionLiveBtn" disabled aria-pressed="false" title="Auto-describe continuously">Live</button>
+          <button type="button" class="image-btn" id="visionPickBtn">&#128247; Image&hellip;</button>
+          <input type="file" id="visionFileInput" accept="image/*" hidden>
+          <input type="text" id="visionPrompt" placeholder="Ask about what you see (optional)" style="flex:1;min-width:150px;padding:6px 8px">
+        </div>
+        <div class="progress-section visible" id="visionProgressSection" style="border-top:none;background:transparent;padding:8px 0 0">
+          <div class="progress-bar"><div class="progress-fill" id="visionProgressFill" style="background:linear-gradient(90deg,#0b3d2e,#2f9e6e)"></div></div>
+          <div class="progress-text" id="visionProgressText" role="status" aria-live="polite">Start the camera or pick an image, then Describe. First use downloads FastVLM (~0.6&nbsp;GB) once, then runs offline. WebGPU &mdash; best on Chrome/Edge.</div>
         </div>
       </div>
 
@@ -7617,6 +7639,73 @@ self.onmessage = async (e) => {
     self.postMessage({ type: 'error', id: d.id, message: (err && err.message) || String(err) });
   }
 };
+  </script>
+  <script type="text/worker" id="visionWorkerSrc">
+// 📷 Vision worker — FastVLM-0.5B (llava_qwen2) image captioning / VQA on WebGPU.
+// Same transformers.js load shape as the OCR worker (AutoProcessor + per-module
+// dtype), but delivered as a <script type="text/worker"> block read via
+// textContent -> blob URL, so it stays single-file AND sidesteps the
+// template-literal backtick trap. Vision encoder at q4f16 (small, fast — this is
+// a live mode); embed fp16; decoder q4f16.
+import {
+  env,
+  AutoModelForImageTextToText,
+  AutoProcessor,
+  RawImage,
+  TextStreamer,
+  InterruptableStoppingCriteria,
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
+
+env.allowLocalModels = true;
+env.localModelPath = '/models/';
+env.allowRemoteModels = true;
+
+let model = null;
+let processor = null;
+let stopper = null;
+
+self.addEventListener('message', async (e) => {
+  const d = e.data || {};
+  const type = d.type;
+  if (type === 'load') {
+    try {
+      const id = d.modelId;
+      processor = await AutoProcessor.from_pretrained(id);
+      model = await AutoModelForImageTextToText.from_pretrained(id, {
+        device: 'webgpu',
+        dtype: d.dtype || { vision_encoder: 'q4f16', embed_tokens: 'fp16', decoder_model_merged: 'q4f16' },
+        progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
+      });
+      stopper = new InterruptableStoppingCriteria();
+      self.postMessage({ type: 'ready' });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: 'Vision load failed: ' + ((err && err.message) || String(err)) });
+    }
+  } else if (type === 'caption') {
+    if (!model || !processor) { self.postMessage({ type: 'error', id: d.id, message: 'Vision model not loaded' }); return; }
+    try {
+      stopper.reset();
+      const blob = new Blob([d.imageBuffer], { type: d.mimeType || 'image/jpeg' });
+      const image = await RawImage.fromBlob(blob);
+      const messages = [{ role: 'user', content: [{ type: 'image' }, { type: 'text', text: d.prompt || 'Describe this image in one short sentence.' }] }];
+      const text = processor.apply_chat_template(messages, { add_generation_prompt: true });
+      const inputs = await processor(text, image);
+      const tokenizer = processor.tokenizer || processor;
+      let acc = '';
+      const streamer = new TextStreamer(tokenizer, {
+        skip_prompt: true,
+        skip_special_tokens: true,
+        callback_function: (t) => { acc += t; self.postMessage({ type: 'token', id: d.id, token: t }); },
+      });
+      await model.generate({ ...inputs, max_new_tokens: d.maxTokens || 64, do_sample: false, streamer, stopping_criteria: stopper });
+      self.postMessage({ type: 'result', id: d.id, text: acc });
+    } catch (err) {
+      self.postMessage({ type: 'error', id: d.id, message: (err && err.message) || String(err) });
+    }
+  } else if (type === 'stop') {
+    try { stopper && stopper.interrupt(); } catch {}
+  }
+});
   </script>
   <script type="module">
     // ── WebGPU check ────────────────────────────────────────────
@@ -16797,12 +16886,14 @@ self.addEventListener('message', async (e) => {
       chipImage.classList.toggle('active', activeMode === 'image');
       chipDiffuse.classList.toggle('active', activeMode === 'diffuse');
       chipOCR.classList.toggle('active', activeMode === 'ocr');
+      if (chipVision) chipVision.classList.toggle('active', activeMode === 'vision');
       if (chipVoice) chipVoice.classList.toggle('active', activeMode === 'voice');
       comparePanel.classList.toggle('open', activeMode === 'compare');
       batchPanel.classList.toggle('open', activeMode === 'batch');
       imagePanel.classList.toggle('open', activeMode === 'image');
       diffusePanel.classList.toggle('open', activeMode === 'diffuse');
       ocrPanel.classList.toggle('open', activeMode === 'ocr');
+      if (visionPanel) visionPanel.classList.toggle('open', activeMode === 'vision');
       if (voicePanel) voicePanel.classList.toggle('open', activeMode === 'voice');
       if (activeMode === 'batch') chatInput.placeholder = 'One prompt per line — Shift+Enter for newlines, then Send…';
       else if (activeMode === 'compare') chatInput.placeholder = 'Ask once — every ticked model answers, then a judge picks…';
@@ -16810,6 +16901,7 @@ self.addEventListener('message', async (e) => {
       else if (activeMode === 'image') chatInput.placeholder = 'Describe an image to generate…';
       else if (activeMode === 'diffuse') chatInput.placeholder = 'Ask — watch the answer denoise…';
       else if (activeMode === 'ocr') chatInput.placeholder = 'Drop a file in the panel above, or type a note…';
+      else if (activeMode === 'vision') chatInput.placeholder = 'Point the camera or drop an image in the panel above…';
       else chatInput.placeholder = 'Type a message…';
       modeHint.textContent =
         activeMode === 'batch' ? 'Each line runs as its own prompt, in sequence.' :
@@ -16817,6 +16909,7 @@ self.addEventListener('message', async (e) => {
         activeMode === 'image' ? 'On-device diffusion — frees the chat model while active.' :
         activeMode === 'diffuse' ? 'Masked-diffusion text — the answer fills in non-linearly. Frees the chat model.' :
         activeMode === 'ocr' ? 'Extracts text from images / PDFs on-device. Frees the chat model while active.' :
+        activeMode === 'vision' ? 'Describes your camera or an image on-device — frees the chat model while active.' :
         activeMode === 'voice' ? 'Hands-free: talk, it answers and reads back. The chat model stays loaded (voice runs on WASM).' :
         (activeMode === 'chat' && searchOn) ? 'This message will be web-enriched.' : '';
     }
@@ -16827,8 +16920,10 @@ self.addEventListener('message', async (e) => {
       if (prev === 'diffuse' && activeMode !== 'diffuse') onLeaveDiffuseMode();
       if (prev === 'ocr' && activeMode !== 'ocr') onLeaveOCRMode();
       if (prev === 'voice' && activeMode !== 'voice') onLeaveVoiceMode();
+      if (prev === 'vision' && activeMode !== 'vision') onLeaveVisionMode();
       if (activeMode === 'ocr') onEnterOCRMode();
       if (activeMode === 'voice') onEnterVoiceMode();
+      if (activeMode === 'vision') onEnterVisionMode();
       refreshModeUI();
     }
     function needsSearchOrConfigure(what) {
@@ -16847,6 +16942,7 @@ self.addEventListener('message', async (e) => {
     // OCR chip stays enabled even without WebGPU — it degrades to an honest
     // "needs WebGPU" panel state rather than an error wall (spec hard-rule #5).
     chipOCR.addEventListener('click', () => { if (!generating && !ocrBusy) setExclusiveMode('ocr'); });
+    if (chipVision) chipVision.addEventListener('click', () => { if (!generating) setExclusiveMode('vision'); });
     // 🎙 Voice mode chip. Stays enabled without WebGPU (STT/TTS ride WASM).
     if (chipVoice) chipVoice.addEventListener('click', () => { if (!generating) setExclusiveMode('voice'); });
     // Push-to-talk: hold the mic (pointer) or hold V (when not typing). Release = send.
@@ -17100,6 +17196,135 @@ self.addEventListener('message', async (e) => {
       ocrConsent.hidden = true;
       ocrProgressFill.style.width = '0%';
       ocrProgressText.textContent = OCR_PROGRESS_DEFAULT;
+      maybeRestoreChat();
+    }
+
+    // ── 📷 Vision (FastVLM-0.5B) ─────────────────────────────────
+    // Point the camera (or drop an image) → on-device caption/VQA via FastVLM,
+    // a separate WebGPU worker built from the #visionWorkerSrc block. Suspends
+    // the chat model while active (one heavy WebGPU worker at a time), same as
+    // OCR/Image/Diffuse; restores it on exit.
+    const VISION_MODEL_ID = 'onnx-community/FastVLM-0.5B-ONNX';
+    const visionPanel   = document.getElementById('visionPanel');
+    const chipVision    = document.getElementById('chipVision');
+    const visionVideo   = document.getElementById('visionVideo');
+    const visionStill   = document.getElementById('visionStill');
+    const visionCaption = document.getElementById('visionCaption');
+    const visionCamBtn  = document.getElementById('visionCamBtn');
+    const visionDescribeBtn = document.getElementById('visionDescribeBtn');
+    const visionLiveBtn = document.getElementById('visionLiveBtn');
+    const visionPickBtn = document.getElementById('visionPickBtn');
+    const visionFileInput = document.getElementById('visionFileInput');
+    const visionPromptInput = document.getElementById('visionPrompt');
+    const visionProgressFill = document.getElementById('visionProgressFill');
+    const visionProgressText = document.getElementById('visionProgressText');
+    const VIS_PROGRESS_DEFAULT = 'Start the camera or pick an image, then Describe. First use downloads FastVLM (~0.6 GB) once, then runs offline. WebGPU — best on Chrome/Edge.';
+    const VS = { worker: null, ready: false, loading: false, stream: null, busy: false, live: false, liveTimer: null, reqId: 0, still: null };
+
+    function ensureVisionWorker() {
+      if (VS.worker) return VS.worker;
+      const src = document.getElementById('visionWorkerSrc').textContent;
+      const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'application/javascript' })), { type: 'module' });
+      w.addEventListener('error', (e) => { VS.loading = false; visionProgressText.textContent = 'Vision worker error: ' + (e.message || 'failed to start'); });
+      w.addEventListener('message', (e) => {
+        const d = e.data || {};
+        if (d.type === 'progress') {
+          const p = d.data || {};
+          if (p.status === 'progress') { visionProgressFill.style.width = Math.round(p.progress || 0) + '%'; visionProgressText.textContent = 'Downloading FastVLM — ' + (p.file || '') + ' ' + Math.round(p.progress || 0) + '%'; }
+        } else if (d.type === 'ready') {
+          VS.ready = true; VS.loading = false; visionProgressFill.style.width = '100%';
+          visionProgressText.textContent = 'FastVLM ready — Describe the camera or an image.';
+          visionDescribeBtn.disabled = false; visionLiveBtn.disabled = false;
+          if (VS.live || VS.still || VS.stream) runVisionCaption();
+        } else if (d.type === 'token') {
+          if (d.id === VS.reqId) visionCaption.textContent = (visionCaption.textContent === '…' ? '' : visionCaption.textContent) + d.token;
+        } else if (d.type === 'result') {
+          if (d.id === VS.reqId) visionCaption.textContent = d.text || '(no description)';
+          VS.busy = false;
+          if (VS.live && activeMode === 'vision') scheduleLiveCaption();
+        } else if (d.type === 'error') {
+          VS.busy = false; VS.loading = false;
+          if (!/not loaded/.test(d.message || '')) visionProgressText.textContent = 'Vision error: ' + (d.message || 'failed');
+        }
+      });
+      VS.worker = w;
+      return w;
+    }
+    function loadVisionModel() {
+      if (VS.ready || VS.loading) return;
+      VS.loading = true;
+      // Free the chat model's VRAM first (one heavy WebGPU worker at a time).
+      if (activeModelKey) lastChatModelKey = activeModelKey;
+      try { LocalMind.runtime.unload(); } catch {}
+      worker = null; modelReady = false;
+      try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
+      visionProgressFill.style.width = '0%';
+      visionProgressText.textContent = 'Loading FastVLM (first use downloads ~0.6 GB once, then offline)…';
+      ensureVisionWorker().postMessage({ type: 'load', modelId: VISION_MODEL_ID });
+    }
+    function grabVisionFrame() {
+      let src, sw, sh;
+      if (VS.stream && visionVideo.videoWidth) { src = visionVideo; sw = visionVideo.videoWidth; sh = visionVideo.videoHeight; }
+      else if (VS.still && VS.still.naturalWidth) { src = VS.still; sw = VS.still.naturalWidth; sh = VS.still.naturalHeight; }
+      else return null;
+      const scale = Math.min(1, 768 / Math.max(sw, sh));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(sw * scale)); canvas.height = Math.max(1, Math.round(sh * scale));
+      canvas.getContext('2d').drawImage(src, 0, 0, canvas.width, canvas.height);
+      return new Promise((resolve) => canvas.toBlob((b) => b ? b.arrayBuffer().then(resolve) : resolve(null), 'image/jpeg', 0.85));
+    }
+    async function runVisionCaption() {
+      if (!VS.ready) { loadVisionModel(); return; }
+      if (VS.busy) return;
+      const buf = await grabVisionFrame();
+      if (!buf) { visionProgressText.textContent = 'Start the camera or pick an image first.'; return; }
+      VS.busy = true;
+      const id = ++VS.reqId;
+      visionCaption.textContent = '…';
+      const prompt = (visionPromptInput.value || '').trim() || 'Describe this image in one short sentence.';
+      ensureVisionWorker().postMessage({ type: 'caption', id, imageBuffer: buf, mimeType: 'image/jpeg', prompt, maxTokens: 64 }, [buf]);
+    }
+    function scheduleLiveCaption() {
+      clearTimeout(VS.liveTimer);
+      VS.liveTimer = setTimeout(() => { if (VS.live && activeMode === 'vision' && !VS.busy) runVisionCaption(); }, 500);
+    }
+    async function startVisionCamera() {
+      try {
+        VS.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+        visionVideo.srcObject = VS.stream; visionVideo.style.display = ''; visionStill.style.display = 'none'; VS.still = null;
+        await visionVideo.play().catch(() => {});
+        visionCamBtn.textContent = '⏹ Stop camera';
+        loadVisionModel();
+      } catch (e) { visionProgressText.textContent = 'Camera blocked or unavailable (' + (e.name || e.message || e) + '). You can still pick an image.'; }
+    }
+    function stopVisionCamera() {
+      try { if (VS.stream) VS.stream.getTracks().forEach(t => t.stop()); } catch {}
+      VS.stream = null; try { visionVideo.srcObject = null; } catch {} visionVideo.style.display = 'none';
+      visionCamBtn.textContent = '📷 Start camera';
+      VS.live = false; visionLiveBtn.setAttribute('aria-pressed', 'false'); visionLiveBtn.classList.remove('active'); clearTimeout(VS.liveTimer);
+    }
+    if (visionCamBtn) visionCamBtn.addEventListener('click', () => { if (VS.stream) stopVisionCamera(); else startVisionCamera(); });
+    if (visionDescribeBtn) visionDescribeBtn.addEventListener('click', () => runVisionCaption());
+    if (visionLiveBtn) visionLiveBtn.addEventListener('click', () => {
+      VS.live = !VS.live; visionLiveBtn.setAttribute('aria-pressed', String(VS.live)); visionLiveBtn.classList.toggle('active', VS.live);
+      if (VS.live) { if (!VS.ready) loadVisionModel(); else scheduleLiveCaption(); } else clearTimeout(VS.liveTimer);
+    });
+    if (visionPickBtn) visionPickBtn.addEventListener('click', () => visionFileInput.click());
+    if (visionFileInput) visionFileInput.addEventListener('change', () => {
+      const f = visionFileInput.files && visionFileInput.files[0]; if (!f) return;
+      stopVisionCamera();
+      const img = new Image();
+      img.onload = () => { VS.still = img; visionStill.src = img.src; visionStill.style.display = ''; visionVideo.style.display = 'none'; if (VS.ready) runVisionCaption(); else loadVisionModel(); };
+      img.src = URL.createObjectURL(f);
+    });
+    function onEnterVisionMode() {
+      visionCaption.textContent = '';
+      if (!VS.ready && !VS.loading) visionProgressText.textContent = VIS_PROGRESS_DEFAULT;
+    }
+    function onLeaveVisionMode() {
+      VS.live = false; clearTimeout(VS.liveTimer);
+      stopVisionCamera();
+      try { if (VS.worker) VS.worker.postMessage({ type: 'stop' }); } catch {}
       maybeRestoreChat();
     }
 
