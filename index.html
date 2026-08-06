@@ -2659,6 +2659,7 @@
           <option value="lfm2-230m-gguf">LFM2.5 230M &middot; GGUF (~170 MB)</option>
           <option value="lfm2-230m-webgpu" selected>LFM2.5 230M &middot; WebGPU kernels (~140 MB)</option>
           <option value="gemma4-e2b-webgpu">Gemma 4 E2B &middot; WebGPU kernels (~2 GB)</option>
+          <option value="bonsai-27b-webgpu">Bonsai 27B &middot; 1-bit WebGPU kernels (~3.8 GB)</option>
           <option value="smollm2-360m-gguf">SmolLM2 360M &middot; GGUF (~270 MB)</option>
           <option value="qwen25-1.5b-gguf">Qwen2.5 1.5B &middot; GGUF (~1.1 GB)</option>
         </select>
@@ -7509,6 +7510,104 @@ self.onmessage = async (e) => {
   }
 };
   </script>
+  <script type="text/worker" id="bonsai27bWebgpuWorkerSrc">
+// The factory replaces __BONSAI27B_ENGINE_URL__ with the engine's absolute same-origin URL.
+const ENGINE_URL = '__BONSAI27B_ENGINE_URL__';
+
+let Bonsai27bMobile = null;
+let model = null;
+let abortController = null;
+let stopFlag = false;
+let lastHistoryLen = 0; // tracks conversation length to reset KV/recurrent state on a fresh chat
+
+const WEIGHTS_LABEL = 'Bonsai 27B (1-bit)';
+const post = (m) => self.postMessage(m);
+
+self.onmessage = async (e) => {
+  const d = e.data || {};
+  try {
+    if (d.type === 'load') {
+      if (!Bonsai27bMobile) ({ Bonsai27bMobile } = await import(ENGINE_URL));
+      post({ type: 'progress', data: { status: 'initiate', file: WEIGHTS_LABEL } });
+      // load(modelId, opts): null falls back to the engine's DEFAULT_MODEL_ID
+      // (the ungated lmstudio-community/Bonsai-27B-GGUF Q1_0 mirror baked in).
+      model = await Bonsai27bMobile.load(d.modelId || null, {
+        onProgress: (ev) => {
+          if (!ev) return;
+          if (ev.status === 'weights') {
+            const loaded = typeof ev.loaded === 'number' ? ev.loaded : null;
+            const total = typeof ev.total === 'number' ? ev.total : null;
+            if (loaded != null && total != null && total > 0) {
+              post({ type: 'progress', data: { status: 'progress_total', file: WEIGHTS_LABEL, loaded, total } });
+            } else if (typeof ev.fraction === 'number') {
+              post({ type: 'progress', data: { status: 'progress_total', file: WEIGHTS_LABEL, loaded: Math.round(ev.fraction * 1000), total: 1000 } });
+            }
+          } else if (ev.status === 'tokenizer') {
+            post({ type: 'progress', data: { status: 'loading', file: 'tokenizer' } });
+          } else if (ev.status === 'init') {
+            post({ type: 'progress', data: { status: 'initiate', file: 'WebGPU device' } });
+          }
+        },
+      });
+      lastHistoryLen = 0;
+      try { if (typeof model.warmup === 'function') await model.warmup(); } catch (_) {}
+      post({ type: 'ready', backend: 'webgpu' });
+    } else if (d.type === 'generate') {
+      if (!model) { post({ type: 'error', message: 'Bonsai 27B WebGPU model not loaded' }); return; }
+      stopFlag = false;
+      const cfg = d.generationConfig || {};
+      // Qwen3.6 / Bonsai has a real system role and applies its chat template
+      // internally, so pass {role, content} straight through (strip multimodal
+      // blocks to text). Unlike Gemma, no system-folding.
+      const msgs = (d.messages || []).map((m) => {
+        const content = typeof m.content === 'string' ? m.content
+          : Array.isArray(m.content) ? m.content.filter((b) => b && b.type === 'text').map((b) => b.text).join('\n')
+          : String(m.content == null ? '' : m.content);
+        const role = (m.role === 'system' || m.role === 'assistant') ? m.role : 'user';
+        return { role, content };
+      });
+      const turnCount = msgs.length;
+      if ((turnCount <= 1 || msgs.length < lastHistoryLen) && typeof model.reset === 'function') {
+        try { model.reset(); } catch (_) {}
+      }
+      lastHistoryLen = msgs.length;
+      abortController = new AbortController();
+      let prev = '';
+      try {
+        // generate() yields { text } CUMULATIVE; the shared protocol streams DELTAS.
+        const stream = model.generate(msgs, {
+          maxNewTokens: cfg.max_new_tokens || cfg.max_tokens || 1024,
+          signal: abortController.signal,
+        });
+        for await (const out of stream) {
+          if (stopFlag) break;
+          const full = out && typeof out.text === 'string' ? out.text : '';
+          if (full.length > prev.length) {
+            post({ type: 'token', token: full.slice(prev.length) });
+            prev = full;
+          }
+        }
+      } catch (err) {
+        const s = String((err && err.message) || err);
+        if (!(stopFlag || s.toLowerCase().includes('abort'))) throw err;
+      }
+      post({ type: 'complete' });
+    } else if (d.type === 'stop') {
+      stopFlag = true;
+      if (abortController) { try { abortController.abort(); } catch (_) {} }
+    } else if (d.type === 'unload') {
+      stopFlag = true;
+      if (abortController) { try { abortController.abort(); } catch (_) {} }
+      try { if (model && typeof model.reset === 'function') model.reset(); } catch (_) {}
+      try { if (model && typeof model.dispose === 'function') model.dispose(); } catch (_) {}
+      model = null;
+      lastHistoryLen = 0;
+    }
+  } catch (err) {
+    post({ type: 'error', message: (err && err.message) || String(err) });
+  }
+};
+  </script>
   <script type="text/worker" id="ttsWorkerSrc">
 // TTS worker — Kokoro-82M read-aloud via kokoro-js (CDN bundle; brings its own
 // isolated transformers build, so no clash with the chat worker's @4). Runs on
@@ -7898,6 +7997,25 @@ self.onmessage = async (e) => {
         // from the webml-community/gemma-4-webgpu-kernels Space. Quantization-aware
         // int4 (smaller + higher fidelity than post-hoc q4); ~250 tok/s on an M4 Max.
         // WebGPU-only (no CPU fallback). Text-only here (this engine is a decoder).
+        genConfig: { max_new_tokens: 2048 },
+      },
+      // backend:'bonsai27b-webgpu' → loaded by the custom-WGSL Bonsai27bMobile engine
+      // (bonsai_27b.js), a from-scratch WebGPU engine for the 1-bit Bonsai 27B
+      // (Qwen3.6-27B backbone, hybrid Gated-DeltaNet + full attention): hand-written
+      // WGSL for Q1_0_g128 on-the-fly dequant, the linear-attention recurrence, RoPE,
+      // RMSNorm, SwiGLU, GQA attention — reading the Q1_0 GGUF directly. Vendored from
+      // the webml-community/bonsai-webgpu-kernels Space; weights from the ungated
+      // Apache-2.0 lmstudio-community/Bonsai-27B-GGUF mirror (engine resolves it itself).
+      // Context capped for browser memory; raise after a foreground-VRAM check.
+      'bonsai-27b-webgpu': {
+        id: 'lmstudio-community/Bonsai-27B-GGUF',
+        label: 'Bonsai 27B · 1-bit WebGPU kernels',
+        backend: 'bonsai27b-webgpu',
+        size: '~3.8 GB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 16384,
         genConfig: { max_new_tokens: 2048 },
       },
       'smollm2-360m-gguf': {
@@ -12723,8 +12841,10 @@ ${JSON.stringify({ name, result })}
         const isWllama = options.backend === 'wllama';
         const isLfm2Webgpu = options.backend === 'lfm2-webgpu';
         const isGemma4Webgpu = options.backend === 'gemma4-webgpu';
+        const isBonsai27bWebgpu = options.backend === 'bonsai27b-webgpu';
         const w = isLfm2Webgpu ? createLfm2WebgpuWorker()
           : isGemma4Webgpu ? createGemma4WebgpuWorker()
+          : isBonsai27bWebgpu ? createBonsai27bWebgpuWorker()
           : isWllama ? createWllamaWorker()
           : createWorker();
         this._worker = w;
@@ -13604,6 +13724,25 @@ self.addEventListener('message', async (e) => {
       const w = new Worker(url, { type: 'module' });
       w.addEventListener('error', (e) => {
         console.error('Gemma 4 WebGPU worker error:', e.message);
+      });
+      return w;
+    }
+
+    // ── Bonsai 27B WebGPU-kernels worker factory (custom-WGSL Bonsai27bMobile engine) ──
+    // Twin of createGemma4WebgpuWorker(): reads #bonsai27bWebgpuWorkerSrc, injects the
+    // vendored bonsai_27b.js engine's absolute same-origin URL, and builds a blob module
+    // worker that speaks the shared chat protocol. 1-bit Q1_0 GGUF (~3.8 GB).
+    function createBonsai27bWebgpuWorker() {
+      const src = document.getElementById('bonsai27bWebgpuWorkerSrc');
+      let code = src ? src.textContent : '';
+      if (!code) throw new Error('Bonsai 27B WebGPU worker source missing');
+      const engineUrl = new URL('bonsai_27b.js', document.baseURI).href;
+      code = code.replaceAll('__BONSAI27B_ENGINE_URL__', engineUrl);
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url, { type: 'module' });
+      w.addEventListener('error', (e) => {
+        console.error('Bonsai 27B WebGPU worker error:', e.message);
       });
       return w;
     }

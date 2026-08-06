@@ -1,6 +1,7 @@
 *
 !index.html
 !lfm2_5.js
+!bonsai_27b.js
 !inference-worker.js
 !onnx-inference-worker.js
 !image-inference-worker.js
