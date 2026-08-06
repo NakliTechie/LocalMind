@@ -7549,6 +7549,15 @@ self.onmessage = async (e) => {
           }
         },
       });
+      // Bonsai 27B (Qwen3.6) is a THINKING model, and its streaming decoder runs
+      // decode(..., {skip_special_tokens:true}) — which deletes the <think>/</think>
+      // markers before this worker sees them. With thinking ON, LocalMind's reasoning-
+      // collapse UI (keys on <|think|>) finds no markers and paints the whole chain-of-
+      // thought as the answer. Default thinking OFF for clean direct answers.
+      // chatTemplateArgs is a public field the engine re-reads into its template args on
+      // every generate. Follow-up: a "collapsed reasoning" mode that keeps thinking on
+      // and reconstructs <|think|>…<|/think|> from the raw token id + thinkCloseTokenId.
+      try { model.chatTemplateArgs = { enable_thinking: false }; } catch (_) {}
       lastHistoryLen = 0;
       try { if (typeof model.warmup === 'function') await model.warmup(); } catch (_) {}
       post({ type: 'ready', backend: 'webgpu' });
