@@ -2647,6 +2647,7 @@
           <option value="bonsai-ternary-1.7b">Ternary Bonsai 1.7B &middot; Agent (~470 MB)</option>
           <option value="bonsai-ternary-4b">Ternary Bonsai 4B &middot; Agent (~1.1 GB)</option>
           <option value="bonsai-ternary-8b">Ternary Bonsai 8B &middot; Agent (~2.2 GB)</option>
+          <option value="bonsai-27b-webgpu">Ternary Bonsai 27B &middot; Agent (~3.8 GB)</option>
           <option value="qwen35-4b">Qwen3.5 4B &middot; Vision + Agent (~3 GB)</option>
           <option value="lfm2-230m">LFM2.5 230M &middot; Agent (~210 MB)</option>
           <option value="lfm2-8b-a1b">LFM2 8B A1B &middot; Agent (~4.8 GB)</option>
@@ -2659,7 +2660,6 @@
           <option value="lfm2-230m-gguf">LFM2.5 230M &middot; GGUF (~170 MB)</option>
           <option value="lfm2-230m-webgpu" selected>LFM2.5 230M &middot; WebGPU kernels (~140 MB)</option>
           <option value="gemma4-e2b-webgpu">Gemma 4 E2B &middot; WebGPU kernels (~2 GB)</option>
-          <option value="bonsai-27b-webgpu">Bonsai 27B &middot; 1-bit WebGPU kernels (~3.8 GB)</option>
           <option value="smollm2-360m-gguf">SmolLM2 360M &middot; GGUF (~270 MB)</option>
           <option value="qwen25-1.5b-gguf">Qwen2.5 1.5B &middot; GGUF (~1.1 GB)</option>
         </select>
@@ -8031,7 +8031,7 @@ self.onmessage = async (e) => {
       // Context capped for browser memory; raise after a foreground-VRAM check.
       'bonsai-27b-webgpu': {
         id: 'lmstudio-community/Bonsai-27B-GGUF',
-        label: 'Bonsai 27B · 1-bit WebGPU kernels',
+        label: 'Ternary Bonsai 27B',
         backend: 'bonsai27b-webgpu',
         size: '~3.8 GB',
         type: 'causal',
@@ -14995,6 +14995,27 @@ self.addEventListener('message', async (e) => {
     // loop / tools / RAG / research / compare all work unchanged.
     let chromeAIAbort = null;
     function chromeAISupported() { return typeof self !== 'undefined' && 'LanguageModel' in self; }
+    // Desktop Chrome/Edge with Gemini Nano ALREADY downloaded → use it as the zero-wait
+    // default so the user gets a first token with no model download. Returns 'gemini-nano'
+    // or null. 'downloadable' is deliberately excluded — defaulting to it would stall
+    // first-run on a Chrome-managed model download, worse than the ~140 MB LFM2 fallback.
+    // Feature-detected + async; any failure (no API, mobile, throw) falls back cleanly.
+    async function pickNanoDefault() {
+      try {
+        if (!chromeAISupported() || !MODELS['gemini-nano']) return null;
+        const uaData = navigator.userAgentData;
+        const isMobile = uaData ? !!uaData.mobile
+          : /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+        if (isMobile) return null;   // Nano is desktop-only
+        // Race a timeout so a hung availability() can never stall the boot model-load
+        // — fall back to the normal default instead. availability() is normally instant.
+        const avail = await Promise.race([
+          LanguageModel.availability(),
+          new Promise((res) => setTimeout(() => res('timeout'), 2500)),
+        ]);
+        return avail === 'available' ? 'gemini-nano' : null;
+      } catch { return null; }
+    }
 
     async function loadChromeAIModel(key, m) {
       if (loadResolvers) { const r = loadResolvers; loadResolvers = null; try { r.reject(new Error('Load superseded')); } catch {} }
@@ -18053,6 +18074,12 @@ self.addEventListener('message', async (e) => {
     // ── Init ────────────────────────────────────────────────────
     renderRestoredMessages();
     refreshHistoryPanel();   // populate the docked desktop history rail on load
+    // Prefer Chrome's built-in Gemini Nano as a ZERO-download default when it's actually
+    // ready on desktop (Prompt API present + availability()==='available') — the user gets
+    // a first token with no model download. Nano is a chrome-ai backend (no WebGPU needed),
+    // so this preference applies in both branches; if Nano isn't ready we fall back to the
+    // existing WebGPU/CPU steering.
+    const nanoDefaultKey = await pickNanoDefault();
     if (noWebGPU) {
       // Reveal the soft banner, mark WebGPU-only models in the picker, and steer
       // the default load to a CPU-capable GGUF (wllama) — or, if none, leave it
@@ -18070,8 +18097,11 @@ self.addEventListener('message', async (e) => {
         if (cpuOk) { if (!firstCpuKey) firstCpuKey = opt.value; }
         else { opt.disabled = true; if (!/needs WebGPU/.test(opt.textContent)) opt.textContent += ' — needs WebGPU'; }
       }
-      if (firstCpuKey) { modelSelect.value = firstCpuKey; loadModel(firstCpuKey); }
+      const bootKey = nanoDefaultKey || firstCpuKey;
+      if (bootKey) { modelSelect.value = bootKey; loadModel(bootKey); }
       else { statusText.textContent = 'Connect a server'; chatInput.placeholder = 'Connect a local endpoint in Settings to start…'; }
+    } else if (nanoDefaultKey) {
+      modelSelect.value = nanoDefaultKey; loadModel(nanoDefaultKey);
     } else {
       loadModel(modelSelect.value);
     }
