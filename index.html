@@ -15007,7 +15007,12 @@ self.addEventListener('message', async (e) => {
         const isMobile = uaData ? !!uaData.mobile
           : /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
         if (isMobile) return null;   // Nano is desktop-only
-        const avail = await LanguageModel.availability();
+        // Race a timeout so a hung availability() can never stall the boot model-load
+        // — fall back to the normal default instead. availability() is normally instant.
+        const avail = await Promise.race([
+          LanguageModel.availability(),
+          new Promise((res) => setTimeout(() => res('timeout'), 2500)),
+        ]);
         return avail === 'available' ? 'gemini-nano' : null;
       } catch { return null; }
     }
