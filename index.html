@@ -7549,15 +7549,6 @@ self.onmessage = async (e) => {
           }
         },
       });
-      // Bonsai 27B (Qwen3.6) is a THINKING model, and its streaming decoder runs
-      // decode(..., {skip_special_tokens:true}) — which deletes the <think>/</think>
-      // markers before this worker sees them. With thinking ON, LocalMind's reasoning-
-      // collapse UI (keys on <|think|>) finds no markers and paints the whole chain-of-
-      // thought as the answer. Default thinking OFF for clean direct answers.
-      // chatTemplateArgs is a public field the engine re-reads into its template args on
-      // every generate. Follow-up: a "collapsed reasoning" mode that keeps thinking on
-      // and reconstructs <|think|>…<|/think|> from the raw token id + thinkCloseTokenId.
-      try { model.chatTemplateArgs = { enable_thinking: false }; } catch (_) {}
       lastHistoryLen = 0;
       try { if (typeof model.warmup === 'function') await model.warmup(); } catch (_) {}
       post({ type: 'ready', backend: 'webgpu' });
@@ -7565,6 +7556,13 @@ self.onmessage = async (e) => {
       if (!model) { post({ type: 'error', message: 'Bonsai 27B WebGPU model not loaded' }); return; }
       stopFlag = false;
       const cfg = d.generationConfig || {};
+      // Toggle-controlled thinking. LocalMind posts `enableThinking` (from the
+      // "Show reasoning" toggle) on the generate message. chatTemplateArgs is a
+      // public field the engine re-reads into its chat-template args on every
+      // generate, so enable_thinking is honoured per-request. OFF → no reasoning
+      // → clean answer; ON → the model thinks and we collapse it (below).
+      const wantThink = d.enableThinking === true;
+      try { model.chatTemplateArgs = { enable_thinking: wantThink }; } catch (_) {}
       // Qwen3.6 / Bonsai has a real system role and applies its chat template
       // internally, so pass {role, content} straight through (strip multimodal
       // blocks to text). Unlike Gemma, no system-folding.
@@ -7581,9 +7579,17 @@ self.onmessage = async (e) => {
       }
       lastHistoryLen = msgs.length;
       abortController = new AbortController();
+      // The streaming decoder strips the <think>/</think> tokens, so when thinking
+      // is ON we rebuild LocalMind's <|think|>…<|/think|> markers from the raw token
+      // id (out.token) + model.thinkCloseTokenId, so renderMarkdown() collapses the
+      // chain-of-thought into the "Thought process" block instead of dumping it.
+      const thinkClose = (wantThink && model && model.thinkCloseTokenId != null)
+        ? model.thinkCloseTokenId : null;
+      let thinkOpened = false;
+      let inThink = thinkClose != null;
       let prev = '';
       try {
-        // generate() yields { text } CUMULATIVE; the shared protocol streams DELTAS.
+        // generate() yields { token, text } — text CUMULATIVE; we stream DELTAS.
         const stream = model.generate(msgs, {
           maxNewTokens: cfg.max_new_tokens || cfg.max_tokens || 1024,
           signal: abortController.signal,
@@ -7591,15 +7597,22 @@ self.onmessage = async (e) => {
         for await (const out of stream) {
           if (stopFlag) break;
           const full = out && typeof out.text === 'string' ? out.text : '';
-          if (full.length > prev.length) {
-            post({ type: 'token', token: full.slice(prev.length) });
-            prev = full;
+          const delta = full.length > prev.length ? full.slice(prev.length) : '';
+          prev = full;
+          if (inThink && !thinkOpened) { post({ type: 'token', token: '<|think|>' }); thinkOpened = true; }
+          if (inThink && out && out.token === thinkClose) {
+            if (delta) post({ type: 'token', token: delta });
+            post({ type: 'token', token: '<|/think|>\n' });
+            inThink = false;
+            continue;
           }
+          if (delta) post({ type: 'token', token: delta });
         }
       } catch (err) {
         const s = String((err && err.message) || err);
         if (!(stopFlag || s.toLowerCase().includes('abort'))) throw err;
       }
+      if (inThink && thinkOpened) post({ type: 'token', token: '<|/think|>' });
       post({ type: 'complete' });
     } else if (d.type === 'stop') {
       stopFlag = true;
@@ -8024,6 +8037,7 @@ self.onmessage = async (e) => {
         type: 'causal',
         multimodal: false,
         agentCapable: true,
+        thinking: true,   // Qwen3.6 reasoning model — shows the "Show reasoning" toggle
         contextSize: 16384,
         genConfig: { max_new_tokens: 2048 },
       },
@@ -11386,7 +11400,7 @@ self.onmessage = async (e) => {
       attachBtn.title = isMultimodal
         ? 'Attach supported media or a document'
         : 'Attach a document (PDF, DOCX, TXT, MD, CSV) → memory';
-      thinkingRow.classList.toggle('hidden', !isMultimodal);
+      thinkingRow.classList.toggle('hidden', !(isMultimodal || MODELS[activeModelKey]?.thinking));
       plannerRow.classList.toggle('hidden', !isAgent);
       searchSettingsSection.style.display = isAgent ? '' : 'none';
       samSettingsSection.style.display = isAgent ? '' : 'none';
