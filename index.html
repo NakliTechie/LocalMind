@@ -980,6 +980,12 @@
 
     .afford-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
+    .afford-btn.active {
+      background: var(--indigo-100);
+      border-color: var(--indigo-500);
+      color: var(--indigo-600);
+    }
+
     .afford-btn.recording {
       background: var(--error-bg);
       border-color: var(--error-text);
@@ -2798,6 +2804,7 @@
           <button class="afford-btn" id="attachBtn" title="Attach file" aria-label="Attach file">&#128206;</button>
           <button class="afford-btn" id="cameraBtn" title="Camera" aria-label="Take photo">&#128247;</button>
           <button class="afford-btn" id="micBtn" title="Record audio" aria-label="Record audio">&#127908;</button>
+          <button class="afford-btn" id="reasoningBtn" title="Show reasoning (thinking mode)" aria-label="Toggle reasoning" aria-pressed="false" style="display:none">&#129504;</button>
         </div>
         <button class="afford-btn" id="voiceBtn" title="Voice to text (Whisper, on-device)" aria-label="Voice to text">&#x1F5E3;</button>
         <textarea id="chatInput" rows="1" placeholder="Type a message..." disabled></textarea>
@@ -9333,9 +9340,23 @@ self.onmessage = async (e) => {
     const attachBtn = document.getElementById('attachBtn');
     const cameraBtn = document.getElementById('cameraBtn');
     const micBtn = document.getElementById('micBtn');
+    const reasoningBtn = document.getElementById('reasoningBtn');
     const fileInput = document.getElementById('fileInput');
     const thinkingToggle = document.getElementById('thinkingToggle');
     const thinkingRow = document.getElementById('thinkingRow');
+    // Reasoning toggle surfaced as an input-bar button — mirrors the Settings
+    // "Show reasoning" checkbox (same state; read at send via thinkingToggle.checked).
+    function syncReasoningBtn() {
+      if (!reasoningBtn) return;
+      const on = !!(thinkingToggle && thinkingToggle.checked);
+      reasoningBtn.classList.toggle('active', on);
+      reasoningBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      reasoningBtn.title = on ? 'Reasoning on — model shows its thinking' : 'Show reasoning (thinking mode)';
+    }
+    if (reasoningBtn && thinkingToggle) {
+      reasoningBtn.addEventListener('click', () => { thinkingToggle.checked = !thinkingToggle.checked; syncReasoningBtn(); });
+      thinkingToggle.addEventListener('change', syncReasoningBtn);
+    }
     const plannerRow = document.getElementById('plannerRow');
     const plannerToggle = document.getElementById('plannerToggle');
     plannerToggle.checked = plannerEnabled;
@@ -11401,7 +11422,9 @@ self.onmessage = async (e) => {
       attachBtn.title = isMultimodal
         ? 'Attach supported media or a document'
         : 'Attach a document (PDF, DOCX, TXT, MD, CSV) → memory';
-      thinkingRow.classList.toggle('hidden', !(isMultimodal || MODELS[activeModelKey]?.thinking));
+      const showReasoningControls = !!(isMultimodal || MODELS[activeModelKey]?.thinking);
+      thinkingRow.classList.toggle('hidden', !showReasoningControls);
+      if (reasoningBtn) { reasoningBtn.style.display = showReasoningControls ? '' : 'none'; syncReasoningBtn(); }
       plannerRow.classList.toggle('hidden', !isAgent);
       searchSettingsSection.style.display = isAgent ? '' : 'none';
       samSettingsSection.style.display = isAgent ? '' : 'none';
