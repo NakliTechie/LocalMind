@@ -16,7 +16,7 @@ It began as a private chatbot and grew into a small **AI workbench**: chat, imag
 
 ## What you can do
 
-- 💬 **Chat with private local models** — several to choose from, from a tiny ~470 MB model up to multi-GB ones. They reason, write, and code.
+- 💬 **Chat with private local models** — several to choose from, from a tiny ~470 MB model up to a **27B-class model (Ternary Bonsai 27B, 1-bit)** running entirely in the tab. They reason, write, and code.
 - 🎨 **Generate images** — text-to-image on your GPU, right in the tab.
 - 🌫️ **Watch text "denoise"** — an experimental diffusion-text mode (a different way of generating).
 - 🌐 **Search the web** *(optional)* — bring your own free search key; answers come back with clickable sources.
@@ -42,9 +42,9 @@ Pick whatever fits your hardware — all three are local, nothing leaves your de
 
 ### Custom WebGPU engine (the default)
 
-The default model, **LFM2.5 230M**, runs on a **from-scratch WebGPU inference engine** — every kernel (matmul, attention, RoPE, RMSNorm, the int4 dequant) is hand-written WGSL, reading the quantized weights directly with **no ONNX runtime and no llama.cpp**. At ~140 MB it downloads in seconds and decodes at *hundreds* of tokens/sec, so you're chatting almost immediately. A larger model, **Gemma 4 E2B**, runs on the same approach when you want more capability (~250 tok/s on an M4 Max). Both are WebGPU-only.
+The default model, **LFM2.5 230M**, runs on a **from-scratch WebGPU inference engine** — every kernel (matmul, attention, RoPE, RMSNorm, the int4 dequant) is hand-written WGSL, reading the quantized weights directly with **no ONNX runtime and no llama.cpp**. At ~140 MB it downloads in seconds and decodes at *hundreds* of tokens/sec, so you're chatting almost immediately. A larger model, **Gemma 4 E2B**, runs on the same approach when you want more capability (~250 tok/s on an M4 Max) — and it scales all the way up to **Ternary Bonsai 27B**, a 27B-parameter model (1-bit, ~3.8 GB) running entirely in the tab. All are WebGPU-only.
 
-These two engines are ported, largely verbatim, from the open-source [`webml-community`](https://huggingface.co/webml-community) Spaces on Hugging Face — [`gemma-4-webgpu-kernels`](https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels) and [`lfm2-webgpu-kernels`](https://huggingface.co/spaces/webml-community/lfm2-webgpu-kernels). `webml-community` is the home of [**Transformers.js**](https://github.com/huggingface/transformers.js), the in-browser ML library by **[Xenova](https://github.com/xenova) (Joshua Lochner)** at Hugging Face — the foundation this entire project is built on, and where these WebGPU-kernel engines come from. The Gemma engine also has a standalone home at [tylerstraub/gemma4-webgpu](https://github.com/tylerstraub/gemma4-webgpu). LocalMind's contribution is the integration: adapting each engine's stream into the shared chat protocol and slotting it in next to the other backends. **Full credit for Transformers.js and the WGSL kernels goes upstream.**
+These engines are ported, largely verbatim, from the open-source [`webml-community`](https://huggingface.co/webml-community) Spaces on Hugging Face — [`gemma-4-webgpu-kernels`](https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels), [`lfm2-webgpu-kernels`](https://huggingface.co/spaces/webml-community/lfm2-webgpu-kernels), and [`bonsai-webgpu-kernels`](https://huggingface.co/spaces/webml-community/bonsai-webgpu-kernels) (the 27B). `webml-community` is the home of [**Transformers.js**](https://github.com/huggingface/transformers.js), the in-browser ML library by **[Xenova](https://github.com/xenova) (Joshua Lochner)** at Hugging Face — the foundation this entire project is built on, and where these WebGPU-kernel engines come from. The Gemma engine also has a standalone home at [tylerstraub/gemma4-webgpu](https://github.com/tylerstraub/gemma4-webgpu). LocalMind's contribution is the integration: adapting each engine's stream into the shared chat protocol and slotting it in next to the other backends. **Full credit for Transformers.js and the WGSL kernels goes upstream.**
 
 The LFM2 engine is exposed through the DOM-free
 [`inference-worker.js`](./inference-worker.js) boundary used by LocalMind
@@ -66,7 +66,7 @@ remain host responsibilities. The worker protocols are documented in
 ## Try it in 30 seconds
 
 1. Open **[naklitechie.github.io/LocalMind](https://naklitechie.github.io/LocalMind)** in Chrome or Edge.
-2. Pick a model — the default is **LFM2.5 230M** (~140 MB, on the custom WebGPU engine), small and fast so you're chatting in seconds; pick a bigger one anytime for more capability.
+2. Pick a model — the default is **LFM2.5 230M** (~140 MB, on the custom WebGPU engine), small and fast so you're chatting in seconds; pick a bigger one anytime for more capability. *(On desktop Chrome/Edge where Gemini Nano is already downloaded, LocalMind starts on Nano — zero download.)*
 3. Wait for the one-time download, then chat.
 
 To run it yourself, it's one HTML file with no build step:
