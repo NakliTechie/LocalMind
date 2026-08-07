@@ -2532,10 +2532,15 @@
           </label>
         </div>
         <div class="settings-divider" data-tab="models">
-          <label>Custom models <span style="font-weight:400;color:var(--gray-500)">(HF ONNX repo, or a direct GGUF URL)</span></label>
+          <label>Custom models <span style="font-weight:400;color:var(--gray-500)">(HF ONNX repo, a GGUF URL, or a local .gguf file)</span></label>
           <div style="display:flex;gap:6px;margin-top:4px">
             <input type="text" id="customModelInput" class="settings-input" placeholder="owner/repo (ONNX) or https://…/model.gguf" style="flex:1">
             <button class="btn-icon" id="customModelAddBtn">Add</button>
+          </div>
+          <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap">
+            <input type="file" id="localGgufInput" accept=".gguf" style="display:none">
+            <button class="btn-icon" id="localGgufBtn" title="Pick a .gguf already on your disk — nothing is downloaded">Load .gguf from disk…</button>
+            <span style="font-size:0.68rem;color:var(--gray-500)">no download · this session</span>
           </div>
           <div id="customModelStatus" style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5;min-height:1em"></div>
           <div id="customModelList" style="margin-top:6px"></div>
@@ -7353,12 +7358,16 @@ self.onmessage = async (e) => {
       wllama = new Wllama(WASM, { logger: { debug() {}, log() {}, warn() {}, error(m) { console.error('[wllama]', m); } } });
       let gpu = false;
       try { gpu = await wllama.isSupportWebGPU(); } catch (_) { gpu = false; }
-      post({ type: 'progress', data: { status: 'initiate', file: 'model.gguf' } });
-      await wllama.loadModelFromUrl(d.modelId, {
+      const gname = (d.localFile && d.localFile.name) || 'model.gguf';
+      post({ type: 'progress', data: { status: 'initiate', file: gname } });
+      const loadCfg = {
         n_ctx: d.contextSize || 4096,
         n_gpu_layers: gpu ? 999 : 0,
-        progressCallback: ({ loaded, total }) => post({ type: 'progress', data: { status: 'progress_total', file: 'model.gguf', loaded, total } }),
-      });
+        progressCallback: ({ loaded, total }) => post({ type: 'progress', data: { status: 'progress_total', file: gname, loaded, total } }),
+      };
+      // Local disk file → load its bytes directly (no download); else fetch by URL.
+      if (d.localFile) { await wllama.loadModel([d.localFile], loadCfg); }
+      else { await wllama.loadModelFromUrl(d.modelId, loadCfg); }
       post({ type: 'ready', backend: gpu ? 'webgpu' : 'cpu' });
     } else if (d.type === 'generate') {
       if (!wllama) { post({ type: 'error', message: 'wllama model not loaded' }); return; }
@@ -10396,7 +10405,52 @@ self.onmessage = async (e) => {
       }
     }
 
+    // Load a GGUF already on the user's disk (file picker) — no download, fed
+    // straight to the wllama worker via wllama.loadModel([file]). Session-only:
+    // a File can't persist to localStorage, so it's re-picked after reload
+    // (unlike GGUF-URL customs). Deliberately NOT marked `custom` → not saved.
+    function buildLocalGgufEntry(file) {
+      const fname = file.name || 'model.gguf';
+      const bytes = file.size || 0;
+      const warnings = [];
+      if (/-(\d{5})-of-(\d{5})\.gguf$/i.test(fname)) warnings.push('this looks like one shard of a split GGUF — local loading needs the whole model in one file');
+      if (bytes > 4 * 1024 * 1024 * 1024) warnings.push('~' + formatBytes(bytes) + ' likely exceeds wllama’s ~4 GB in-browser ceiling (wasm32)');
+      else if (bytes > 2 * 1024 * 1024 * 1024) warnings.push('over 2 GB exceeds wllama’s per-file limit — may fail to load');
+      const entry = {
+        id: 'localgguf:' + fname + ':' + bytes,
+        label: fname.replace(/\.gguf$/i, '').slice(0, 40) + ' · GGUF (local file)',
+        backend: 'wllama',
+        size: '~' + formatBytes(bytes),
+        type: 'causal',
+        multimodal: false,
+        agentCapable: false,
+        contextSize: 4096,
+        genConfig: { temperature: 0.7, top_k: 40, top_p: 0.9, max_new_tokens: 1024 },
+        localFile: file,
+      };
+      return { entry, warnings };
+    }
+
+    async function handleLocalGgufPick(file) {
+      if (!file) return;
+      if (!/\.gguf$/i.test(file.name || '')) { setCustomStatus('pick a file ending in .gguf', 'err'); return; }
+      const { entry, warnings } = buildLocalGgufEntry(file);
+      if (MODELS[entry.id]) MODELS[entry.id].localFile = file; else addCustomModelToRegistry(entry);
+      modelSelect.value = entry.id;
+      const base = 'Loading from disk (' + entry.size + ') — no download. Session only: re-pick after reload.';
+      if (warnings.length) {
+        customModelStatus.textContent = 'Note: ' + warnings.join('; ') + '\n' + base;
+        customModelStatus.style.color = '#975a16';
+        customModelStatus.style.whiteSpace = 'pre-wrap';
+      } else {
+        setCustomStatus(base, 'ok');
+      }
+      loadModel(entry.id);
+    }
+
     customModelAddBtn.addEventListener('click', handleAddCustomModel);
+    document.getElementById('localGgufBtn').addEventListener('click', () => document.getElementById('localGgufInput').click());
+    document.getElementById('localGgufInput').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; handleLocalGgufPick(f); });
     customModelInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); handleAddCustomModel(); }
     });
@@ -12930,7 +12984,7 @@ ${JSON.stringify({ name, result })}
           if (isWllama || isLfm2Webgpu || isGemma4Webgpu) {
             // The custom-WGSL engines ignore contextSize (they read it from the
             // model metadata) but the shared load message shape is harmless.
-            w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0 });
+            w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0, localFile: (isWllama && MODELS[modelId]) ? (MODELS[modelId].localFile || null) : null });
           } else {
             const resumable = localStorage.getItem('lm_resumable_downloads') !== '0';
             w.postMessage({ type: 'load', modelId, dtype, modelType, modelClass, resumable });

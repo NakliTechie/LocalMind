@@ -25,7 +25,7 @@ It began as a private chatbot and grew into a small **AI workbench**: chat, imag
 - 🖼️ **See & hear** — some models accept images and audio; voice-to-text works on any model.
 - 🔊 **Voice in and out** — read any reply aloud (🔊, Kokoro-82M, English + Hindi), or go fully hands-free (🎙 **Voice mode**): hold to talk, it transcribes (Moonshine), answers, and reads back. Both run on-device; nothing leaves your machine.
 - 🧠 **It remembers** — a private, on-device memory you can browse, search, and tidy up.
-- 🔌 **Use *any* model** — point it at your own Ollama / LM Studio, or load a GGUF model straight into the tab.
+- 🔌 **Use *any* model** — point it at your own Ollama / LM Studio, load a GGUF from a URL, or **open a `.gguf` straight from your disk** (no download — fully offline).
 - 📱 **Phone to desktop** — installable as an app; works offline.
 
 *Every feature, in detail → [FEATURES.md](./FEATURES.md).*
@@ -37,7 +37,7 @@ Pick whatever fits your hardware — all three are local, nothing leaves your de
 | | How it runs | Best for |
 |---|---|---|
 | **In your browser** | On your GPU via WebGPU — zero setup | The private default; nothing to install |
-| **In-browser GGUF** | A GGUF model loaded into the tab (llama.cpp → WebAssembly) | The huge GGUF ecosystem, no setup; runs on CPU even without a GPU |
+| **In-browser GGUF** | A GGUF loaded into the tab (llama.cpp → WebAssembly) — from a URL **or a local file on disk** | The huge GGUF ecosystem, no setup; runs on CPU even without a GPU |
 | **Your own server** | Point it at Ollama / LM Studio on your machine | Big models (7B–70B+) at full speed |
 
 ### Custom WebGPU engine (the default)
@@ -91,6 +91,10 @@ Works in **Chrome / Edge 113+** and **Firefox 130+** — in-browser models need 
 - 🛠️ **[How it works](./ARCHITECTURE.md)** — architecture, the runtimes, workers, and tech stack
 - 🧑‍💻 **[Developer API](./API.md)** — drive the model from your own page (`window.localmind`)
 - 🗺️ **[Roadmap](./ROADMAP.md)** — what's shipped and what's next
+
+## Acknowledgments
+
+- **Local-file GGUF loading** was suggested by [@Mayur88888888](https://github.com/Mayur88888888) ([#6](https://github.com/NakliTechie/LocalMind/pull/6)). Thanks!
 
 ---
 
