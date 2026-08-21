@@ -2674,7 +2674,7 @@
         <button class="mode-chip" id="chipImage" title="Generate an image from a prompt — on-device diffusion (WebGPU)">&#127912; Image</button>
         <button class="mode-chip" id="chipDiffuse" title="Experimental: masked-diffusion text generation — watch the answer denoise (WebGPU)">&#127787;&#65039; Diffuse</button>
         <button class="mode-chip" id="chipOCR" title="Extract text from an image or PDF on-device — GLM-OCR (WebGPU)">&#128196; OCR</button>
-        <button class="mode-chip" id="chipVision" title="Point your camera or drop an image — FastVLM describes it on-device (WebGPU)">&#128247; Vision</button>
+        <button class="mode-chip" id="chipVision" title="Point your camera or drop an image — SmolVLM describes it on-device (WebGPU)">&#128247; Vision</button>
         <button class="mode-chip" id="chipVoice" title="Hands-free voice conversation — talk, it transcribes, answers, and reads back (on-device)">&#127897;&#65039; Voice</button>
         <span class="mode-hint" id="modeHint"></span>
       </div>
@@ -2792,7 +2792,7 @@
       </div>
 
       <div class="mode-extra" id="visionPanel" role="region" aria-label="Live Vision">
-        <div class="mode-extra-head">Vision &middot; <span class="memory-count">FastVLM-0.5B &middot; on-device (WebGPU)</span></div>
+        <div class="mode-extra-head">Vision &middot; <span class="memory-count">SmolVLM-500M &middot; on-device (WebGPU)</span></div>
         <div class="vision-stage">
           <video id="visionVideo" playsinline muted style="width:100%;max-height:300px;background:#000;border-radius:8px;display:none"></video>
           <img id="visionStill" alt="" style="width:100%;max-height:300px;object-fit:contain;border-radius:8px;display:none">
@@ -2808,7 +2808,7 @@
         </div>
         <div class="progress-section visible" id="visionProgressSection" style="border-top:none;background:transparent;padding:8px 0 0">
           <div class="progress-bar"><div class="progress-fill" id="visionProgressFill" style="background:linear-gradient(90deg,#0b3d2e,#2f9e6e)"></div></div>
-          <div class="progress-text" id="visionProgressText" role="status" aria-live="polite">Start the camera or pick an image, then Describe. First use downloads FastVLM (~0.6&nbsp;GB) once, then runs offline. WebGPU &mdash; best on Chrome/Edge.</div>
+          <div class="progress-text" id="visionProgressText" role="status" aria-live="polite">Start the camera or pick an image, then Describe. First use downloads SmolVLM (~0.9&nbsp;GB) once, then runs offline. WebGPU &mdash; best on Chrome/Edge.</div>
         </div>
       </div>
 
@@ -7641,12 +7641,21 @@ self.onmessage = async (e) => {
 };
   </script>
   <script type="text/worker" id="visionWorkerSrc">
-// 📷 Vision worker — FastVLM-0.5B (llava_qwen2) image captioning / VQA on WebGPU.
+// 📷 Vision worker — SmolVLM-500M (Idefics3/smolvlm) image captioning / VQA on WebGPU.
 // Same transformers.js load shape as the OCR worker (AutoProcessor + per-module
 // dtype), but delivered as a <script type="text/worker"> block read via
 // textContent -> blob URL, so it stays single-file AND sidesteps the
-// template-literal backtick trap. Vision encoder at q4f16 (small, fast — this is
-// a live mode); embed fp16; decoder q4f16.
+// template-literal backtick trap. All modules at fp16 (~0.9 GB total; fp16 is
+// numerically stable here — q4f16 degenerated to gibberish on this model).
+//
+// VERSION PIN — this vision worker pins transformers.js to 3.7.1, NOT the @4.2.0
+// the chat/OCR workers use. Verified live 2026-08-21: on 4.2.0 SmolVLM's Idefics3
+// processor preprocesses fine but generation is DEGENERATE (pure gibberish); on
+// 3.7.1 the identical model+image+dtype produces a coherent, image-grounded
+// caption. The 4.0→4.2 WebGPU runtime rewrite regressed smolvlm generation. This
+// worker is an isolated blob module, so pinning it independently is safe — the
+// series "@4" rule targets the CHAT worker (v3's Gemma WebGPU crash); SmolVLM
+// does not hit that path and runs clean on 3.7.1 WebGPU.
 import {
   env,
   AutoModelForImageTextToText,
@@ -7654,7 +7663,7 @@ import {
   RawImage,
   TextStreamer,
   InterruptableStoppingCriteria,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.1/+esm';
 
 env.allowLocalModels = true;
 env.localModelPath = '/models/';
@@ -7673,7 +7682,7 @@ self.addEventListener('message', async (e) => {
       processor = await AutoProcessor.from_pretrained(id);
       model = await AutoModelForImageTextToText.from_pretrained(id, {
         device: 'webgpu',
-        dtype: d.dtype || { vision_encoder: 'q4f16', embed_tokens: 'fp16', decoder_model_merged: 'q4f16' },
+        dtype: d.dtype || 'fp16',
         progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
       });
       stopper = new InterruptableStoppingCriteria();
@@ -7689,7 +7698,7 @@ self.addEventListener('message', async (e) => {
       const image = await RawImage.fromBlob(blob);
       const messages = [{ role: 'user', content: [{ type: 'image' }, { type: 'text', text: d.prompt || 'Describe this image in one short sentence.' }] }];
       const text = processor.apply_chat_template(messages, { add_generation_prompt: true });
-      const inputs = await processor(text, image);
+      const inputs = await processor(text, [image]);
       const tokenizer = processor.tokenizer || processor;
       let acc = '';
       const streamer = new TextStreamer(tokenizer, {
@@ -7697,7 +7706,9 @@ self.addEventListener('message', async (e) => {
         skip_special_tokens: true,
         callback_function: (t) => { acc += t; self.postMessage({ type: 'token', id: d.id, token: t }); },
       });
-      await model.generate({ ...inputs, max_new_tokens: d.maxTokens || 64, do_sample: false, streamer, stopping_criteria: stopper });
+      // repetition_penalty + no_repeat_ngram_size: SmolVLM under pure greedy loops
+      // ("remote control, remote control, …"); these keep captions from degenerating.
+      await model.generate({ ...inputs, max_new_tokens: d.maxTokens || 64, do_sample: false, repetition_penalty: 1.2, no_repeat_ngram_size: 3, streamer, stopping_criteria: stopper });
       self.postMessage({ type: 'result', id: d.id, text: acc });
     } catch (err) {
       self.postMessage({ type: 'error', id: d.id, message: (err && err.message) || String(err) });
@@ -16871,6 +16882,9 @@ self.addEventListener('message', async (e) => {
     const ocrProgressText = document.getElementById('ocrProgressText');
     const voicePanel     = document.getElementById('voicePanel');
     const chipVoice      = document.getElementById('chipVoice');
+    // chipVision declared here (with the other chips) so the mode-chip listener
+    // registration below can reference it without a temporal-dead-zone throw.
+    const chipVision     = document.getElementById('chipVision');
     const voiceMicBtn    = document.getElementById('voiceMicBtn');
     let ocrOutMode = 'text';        // 'text' | 'markdown'
     let ocrFile = null;             // currently selected File (image or PDF)
@@ -17199,14 +17213,15 @@ self.addEventListener('message', async (e) => {
       maybeRestoreChat();
     }
 
-    // ── 📷 Vision (FastVLM-0.5B) ─────────────────────────────────
-    // Point the camera (or drop an image) → on-device caption/VQA via FastVLM,
+    // ── 📷 Vision (SmolVLM-500M) ─────────────────────────────────
+    // Point the camera (or drop an image) → on-device caption/VQA via SmolVLM,
     // a separate WebGPU worker built from the #visionWorkerSrc block. Suspends
     // the chat model while active (one heavy WebGPU worker at a time), same as
     // OCR/Image/Diffuse; restores it on exit.
-    const VISION_MODEL_ID = 'onnx-community/FastVLM-0.5B-ONNX';
+    const VISION_MODEL_ID = 'HuggingFaceTB/SmolVLM-500M-Instruct';
     const visionPanel   = document.getElementById('visionPanel');
-    const chipVision    = document.getElementById('chipVision');
+    // chipVision is declared earlier (beside chipVoice) to avoid a TDZ in the
+    // mode-chip listener block; do not re-declare it here.
     const visionVideo   = document.getElementById('visionVideo');
     const visionStill   = document.getElementById('visionStill');
     const visionCaption = document.getElementById('visionCaption');
@@ -17218,7 +17233,7 @@ self.addEventListener('message', async (e) => {
     const visionPromptInput = document.getElementById('visionPrompt');
     const visionProgressFill = document.getElementById('visionProgressFill');
     const visionProgressText = document.getElementById('visionProgressText');
-    const VIS_PROGRESS_DEFAULT = 'Start the camera or pick an image, then Describe. First use downloads FastVLM (~0.6 GB) once, then runs offline. WebGPU — best on Chrome/Edge.';
+    const VIS_PROGRESS_DEFAULT = 'Start the camera or pick an image, then Describe. First use downloads SmolVLM (~0.9 GB) once, then runs offline. WebGPU — best on Chrome/Edge.';
     const VS = { worker: null, ready: false, loading: false, stream: null, busy: false, live: false, liveTimer: null, reqId: 0, still: null };
 
     function ensureVisionWorker() {
@@ -17230,10 +17245,10 @@ self.addEventListener('message', async (e) => {
         const d = e.data || {};
         if (d.type === 'progress') {
           const p = d.data || {};
-          if (p.status === 'progress') { visionProgressFill.style.width = Math.round(p.progress || 0) + '%'; visionProgressText.textContent = 'Downloading FastVLM — ' + (p.file || '') + ' ' + Math.round(p.progress || 0) + '%'; }
+          if (p.status === 'progress') { visionProgressFill.style.width = Math.round(p.progress || 0) + '%'; visionProgressText.textContent = 'Downloading SmolVLM — ' + (p.file || '') + ' ' + Math.round(p.progress || 0) + '%'; }
         } else if (d.type === 'ready') {
           VS.ready = true; VS.loading = false; visionProgressFill.style.width = '100%';
-          visionProgressText.textContent = 'FastVLM ready — Describe the camera or an image.';
+          visionProgressText.textContent = 'SmolVLM ready — Describe the camera or an image.';
           visionDescribeBtn.disabled = false; visionLiveBtn.disabled = false;
           if (VS.live || VS.still || VS.stream) runVisionCaption();
         } else if (d.type === 'token') {
@@ -17259,7 +17274,7 @@ self.addEventListener('message', async (e) => {
       worker = null; modelReady = false;
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
       visionProgressFill.style.width = '0%';
-      visionProgressText.textContent = 'Loading FastVLM (first use downloads ~0.6 GB once, then offline)…';
+      visionProgressText.textContent = 'Loading SmolVLM (first use downloads ~0.9 GB once, then offline)…';
       ensureVisionWorker().postMessage({ type: 'load', modelId: VISION_MODEL_ID });
     }
     function grabVisionFrame() {
