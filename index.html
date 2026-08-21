@@ -2689,6 +2689,7 @@
         <button class="mode-chip" id="chipOCR" title="Extract text from an image or PDF on-device — GLM-OCR (WebGPU)">&#128196; OCR</button>
         <button class="mode-chip" id="chipVision" title="Point your camera or drop an image — SmolVLM describes it on-device (WebGPU)">&#128247; Vision</button>
         <button class="mode-chip" id="chipVoice" title="Hands-free voice conversation — talk, it transcribes, answers, and reads back (on-device)">&#127897;&#65039; Voice</button>
+        <button class="mode-chip" id="chipClone" title="Clone a voice from a short sample, then make it say anything — Chatterbox on-device (WebGPU)">&#127917; Clone</button>
         <span class="mode-hint" id="modeHint"></span>
       </div>
       <div class="mode-extra" id="comparePanel">
@@ -2822,6 +2823,29 @@
         <div class="progress-section visible" id="visionProgressSection" style="border-top:none;background:transparent;padding:8px 0 0">
           <div class="progress-bar"><div class="progress-fill" id="visionProgressFill" style="background:linear-gradient(90deg,#0b3d2e,#2f9e6e)"></div></div>
           <div class="progress-text" id="visionProgressText" role="status" aria-live="polite">Start the camera or pick an image, then Describe. First use downloads SmolVLM (~0.9&nbsp;GB) once, then runs offline. WebGPU &mdash; best on Chrome/Edge.</div>
+        </div>
+      </div>
+
+      <div class="mode-extra" id="clonePanel" role="region" aria-label="Voice cloning">
+        <div class="mode-extra-head">Voice Clone &middot; <span class="memory-count">Chatterbox 0.5B &middot; on-device (WebGPU)</span></div>
+        <div class="clone-stage" style="display:flex;flex-direction:column;gap:8px">
+          <div class="clone-ref-row" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <button type="button" class="image-btn" id="cloneRecordBtn">&#128308; Record 5&ndash;10s</button>
+            <button type="button" class="image-btn" id="cloneUploadBtn">&#127925; Upload&hellip;</button>
+            <input type="file" id="cloneFileInput" accept="audio/*" hidden>
+            <span class="clone-ref-status" id="cloneRefStatus" style="font-size:0.85rem;opacity:0.8">No reference voice yet.</span>
+          </div>
+          <textarea id="cloneText" rows="2" placeholder="Type what the cloned voice should say&hellip;" style="width:100%;padding:8px;resize:vertical;box-sizing:border-box"></textarea>
+          <div class="clone-controls" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <button type="button" class="image-btn" id="cloneSpeakBtn" disabled>&#128266; Speak in this voice</button>
+            <button type="button" class="image-btn" id="cloneReplayBtn" disabled title="Replay the last clip">&#8635; Replay</button>
+            <label style="font-size:0.8rem;display:flex;align-items:center;gap:6px">Expressiveness
+              <input type="range" id="cloneExagRange" min="0" max="1.5" step="0.1" value="0.5" style="width:90px"></label>
+          </div>
+        </div>
+        <div class="progress-section visible" id="cloneProgressSection" style="border-top:none;background:transparent;padding:8px 0 0">
+          <div class="progress-bar"><div class="progress-fill" id="cloneProgressFill" style="background:linear-gradient(90deg,#3d0b2e,#9e2f6e)"></div></div>
+          <div class="progress-text" id="cloneProgressText" role="status" aria-live="polite">Record or upload a 5&ndash;10s voice sample, then type text and Speak. First use downloads Chatterbox (~1.5&nbsp;GB) once, then runs offline. WebGPU &mdash; best on Chrome/Edge.</div>
         </div>
       </div>
 
@@ -7853,6 +7877,90 @@ self.addEventListener('message', async (e) => {
     }
   } else if (type === 'stop') {
     try { stopper && stopper.interrupt(); } catch {}
+  }
+});
+  </script>
+  <script type="text/worker" id="chatterboxWorkerSrc">
+// 🎭 Voice-clone worker — Chatterbox (0.5B Llama TTS) zero-shot voice cloning on
+// WebGPU. Delivered as a &lt;script type="text/worker"&gt; block read via textContent
+// -> blob URL (single-file + no template-literal backtick trap), same as the
+// vision worker. ChatterboxModel is a first-class transformers.js class exported
+// from @4 (no version fork, unlike the vision worker). Four ONNX sessions:
+// embed_tokens/speech_encoder/conditional_decoder are fp32-only; only the
+// language_model has quantized variants (q4f16 on WebGPU, q4 on WASM).
+//
+// Flow: load once -> encode_speech(reference PCM) caches speaker conditionals ->
+// generate(text + speaker) returns a full utterance of PCM @ 24 kHz (not
+// streamed). The main thread plays it through the shared Web-Audio path.
+import {
+  env,
+  ChatterboxModel,
+  AutoProcessor,
+  Tensor,
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';
+
+env.allowLocalModels = true;
+env.localModelPath = '/models/';
+env.allowRemoteModels = true;
+
+const MODEL_ID = 'onnx-community/chatterbox-ONNX';
+let model = null;
+let processor = null;
+let speaker = null;   // cached encode_speech() conditionals for the current voice
+
+self.addEventListener('message', async (e) => {
+  const d = e.data || {};
+  const type = d.type;
+  try {
+    if (type === 'load') {
+      if (!model) {
+        const device = d.device || 'webgpu';
+        const dtype = d.dtype || (device === 'webgpu'
+          ? { embed_tokens: 'fp32', speech_encoder: 'fp32', language_model: 'q4f16', conditional_decoder: 'fp32' }
+          : { embed_tokens: 'fp32', speech_encoder: 'fp32', language_model: 'q4',    conditional_decoder: 'fp32' });
+        processor = await AutoProcessor.from_pretrained(MODEL_ID);
+        model = await ChatterboxModel.from_pretrained(MODEL_ID, {
+          device, dtype,
+          progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
+        });
+      }
+      self.postMessage({ type: 'ready' });
+      return;
+    }
+
+    if (type === 'clone') {
+      if (!model) { self.postMessage({ type: 'error', id: d.id, message: 'Voice model not loaded' }); return; }
+      const pcm = d.pcm;
+      if (!pcm || !pcm.length) { self.postMessage({ type: 'error', id: d.id, message: 'No reference audio' }); return; }
+      const audio = (pcm instanceof Float32Array) ? pcm : new Float32Array(pcm);
+      const audioTensor = new Tensor('float32', audio, [1, audio.length]);
+      speaker = await model.encode_speech(audioTensor);
+      self.postMessage({ type: 'cloned', id: d.id });
+      return;
+    }
+
+    if (type === 'speak') {
+      if (!model) { self.postMessage({ type: 'error', id: d.id, message: 'Voice model not loaded' }); return; }
+      if (!speaker) { self.postMessage({ type: 'error', id: d.id, message: 'No reference voice — record or upload a clip first' }); return; }
+      const text = String(d.text || '').trim();
+      if (!text) { self.postMessage({ type: 'error', id: d.id, message: 'Nothing to say' }); return; }
+      const inputs = await processor(text);
+      const waveform = await model.generate({
+        ...inputs, ...speaker,
+        exaggeration: (typeof d.exaggeration === 'number') ? d.exaggeration : 0.5,
+        max_new_tokens: d.maxTokens || 1000,
+      });
+      let pcm = waveform.data;
+      // Guard against clipping (observed peak ~1.16): normalise if it exceeds 1.
+      let peak = 0;
+      for (let i = 0; i < pcm.length; i++) { const v = Math.abs(pcm[i]); if (v > peak) peak = v; }
+      if (peak > 0.99) { const g = 0.98 / peak; const out = new Float32Array(pcm.length); for (let i = 0; i < pcm.length; i++) out[i] = pcm[i] * g; pcm = out; }
+      else { const out = new Float32Array(pcm.length); out.set(pcm); pcm = out; }
+      self.postMessage({ type: 'audio', id: d.id, pcm, sampleRate: 24000 }, [pcm.buffer]);
+      return;
+    }
+  } catch (err) {
+    self.postMessage({ type: 'error', id: d.id, message: (err && err.message) || String(err) });
   }
 });
   </script>
@@ -17146,6 +17254,10 @@ self.addEventListener('message', async (e) => {
     // chipVision declared here (with the other chips) so the mode-chip listener
     // registration below can reference it without a temporal-dead-zone throw.
     const chipVision     = document.getElementById('chipVision');
+    // chipClone/clonePanel hoisted here (with the other chips) so the listener
+    // registration + refreshModeUI can reference them without a TDZ throw.
+    const chipClone      = document.getElementById('chipClone');
+    const clonePanel     = document.getElementById('clonePanel');
     const voiceMicBtn    = document.getElementById('voiceMicBtn');
     let ocrOutMode = 'text';        // 'text' | 'markdown'
     let ocrFile = null;             // currently selected File (image or PDF)
@@ -17163,6 +17275,7 @@ self.addEventListener('message', async (e) => {
       chipOCR.classList.toggle('active', activeMode === 'ocr');
       if (chipVision) chipVision.classList.toggle('active', activeMode === 'vision');
       if (chipVoice) chipVoice.classList.toggle('active', activeMode === 'voice');
+      if (chipClone) chipClone.classList.toggle('active', activeMode === 'clone');
       comparePanel.classList.toggle('open', activeMode === 'compare');
       batchPanel.classList.toggle('open', activeMode === 'batch');
       imagePanel.classList.toggle('open', activeMode === 'image');
@@ -17170,6 +17283,7 @@ self.addEventListener('message', async (e) => {
       ocrPanel.classList.toggle('open', activeMode === 'ocr');
       if (visionPanel) visionPanel.classList.toggle('open', activeMode === 'vision');
       if (voicePanel) voicePanel.classList.toggle('open', activeMode === 'voice');
+      if (clonePanel) clonePanel.classList.toggle('open', activeMode === 'clone');
       if (activeMode === 'batch') chatInput.placeholder = 'One prompt per line — Shift+Enter for newlines, then Send…';
       else if (activeMode === 'compare') chatInput.placeholder = 'Ask once — every ticked model answers, then a judge picks…';
       else if (activeMode === 'research') chatInput.placeholder = 'Ask a research question…';
@@ -17177,6 +17291,7 @@ self.addEventListener('message', async (e) => {
       else if (activeMode === 'diffuse') chatInput.placeholder = 'Ask — watch the answer denoise…';
       else if (activeMode === 'ocr') chatInput.placeholder = 'Drop a file in the panel above, or type a note…';
       else if (activeMode === 'vision') chatInput.placeholder = 'Point the camera or drop an image in the panel above…';
+      else if (activeMode === 'clone') chatInput.placeholder = 'Use the panel above — record a voice, then type what it should say…';
       else chatInput.placeholder = 'Type a message…';
       modeHint.textContent =
         activeMode === 'batch' ? 'Each line runs as its own prompt, in sequence.' :
@@ -17186,6 +17301,7 @@ self.addEventListener('message', async (e) => {
         activeMode === 'ocr' ? 'Extracts text from images / PDFs on-device. Frees the chat model while active.' :
         activeMode === 'vision' ? 'Describes your camera or an image on-device — frees the chat model while active.' :
         activeMode === 'voice' ? 'Hands-free: talk, it answers and reads back. The chat model stays loaded (voice runs on WASM).' :
+        activeMode === 'clone' ? 'Clones a voice from a short sample, then speaks your text in it — on-device. Frees the chat model while active.' :
         (activeMode === 'chat' && searchOn) ? 'This message will be web-enriched.' : '';
     }
     function setExclusiveMode(mode) {
@@ -17196,9 +17312,11 @@ self.addEventListener('message', async (e) => {
       if (prev === 'ocr' && activeMode !== 'ocr') onLeaveOCRMode();
       if (prev === 'voice' && activeMode !== 'voice') onLeaveVoiceMode();
       if (prev === 'vision' && activeMode !== 'vision') onLeaveVisionMode();
+      if (prev === 'clone' && activeMode !== 'clone') onLeaveCloneMode();
       if (activeMode === 'ocr') onEnterOCRMode();
       if (activeMode === 'voice') onEnterVoiceMode();
       if (activeMode === 'vision') onEnterVisionMode();
+      if (activeMode === 'clone') onEnterCloneMode();
       refreshModeUI();
     }
     function needsSearchOrConfigure(what) {
@@ -17220,6 +17338,9 @@ self.addEventListener('message', async (e) => {
     if (chipVision) chipVision.addEventListener('click', () => { if (!generating) setExclusiveMode('vision'); });
     // 🎙 Voice mode chip. Stays enabled without WebGPU (STT/TTS ride WASM).
     if (chipVoice) chipVoice.addEventListener('click', () => { if (!generating) setExclusiveMode('voice'); });
+    // 🎭 Clone mode chip. Heavy WebGPU model (Chatterbox ~1.5 GB) — follows the
+    // Vision/OCR suspend-restore pattern (unloads the chat model while active).
+    if (chipClone) chipClone.addEventListener('click', () => { if (!generating) setExclusiveMode('clone'); });
     // Push-to-talk: hold the mic (pointer) or hold V (when not typing). Release = send.
     if (voiceMicBtn) {
       const down = (e) => { if (activeMode !== 'voice') return; e.preventDefault(); voiceStartRecording(); };
@@ -17601,6 +17722,174 @@ self.addEventListener('message', async (e) => {
       VS.live = false; clearTimeout(VS.liveTimer);
       stopVisionCamera();
       try { if (VS.worker) VS.worker.postMessage({ type: 'stop' }); } catch {}
+      maybeRestoreChat();
+    }
+
+    // ── 🎭 Voice Clone (Chatterbox) ──────────────────────────────
+    // Zero-shot voice cloning: record/upload a 5–10s reference → encode_speech
+    // caches the speaker → generate speaks arbitrary text in that voice. Heavy
+    // WebGPU model (~1.5 GB), so it suspends the chat model like Vision/OCR and
+    // reuses the shared Web-Audio context (ttsGetCtx) for playback.
+    const cloneRecordBtn  = document.getElementById('cloneRecordBtn');
+    const cloneUploadBtn  = document.getElementById('cloneUploadBtn');
+    const cloneFileInput  = document.getElementById('cloneFileInput');
+    const cloneRefStatus  = document.getElementById('cloneRefStatus');
+    const cloneTextInput  = document.getElementById('cloneText');
+    const cloneSpeakBtn   = document.getElementById('cloneSpeakBtn');
+    const cloneReplayBtn  = document.getElementById('cloneReplayBtn');
+    const cloneExagRange  = document.getElementById('cloneExagRange');
+    const cloneProgressFill = document.getElementById('cloneProgressFill');
+    const cloneProgressText = document.getElementById('cloneProgressText');
+    const CLONE_PROGRESS_DEFAULT = 'Record or upload a 5–10s voice sample, then type text and Speak. First use downloads Chatterbox (~1.5 GB) once, then runs offline. WebGPU — best on Chrome/Edge.';
+    const CB = { worker: null, ready: false, loading: false, busy: false, hasVoice: false, reqId: 0, rec: null, recStream: null, recChunks: [], lastPcm: null, lastSr: 24000, sources: [], _pendingClonePcm: null };
+
+    function cloneSetProgress(msg) { if (cloneProgressText) cloneProgressText.textContent = msg; }
+
+    // Decode a recorded/uploaded audio Blob to mono Float32 at a target rate,
+    // via OfflineAudioContext (same approach as the Whisper decode path).
+    async function cloneDecodePCM(blob, targetSr) {
+      const buf = await blob.arrayBuffer();
+      const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      const decoded = await new OAC(1, 1, targetSr).decodeAudioData(buf);
+      const off = new OAC(1, Math.max(1, Math.round(decoded.duration * targetSr)), targetSr);
+      const src = off.createBufferSource(); src.buffer = decoded; src.connect(off.destination); src.start();
+      const rendered = await off.startRendering();
+      return rendered.getChannelData(0).slice();
+    }
+
+    function cloneUpdateButtons() {
+      if (cloneSpeakBtn) cloneSpeakBtn.disabled = !(CB.ready && CB.hasVoice && !CB.busy);
+      if (cloneReplayBtn) cloneReplayBtn.disabled = !(CB.lastPcm && !CB.busy);
+    }
+
+    function ensureCloneWorker() {
+      if (CB.worker) return CB.worker;
+      const src = document.getElementById('chatterboxWorkerSrc').textContent;
+      const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'application/javascript' })), { type: 'module' });
+      w.addEventListener('error', (e) => { CB.loading = false; cloneSetProgress('Voice-clone worker error: ' + (e.message || 'failed to start')); });
+      w.addEventListener('message', (e) => {
+        const d = e.data || {};
+        if (d.type === 'progress') {
+          const p = d.data || {};
+          if (p.status === 'progress') { cloneProgressFill.style.width = Math.round(p.progress || 0) + '%'; cloneSetProgress('Downloading Chatterbox — ' + (p.file || '') + ' ' + Math.round(p.progress || 0) + '%'); }
+        } else if (d.type === 'ready') {
+          CB.ready = true; CB.loading = false; cloneProgressFill.style.width = '100%';
+          cloneSetProgress(CB.hasVoice ? 'Ready — type text and Speak.' : 'Chatterbox ready — record or upload a voice sample.');
+          if (CB._pendingClonePcm) { const pcm = CB._pendingClonePcm; CB._pendingClonePcm = null; cloneSendClone(pcm); }
+          cloneUpdateButtons();
+        } else if (d.type === 'cloned') {
+          CB.hasVoice = true; CB.busy = false;
+          cloneRefStatus.textContent = 'Reference voice captured ✓';
+          cloneSetProgress('Voice cloned — type text and Speak.');
+          cloneUpdateButtons();
+        } else if (d.type === 'audio') {
+          CB.busy = false;
+          clonePlay(d.pcm, d.sampleRate || 24000);
+          cloneSetProgress('Spoke ' + (d.pcm.length / (d.sampleRate || 24000)).toFixed(1) + 's. Edit the text and Speak again, or clone a new voice.');
+          cloneUpdateButtons();
+        } else if (d.type === 'error') {
+          CB.busy = false; CB.loading = false;
+          cloneSetProgress('Voice-clone error: ' + (d.message || 'failed'));
+          cloneUpdateButtons();
+        }
+      });
+      CB.worker = w;
+      return w;
+    }
+
+    function loadCloneModel() {
+      if (CB.ready || CB.loading) return;
+      CB.loading = true;
+      // Free the chat model's VRAM first (one heavy WebGPU worker at a time).
+      if (activeModelKey) lastChatModelKey = activeModelKey;
+      try { LocalMind.runtime.unload(); } catch {}
+      worker = null; modelReady = false;
+      try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
+      cloneProgressFill.style.width = '0%';
+      cloneSetProgress('Loading Chatterbox (first use downloads ~1.5 GB once, then offline)…');
+      const device = navigator.gpu ? 'webgpu' : 'wasm';
+      ensureCloneWorker().postMessage({ type: 'load', device });
+    }
+
+    function cloneSendClone(pcm) {
+      if (!CB.ready) { CB._pendingClonePcm = pcm; loadCloneModel(); return; }
+      CB.busy = true; cloneUpdateButtons();
+      cloneSetProgress('Encoding the reference voice…');
+      ensureCloneWorker().postMessage({ type: 'clone', id: ++CB.reqId, pcm }, [pcm.buffer]);
+    }
+
+    async function cloneUseBlob(blob) {
+      try {
+        cloneSetProgress('Decoding the reference clip…');
+        const pcm = await cloneDecodePCM(blob, 24000);
+        if (!pcm || pcm.length < 24000) { cloneSetProgress('That clip is too short — aim for 5–10 seconds.'); return; }
+        cloneRefStatus.textContent = 'Reference: ' + (pcm.length / 24000).toFixed(1) + 's';
+        cloneSendClone(pcm);
+      } catch (e) { cloneSetProgress('Could not read that audio (' + ((e && e.message) || e) + ').'); }
+    }
+
+    async function cloneStartRecording() {
+      try {
+        CB.recStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        CB.recChunks = [];
+        const mr = new MediaRecorder(CB.recStream);
+        CB.rec = mr;
+        mr.ondataavailable = (ev) => { if (ev.data && ev.data.size) CB.recChunks.push(ev.data); };
+        mr.onstop = async () => {
+          try { if (CB.recStream) CB.recStream.getTracks().forEach(t => t.stop()); } catch {}
+          CB.recStream = null; CB.rec = null;
+          cloneRecordBtn.textContent = '🔴 Record 5–10s';
+          const blob = new Blob(CB.recChunks, { type: (CB.recChunks[0] && CB.recChunks[0].type) || 'audio/webm' });
+          await cloneUseBlob(blob);
+        };
+        mr.start();
+        cloneRecordBtn.textContent = '⏹ Stop';
+        cloneSetProgress('Recording… speak naturally for 5–10 seconds, then Stop.');
+      } catch (e) { cloneSetProgress('Mic blocked or unavailable (' + ((e && e.name) || e) + '). You can upload a clip instead.'); }
+    }
+    function cloneStopRecording() { try { if (CB.rec && CB.rec.state !== 'inactive') CB.rec.stop(); } catch {} }
+
+    function clonePlay(pcm, sr) {
+      CB.lastPcm = pcm; CB.lastSr = sr;
+      try {
+        const ctx = ttsGetCtx();
+        try { if (ctx.state === 'suspended') { ctx.resume().catch(() => {}); ttsArmResumeOnGesture(ctx); } } catch (_) {}
+        const buf = ctx.createBuffer(1, pcm.length, sr);
+        buf.copyToChannel(pcm, 0);
+        const node = ctx.createBufferSource(); node.buffer = buf; node.connect(ctx.destination);
+        node.start(ctx.currentTime + 0.02);
+        CB.sources.push(node);
+      } catch (e) { cloneSetProgress('Playback failed: ' + ((e && e.message) || e)); }
+      cloneUpdateButtons();
+    }
+    function cloneStopAudio() { CB.sources.forEach(s => { try { s.stop(); } catch (_) {} }); CB.sources = []; }
+
+    function cloneSpeak() {
+      const text = (cloneTextInput.value || '').trim();
+      if (!text) { cloneSetProgress('Type something for the voice to say.'); return; }
+      if (!CB.hasVoice) { cloneSetProgress('Record or upload a reference voice first.'); return; }
+      if (!CB.ready) { loadCloneModel(); cloneSetProgress('Model still loading — Speak again once it is ready.'); return; }
+      if (CB.busy) return;
+      CB.busy = true; cloneUpdateButtons();
+      cloneStopAudio();
+      cloneSetProgress('Generating speech in the cloned voice…');
+      const exaggeration = parseFloat((cloneExagRange && cloneExagRange.value) || '0.5') || 0.5;
+      ensureCloneWorker().postMessage({ type: 'speak', id: ++CB.reqId, text, exaggeration });
+    }
+
+    if (cloneRecordBtn) cloneRecordBtn.addEventListener('click', () => { if (CB.rec) cloneStopRecording(); else cloneStartRecording(); });
+    if (cloneUploadBtn) cloneUploadBtn.addEventListener('click', () => cloneFileInput.click());
+    if (cloneFileInput) cloneFileInput.addEventListener('change', () => { const f = cloneFileInput.files && cloneFileInput.files[0]; if (f) cloneUseBlob(f); cloneFileInput.value = ''; });
+    if (cloneSpeakBtn) cloneSpeakBtn.addEventListener('click', () => cloneSpeak());
+    if (cloneReplayBtn) cloneReplayBtn.addEventListener('click', () => { if (CB.lastPcm) { cloneStopAudio(); clonePlay(CB.lastPcm, CB.lastSr); } });
+
+    function onEnterCloneMode() {
+      if (!CB.ready && !CB.loading) cloneSetProgress(CLONE_PROGRESS_DEFAULT);
+      cloneUpdateButtons();
+    }
+    function onLeaveCloneMode() {
+      cloneStopRecording();
+      cloneStopAudio();
       maybeRestoreChat();
     }
 
