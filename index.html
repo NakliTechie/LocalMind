@@ -2531,6 +2531,18 @@
             <input type="checkbox" id="ttsAutoplayToggle"> Auto-play replies as they finish
           </label>
         </div>
+        <div class="settings-divider" data-tab="general">
+          <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer">
+            <input type="checkbox" id="ragRerankToggle"> Rerank retrieved memory <span style="font-weight:400;color:var(--gray-500)">(a cross-encoder re-scores search hits for sharper retrieval &mdash; loads an extra on-device model)</span>
+          </label>
+          <div id="ragRerankModelRow" style="display:none;margin-top:8px">
+            <label for="ragRerankModelSelect" style="font-weight:400">Reranker model</label>
+            <select id="ragRerankModelSelect" class="settings-select">
+              <option value="fast">Fast &mdash; ms-marco-MiniLM (~22&nbsp;MB, English)</option>
+              <option value="multi">Multilingual &mdash; bge-reranker-v2-m3 (~600&nbsp;MB)</option>
+            </select>
+          </div>
+        </div>
         <div class="settings-divider" data-tab="models">
           <label>Custom models <span style="font-weight:400;color:var(--gray-500)">(HF ONNX repo, a GGUF URL, or a local .gguf file)</span></label>
           <div style="display:flex;gap:6px;margin-top:4px">
@@ -9206,7 +9218,8 @@ self.addEventListener('message', async (e) => {
     // Non-secret settings to mirror — API keys (lm_search_key) deliberately excluded.
     const SYNC_SETTINGS_KEYS = ['lm_search_provider', 'lm_searxng_url', 'lm_planner_enabled',
       'lm_resumable_downloads', 'lm_auto_backup', 'lm_sam_model', 'lm_voice_language', 'lm_api_enabled',
-      'lm_tts_voice', 'lm_tts_speed', 'lm_tts_autoplay', 'lm_auto_escalation'];
+      'lm_tts_voice', 'lm_tts_speed', 'lm_tts_autoplay', 'lm_auto_escalation',
+      'lm_rag_rerank', 'lm_rag_rerank_model'];
 
     function openSyncDB() {
       return new Promise((resolve, reject) => {
@@ -9444,9 +9457,30 @@ self.addEventListener('message', async (e) => {
       return chunks.length;
     }
 
+    // Reranker model ids for the optional cross-encoder stage.
+    const RERANK_MODELS = {
+      fast: 'Xenova/ms-marco-MiniLM-L-6-v2',           // ~22M, English, very fast
+      multi: 'onnx-community/bge-reranker-v2-m3-ONNX',  // ~600M, multilingual
+    };
     async function searchMemory(query, topK = 5) {
       const vec = await LocalMind.runtime.embed(query, 'query');
-      return searchByVector(vec, topK);
+      if (localStorage.getItem('lm_rag_rerank') !== '1') return searchByVector(vec, topK);
+      // Rerank on: over-fetch candidates at a looser threshold, cross-encode
+      // (query, passage) pairs, then keep the top-K by reranker score. Falls back
+      // to pure vector order if the reranker errors.
+      const candidates = await searchByVector(vec, Math.max(topK * 4, 20), 0.2);
+      if (candidates.length <= 1) return candidates.slice(0, topK);
+      const modelId = RERANK_MODELS[localStorage.getItem('lm_rag_rerank_model') || 'fast'] || RERANK_MODELS.fast;
+      try {
+        const scores = await LocalMind.runtime.rerank(query, candidates.map(c => c.text), modelId);
+        return candidates
+          .map((c, i) => ({ ...c, rerankScore: (typeof scores[i] === 'number' ? scores[i] : -Infinity) }))
+          .sort((a, b) => b.rerankScore - a.rerankScore)
+          .slice(0, topK);
+      } catch (err) {
+        console.error('Rerank failed, using vector order:', err);
+        return candidates.slice(0, topK);
+      }
     }
 
     // One-time background re-index when the embedding model changes (bumped
@@ -9721,6 +9755,24 @@ self.addEventListener('message', async (e) => {
       ttsAutoplayToggle.checked = localStorage.getItem('lm_tts_autoplay') === '1';
       ttsAutoplayToggle.addEventListener('change', () => {
         try { localStorage.setItem('lm_tts_autoplay', ttsAutoplayToggle.checked ? '1' : '0'); } catch {}
+      });
+    }
+    const ragRerankToggle = document.getElementById('ragRerankToggle');
+    const ragRerankModelRow = document.getElementById('ragRerankModelRow');
+    const ragRerankModelSelect = document.getElementById('ragRerankModelSelect');
+    if (ragRerankToggle) {
+      const on = localStorage.getItem('lm_rag_rerank') === '1';
+      ragRerankToggle.checked = on;
+      if (ragRerankModelRow) ragRerankModelRow.style.display = on ? '' : 'none';
+      ragRerankToggle.addEventListener('change', () => {
+        try { localStorage.setItem('lm_rag_rerank', ragRerankToggle.checked ? '1' : '0'); } catch {}
+        if (ragRerankModelRow) ragRerankModelRow.style.display = ragRerankToggle.checked ? '' : 'none';
+      });
+    }
+    if (ragRerankModelSelect) {
+      ragRerankModelSelect.value = localStorage.getItem('lm_rag_rerank_model') || 'fast';
+      ragRerankModelSelect.addEventListener('change', () => {
+        try { localStorage.setItem('lm_rag_rerank_model', ragRerankModelSelect.value); } catch {}
       });
     }
 
@@ -13758,6 +13810,31 @@ ${JSON.stringify({ name, result })}
         return this._embQueue.then(vectors => wasString ? vectors[0] : vectors);
       },
 
+      // --- rerank -------------------------------------------------
+      // Optional cross-encoder rerank of retrieved passages. Shares the
+      // embedding worker (serialised through _embQueue) so it never races
+      // an embed. Returns Promise<number[]> — one relevance score per
+      // passage, index-aligned. `model` is the reranker HF id.
+      rerank(query, passages, model) {
+        const self = this;
+        if (!Array.isArray(passages) || passages.length === 0) return Promise.resolve([]);
+        this._embQueue = this._embQueue.then(() => self._ensureEmbWorker().then(() => {
+          return new Promise((resolve, reject) => {
+            const id = Math.random().toString(36).slice(2);
+            const handler = (e) => {
+              if (e.data.id === id) {
+                self._embWorker.removeEventListener('message', handler);
+                if (e.data.type === 'rerank_scores') resolve(e.data.scores);
+                else reject(new Error(e.data.message || 'Rerank failed'));
+              }
+            };
+            self._embWorker.addEventListener('message', handler);
+            self._embWorker.postMessage({ type: 'rerank', query, passages, model, id });
+          });
+        }));
+        return this._embQueue;
+      },
+
       // --- SAM segmentation ----------------------------------------
       // Lazy: the SAM worker is created on first segmentImage() call.
       // Independent of the chat and embedding workers. Auto-switches
@@ -13898,6 +13975,8 @@ env.localModelPath    = '/models/';
 env.allowRemoteModels = true;
 
 let embedder = null;
+let reranker = null;      // lazy cross-encoder for optional rerank stage
+let rerankerId = null;    // model id the reranker was loaded with
 
 self.addEventListener('message', async (e) => {
   const { type, texts, id, kind } = e.data;
@@ -13931,6 +14010,31 @@ self.addEventListener('message', async (e) => {
         results.push(Array.from(output.data));
       }
       self.postMessage({ type: 'embeddings', vectors: results, id });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: err.message || String(err), id });
+    }
+  } else if (type === 'rerank') {
+    try {
+      // Optional cross-encoder rerank stage. Scores each (query, passage) pair and
+      // returns a relevance score per passage (higher = more relevant). Runs on
+      // WASM (tiny ms-marco default) so it never contends with the WebGPU embedder.
+      const modelId = e.data.model || 'Xenova/ms-marco-MiniLM-L-6-v2';
+      if (!reranker || rerankerId !== modelId) {
+        reranker = await pipeline('text-classification', modelId, {
+          device: 'wasm',
+          progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
+        });
+        rerankerId = modelId;
+      }
+      const query = e.data.query || '';
+      const passages = e.data.passages || [];
+      const scores = [];
+      for (const p of passages) {
+        const out = await reranker({ text: query, text_pair: p });
+        const rec = Array.isArray(out) ? out[0] : out;
+        scores.push(rec && typeof rec.score === 'number' ? rec.score : 0);
+      }
+      self.postMessage({ type: 'rerank_scores', scores, id });
     } catch (err) {
       self.postMessage({ type: 'error', message: err.message || String(err), id });
     }
