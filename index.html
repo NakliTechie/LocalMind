@@ -17988,6 +17988,12 @@ self.addEventListener('message', async (e) => {
       if (CB.busy) return;
       CB.busy = true; cloneUpdateButtons();
       cloneStopAudio();
+      // Resume the shared audio context NOW, inside this click gesture, so the
+      // generated speech is audible when it returns (~seconds later). Resuming
+      // only in clonePlay() runs outside a gesture and can leave the context
+      // suspended → audio scheduled but silent until the next click. (Never
+      // await resume() — it can hang forever under autoplay block.)
+      try { const ctx = ttsGetCtx(); if (ctx.state === 'suspended') { ctx.resume().catch(() => {}); ttsArmResumeOnGesture(ctx); } } catch (_) {}
       cloneSetProgress('Generating speech in the cloned voice…');
       const exaggeration = parseFloat((cloneExagRange && cloneExagRange.value) || '0.5') || 0.5;
       ensureCloneWorker().postMessage({ type: 'speak', id: ++CB.reqId, text, exaggeration });
