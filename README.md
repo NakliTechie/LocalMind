@@ -25,7 +25,7 @@ It began as a private chatbot and grew into a small **AI workbench**: chat, imag
 - 🖼️ **See & hear** — some models accept images and audio; voice-to-text works on any model.
 - 📷 **Point your camera** — describe what it sees, or drop in an image and ask about it — on-device captioning & visual Q&A (SmolVLM, WebGPU). Downloads ~0.9 GB once, then works offline.
 - 🔊 **Voice in and out** — read any reply aloud (🔊, Kokoro-82M, English + Hindi), or go fully hands-free (🎙 **Voice mode**): hold to talk, it transcribes (Moonshine), answers, and reads back. Both run on-device; nothing leaves your machine.
-- 🎭 **Clone a voice** — record 5–10 seconds of a voice, then make it say anything *in that voice* — zero-shot, entirely in the tab (Chatterbox). A heavy first download (~1.5 GB), then offline. The reference audio never leaves your device.
+- 🎭 **Clone a voice** — record 5–10 seconds of a voice, then make it say anything *in that voice* — zero-shot, entirely in the tab (Chatterbox). A heavy first download (~1.4 GB), then offline. The reference audio never leaves your device.
 - 🧠 **It remembers** — a private, on-device memory you can browse, search, and tidy up.
 - 🔌 **Use *any* model** — point it at your own Ollama / LM Studio, load a GGUF from a URL, or **open a `.gguf` straight from your disk** (no download — fully offline).
 - 📱 **Phone to desktop** — installable as an app; works offline.
