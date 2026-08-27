@@ -13968,6 +13968,8 @@ ${JSON.stringify({ name, result })}
 import {
   env,
   pipeline,
+  AutoTokenizer,
+  AutoModelForSequenceClassification,
 } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
 
 env.allowLocalModels  = true;
@@ -13975,7 +13977,8 @@ env.localModelPath    = '/models/';
 env.allowRemoteModels = true;
 
 let embedder = null;
-let reranker = null;      // lazy cross-encoder for optional rerank stage
+let reranker = null;      // lazy cross-encoder (SequenceClassification) for rerank
+let rerankTokenizer = null;
 let rerankerId = null;    // model id the reranker was loaded with
 
 self.addEventListener('message', async (e) => {
@@ -14018,9 +14021,14 @@ self.addEventListener('message', async (e) => {
       // Optional cross-encoder rerank stage. Scores each (query, passage) pair and
       // returns a relevance score per passage (higher = more relevant). Runs on
       // WASM (tiny ms-marco default) so it never contends with the WebGPU embedder.
+      // NOTE: use AutoModelForSequenceClassification + the RAW logit, NOT the
+      // text-classification pipeline — these cross-encoders emit a single relevance
+      // logit, which the pipeline softmaxes to a constant 1.0 (verified 2026-08-21),
+      // destroying the ranking signal.
       const modelId = e.data.model || 'Xenova/ms-marco-MiniLM-L-6-v2';
       if (!reranker || rerankerId !== modelId) {
-        reranker = await pipeline('text-classification', modelId, {
+        rerankTokenizer = await AutoTokenizer.from_pretrained(modelId);
+        reranker = await AutoModelForSequenceClassification.from_pretrained(modelId, {
           device: 'wasm',
           progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
         });
@@ -14030,9 +14038,9 @@ self.addEventListener('message', async (e) => {
       const passages = e.data.passages || [];
       const scores = [];
       for (const p of passages) {
-        const out = await reranker({ text: query, text_pair: p });
-        const rec = Array.isArray(out) ? out[0] : out;
-        scores.push(rec && typeof rec.score === 'number' ? rec.score : 0);
+        const inputs = await rerankTokenizer(query, { text_pair: p, padding: true, truncation: true });
+        const res = await reranker(inputs);
+        scores.push(Number(res.logits.data[0]));
       }
       self.postMessage({ type: 'rerank_scores', scores, id });
     } catch (err) {
