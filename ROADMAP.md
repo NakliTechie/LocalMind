@@ -199,6 +199,19 @@ stage (`ms-marco-MiniLM` / `bge-reranker-v2-m3`, both browser-runnable now) is a
 precision add on top. **~150 lines + migration; needs a foreground session for the live
 re-embed.**
 
+> **Decision 2026-08-21 — reranker shipped, Qwen3 embedder DEFERRED (revisit later).** Built
+> the reranker (Settings toggle: `ms-marco-MiniLM-L-6-v2` ~22 MB default / `bge-reranker-v2-m3`
+> ~600 MB multilingual) and it's the real precision lever — validated live (raw
+> `AutoModelForSequenceClassification` logit; the `text-classification` pipeline softmaxes a
+> single-logit cross-encoder to a constant 1.0, so it does NOT work — see
+> `localmind-rag-v2-state` memory). **Kept `multilingual-e5-small` (~120 MB, 384-dim) as the
+> embedder:** Qwen3-Embedding-0.6B's *smallest* ONNX variant is ~541 MB (q4f16) — chat-model-
+> sized, a heavy per-user download on every RAG use, plus a 384→1024 re-embed migration. Not
+> worth it when the reranker delivers the precision. **If we want the multilingual-retrieval
+> jump later,** Qwen3-Embedding-0.6B (last-token pooling, `Instruct: …\nQuery:` prefix on
+> queries, raw docs) is the documented path — code exists in git history on
+> `features/2026-08-21-rag-v2-qwen3-embed` before the revert.
+
 ### 3. GPT-OSS 20B in-tab — the headline flex
 
 transformers.js v4 runs **GPT-OSS 20B** at q4f16, ~60 tok/s on an M4 Pro Max. One
