@@ -20,10 +20,12 @@ It began as a private chatbot and grew into a small **AI workbench**: chat, imag
 - 🎨 **Generate images** — text-to-image on your GPU, right in the tab.
 - 🌫️ **Watch text "denoise"** — an experimental diffusion-text mode (a different way of generating).
 - 🌐 **Search the web** *(optional)* — bring your own free search key; answers come back with clickable sources.
-- 📄 **Chat with your documents** — drop in PDFs, Word docs, notes, or a whole folder and ask questions across them. Multilingual search (100+ languages, via a multilingual‑e5 embedder) — ask in one language about documents in another. It remembers across sessions.
+- 📄 **Chat with your documents** — drop in PDFs, Word docs, notes, or a whole folder and ask questions across them. Multilingual search (100+ languages, via a multilingual‑e5 embedder) — ask in one language about documents in another. An optional cross-encoder **reranker** (Settings) re-scores the search hits for sharper answers. It remembers across sessions.
 - 🔎 **Extract text from images & PDFs (OCR)** — drop in a photo, screenshot, or scanned PDF and get back clean, selectable text or Markdown — tables and formulas included. Runs entirely on your GPU (GLM-OCR); the document never leaves your device. Needs WebGPU (Chrome/Edge); the model downloads once (~1.4 GB), then works offline. You can also point it at the model folder on disk for zero runtime fetch.
 - 🖼️ **See & hear** — some models accept images and audio; voice-to-text works on any model.
+- 📷 **Point your camera** — describe what it sees, or drop in an image and ask about it — on-device captioning & visual Q&A (SmolVLM, WebGPU). Downloads ~0.9 GB once, then works offline.
 - 🔊 **Voice in and out** — read any reply aloud (🔊, Kokoro-82M, English + Hindi), or go fully hands-free (🎙 **Voice mode**): hold to talk, it transcribes (Moonshine), answers, and reads back. Both run on-device; nothing leaves your machine.
+- 🎭 **Clone a voice** — record 5–10 seconds of a voice, then make it say anything *in that voice* — zero-shot, entirely in the tab (Chatterbox). A heavy first download (~1.5 GB), then offline. The reference audio never leaves your device.
 - 🧠 **It remembers** — a private, on-device memory you can browse, search, and tidy up.
 - 🔌 **Use *any* model** — point it at your own Ollama / LM Studio, load a GGUF from a URL, or **open a `.gguf` straight from your disk** (no download — fully offline).
 - 📱 **Phone to desktop** — installable as an app; works offline.
@@ -62,6 +64,8 @@ remain host responsibilities. The worker protocols are documented in
 [`INFERENCE-PROTOCOL.md`](./INFERENCE-PROTOCOL.md).
 
 **Read-aloud** uses [**Kokoro-82M**](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) via [`kokoro-js`](https://www.npmjs.com/package/kokoro-js); **Voice mode** transcribes with [**Moonshine**](https://huggingface.co/onnx-community/moonshine-base-ONNX) (English) and keeps Whisper-base as the multilingual fallback. All of it runs on WebAssembly so it never competes with the chat model's GPU — and entirely on-device.
+
+**Voice cloning** (🎭) uses [**Chatterbox**](https://huggingface.co/onnx-community/chatterbox-ONNX) (Resemble AI, MIT) on WebGPU — a first-class Transformers.js model. **Live Vision** (📷) uses [**SmolVLM**](https://huggingface.co/HuggingFaceTB/SmolVLM-500M-Instruct) (Hugging Face, Apache-2.0); the optional retrieval **reranker** uses [ms-marco-MiniLM](https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2) or [bge-reranker-v2-m3](https://huggingface.co/onnx-community/bge-reranker-v2-m3-ONNX).
 
 ## Try it in 30 seconds
 
