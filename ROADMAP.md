@@ -149,9 +149,17 @@ Blocked on repro data from the Brave reporter (console log). **~40 lines.**
 | Feature | Blocker | When |
 |---------|---------|------|
 | Gemma 4 26B MoE in-browser | ~15 GB weight load, exceeds browser GPU | ~2027 |
-| KV cache quantization (2x context) | ONNX Runtime WebGPU support | Unknown |
-| KV cache offload to system RAM | WebGPU API limitation | Unknown |
+| KV cache quantization (sub-fp16, ~30-36% less KV) | Kernel shipped in ORT-web ≥1.28.0 (2026-07); tjs @4 still bundles ORT-web 1.26.0-dev on JSEP + exposes no `kvCacheQuantizationBits` knob | When tjs bumps ORT-web ≥1.28.0 + native WebGPU EP |
+| KV cache offload to system RAM | WebGPU API — no host-mappable device memory during compute (unchanged 2026) | No path |
 | Cross-device sync | OAuth complexity in single-file app | Low priority |
+
+> **KV notes (re-checked 2026-08-21).** No easy fp16-KV win to grab: tjs 4.2.0 already
+> allocates the KV cache at the ONNX graph's declared dtype, so q4f16/fp16 models get fp16
+> KV automatically — the `transformers.js_config.kv_cache_dtype` field is **dead code on @4**
+> (a v3.x-only path), so setting it does nothing. GQA (every modern small model) already
+> shrinks KV 4-8×; **LFM2** has the smallest KV footprint of what we ship. The real
+> context-efficiency lever today is the **RAG reranker** (fewer, tighter injected chunks),
+> not a KV flag.
 
 ## Tier 5 — the July 2026 wave
 
@@ -190,6 +198,19 @@ re-embed behind a progress bar, keep old vectors until re-embed completes. A **r
 stage (`ms-marco-MiniLM` / `bge-reranker-v2-m3`, both browser-runnable now) is a cheap
 precision add on top. **~150 lines + migration; needs a foreground session for the live
 re-embed.**
+
+> **Decision 2026-08-21 — reranker shipped, Qwen3 embedder DEFERRED (revisit later).** Built
+> the reranker (Settings toggle: `ms-marco-MiniLM-L-6-v2` ~22 MB default / `bge-reranker-v2-m3`
+> ~600 MB multilingual) and it's the real precision lever — validated live (raw
+> `AutoModelForSequenceClassification` logit; the `text-classification` pipeline softmaxes a
+> single-logit cross-encoder to a constant 1.0, so it does NOT work — see
+> `localmind-rag-v2-state` memory). **Kept `multilingual-e5-small` (~120 MB, 384-dim) as the
+> embedder:** Qwen3-Embedding-0.6B's *smallest* ONNX variant is ~541 MB (q4f16) — chat-model-
+> sized, a heavy per-user download on every RAG use, plus a 384→1024 re-embed migration. Not
+> worth it when the reranker delivers the precision. **If we want the multilingual-retrieval
+> jump later,** Qwen3-Embedding-0.6B (last-token pooling, `Instruct: …\nQuery:` prefix on
+> queries, raw docs) is the documented path — code exists in git history on
+> `features/2026-08-21-rag-v2-qwen3-embed` before the revert.
 
 ### 3. GPT-OSS 20B in-tab — the headline flex
 
