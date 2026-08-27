@@ -149,9 +149,17 @@ Blocked on repro data from the Brave reporter (console log). **~40 lines.**
 | Feature | Blocker | When |
 |---------|---------|------|
 | Gemma 4 26B MoE in-browser | ~15 GB weight load, exceeds browser GPU | ~2027 |
-| KV cache quantization (2x context) | ONNX Runtime WebGPU support | Unknown |
-| KV cache offload to system RAM | WebGPU API limitation | Unknown |
+| KV cache quantization (sub-fp16, ~30-36% less KV) | Kernel shipped in ORT-web ≥1.28.0 (2026-07); tjs @4 still bundles ORT-web 1.26.0-dev on JSEP + exposes no `kvCacheQuantizationBits` knob | When tjs bumps ORT-web ≥1.28.0 + native WebGPU EP |
+| KV cache offload to system RAM | WebGPU API — no host-mappable device memory during compute (unchanged 2026) | No path |
 | Cross-device sync | OAuth complexity in single-file app | Low priority |
+
+> **KV notes (re-checked 2026-08-21).** No easy fp16-KV win to grab: tjs 4.2.0 already
+> allocates the KV cache at the ONNX graph's declared dtype, so q4f16/fp16 models get fp16
+> KV automatically — the `transformers.js_config.kv_cache_dtype` field is **dead code on @4**
+> (a v3.x-only path), so setting it does nothing. GQA (every modern small model) already
+> shrinks KV 4-8×; **LFM2** has the smallest KV footprint of what we ship. The real
+> context-efficiency lever today is the **RAG reranker** (fewer, tighter injected chunks),
+> not a KV flag.
 
 ## Tier 5 — the July 2026 wave
 

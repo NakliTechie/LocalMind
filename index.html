@@ -9361,10 +9361,12 @@ self.addEventListener('message', async (e) => {
     }
 
     // Embedding-model marker. Bumping this triggers a one-time background
-    // re-index (migrated all-MiniLM → multilingual-e5-small, 2026-07-04).
-    // Both are 384-dim, so the length guard alone can't tell them apart —
-    // hence a per-chunk `embModel` tag, and search only scores matching chunks.
-    const EMBED_TAG = 'me5-small';
+    // re-index (all-MiniLM → multilingual-e5-small 2026-07-04 → Qwen3-Embedding-
+    // 0.6B 2026-08-21). The Qwen3 swap is also a DIMENSION change (384 → 1024),
+    // so the length guard in searchByVector already excludes stale vectors; the
+    // per-chunk `embModel` tag keeps search scoring only same-model chunks while
+    // the background re-embed runs.
+    const EMBED_TAG = 'qwen3-emb-0.6b';
 
     async function searchByVector(queryVec, topK = 5, threshold = 0.3) {
       const chunks = await getAllChunks();
@@ -13880,7 +13882,7 @@ ${JSON.stringify({ name, result })}
       _getWorker() { return this._worker; },
     };
 
-    // ── Embedding worker factory (MiniLM via @huggingface/transformers) ──
+    // ── Embedding worker factory (Qwen3-Embedding-0.6B via @huggingface/transformers) ──
     // Called once, lazily, by runtime.embed() on the first embed request.
     // Lives inside the adapter because its blob source code imports from
     // the Transformers.js CDN.
@@ -13901,12 +13903,14 @@ self.addEventListener('message', async (e) => {
   const { type, texts, id, kind } = e.data;
   if (type === 'load') {
     try {
-      // multilingual-e5-small: 100+ languages, 384-dim (same as the old MiniLM,
-      // so the vector store keeps its size), runs on WASM. Requires the e5
-      // 'query: ' / 'passage: ' task prefixes (applied below).
-      embedder = await pipeline('feature-extraction', 'Xenova/multilingual-e5-small', {
-        device: 'wasm',
-        dtype: 'q8',
+      // Qwen3-Embedding-0.6B: 100+ languages, 1024-dim, Matryoshka, a big
+      // multilingual-retrieval jump over e5-small. Uses LAST-TOKEN pooling (not
+      // mean) and an instruction prefix on QUERIES only (documents go in raw).
+      // WebGPU q4f16 (~541 MB, fast) where available, else WASM q8.
+      const useGpu = (typeof navigator !== 'undefined') && ('gpu' in navigator);
+      embedder = await pipeline('feature-extraction', 'onnx-community/Qwen3-Embedding-0.6B-ONNX', {
+        device: useGpu ? 'webgpu' : 'wasm',
+        dtype: useGpu ? 'q4f16' : 'q8',
         progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
       });
       self.postMessage({ type: 'ready' });
@@ -13915,10 +13919,15 @@ self.addEventListener('message', async (e) => {
     }
   } else if (type === 'embed') {
     try {
-      const prefix = (kind === 'query') ? 'query: ' : 'passage: ';
+      // Qwen3-Embedding: QUERIES get an instruction prefix; DOCUMENTS go in raw.
+      // last-token pooling is the model's trained pooling (not mean). This worker
+      // is a JS template literal, so the query newline is written as \\n here (it
+      // becomes a real \n in the emitted worker source).
+      const TASK = 'Given a web search query, retrieve relevant passages that answer the query';
       const results = [];
       for (const text of texts) {
-        const output = await embedder(prefix + text, { pooling: 'mean', normalize: true });
+        const input = (kind === 'query') ? ('Instruct: ' + TASK + '\\nQuery: ' + text) : text;
+        const output = await embedder(input, { pooling: 'last_token', normalize: true });
         results.push(Array.from(output.data));
       }
       self.postMessage({ type: 'embeddings', vectors: results, id });
