@@ -1102,6 +1102,17 @@
       transition: width 0.3s ease;
       width: 0%;
     }
+    /* Indeterminate sweep — for work of unknown-but-short duration (e.g. the
+       ~2 s Chatterbox voice-encode) where there's no download % to show. */
+    .progress-fill.indeterminate {
+      width: 40% !important;
+      transition: none;
+      animation: progressSweep 1.1s ease-in-out infinite;
+    }
+    @keyframes progressSweep {
+      0%   { margin-left: -40%; }
+      100% { margin-left: 100%; }
+    }
 
     .progress-text-row {
       display: flex;
@@ -2846,6 +2857,8 @@
             <button type="button" class="image-btn" id="cloneUploadBtn">&#127925; Upload&hellip;</button>
             <input type="file" id="cloneFileInput" accept="audio/*" hidden>
             <span class="clone-ref-status" id="cloneRefStatus" style="font-size:0.85rem;opacity:0.8">No reference voice yet.</span>
+            <button type="button" class="image-btn" id="cloneRefPlayBtn" title="Play back the reference voice" style="display:none;padding:4px 8px">&#9654; Hear it</button>
+            <button type="button" class="image-btn" id="cloneRefClearBtn" title="Remove this reference voice" aria-label="Remove reference voice" style="display:none;padding:4px 9px">&#10005;</button>
           </div>
           <textarea id="cloneText" rows="2" placeholder="Type what the cloned voice should say&hellip;" style="width:100%;padding:8px;resize:vertical;box-sizing:border-box"></textarea>
           <div class="clone-controls" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -7940,6 +7953,8 @@ self.addEventListener('message', async (e) => {
       return;
     }
 
+    if (type === 'reset') { speaker = null; return; }
+
     if (type === 'clone') {
       if (!model) { self.postMessage({ type: 'error', id: d.id, message: 'Voice model not loaded' }); return; }
       const pcm = d.pcm;
@@ -7957,11 +7972,26 @@ self.addEventListener('message', async (e) => {
       const text = String(d.text || '').trim();
       if (!text) { self.postMessage({ type: 'error', id: d.id, message: 'Nothing to say' }); return; }
       const inputs = await processor(text);
-      const waveform = await model.generate({
+      const genArgs = {
         ...inputs, ...speaker,
         exaggeration: (typeof d.exaggeration === 'number') ? d.exaggeration : 0.5,
         max_new_tokens: d.maxTokens || 1000,
-      });
+      };
+      // First pass uses the model's own generation_config verbatim — the healthy path
+      // (normal text) is unchanged, so it can't regress.
+      let waveform = await model.generate(genArgs);
+      // Repair pass for the "!" bug: some inputs — notably any line ending in "!" — come
+      // back near-silent because generation stops almost immediately. Diagnosis: "!"
+      // tokenizes to id 3 (a plain content token, not a stop), so the early stop is on the
+      // GENERATION side. The exported generation_config lists eos_token_id [2, 6562], where
+      // 6562 = [STOP_SPEECH] (the real end of an utterance) but 2 = " " is a TEXT-vocab
+      // token that leaked into the SPEECH stop set; under greedy decoding it deterministically
+      // trips an early stop on those inputs. Only when the clip is degenerately short for
+      // real text (< 100 ms @ 24 kHz = 2400 samples) do we regenerate once with the stop set
+      // restricted to the true terminator + a small floor. Never fires for healthy output.
+      if (waveform.data.length < 2400 && text.replace(/\s+/g, '').length >= 2) {
+        waveform = await model.generate({ ...genArgs, eos_token_id: [6562], min_new_tokens: 24 });
+      }
       let pcm = waveform.data;
       // Guard against clipping (observed peak ~1.16): normalise if it exceeds 1.
       let peak = 0;
@@ -17850,6 +17880,8 @@ self.addEventListener('message', async (e) => {
     const cloneUploadBtn  = document.getElementById('cloneUploadBtn');
     const cloneFileInput  = document.getElementById('cloneFileInput');
     const cloneRefStatus  = document.getElementById('cloneRefStatus');
+    const cloneRefPlayBtn = document.getElementById('cloneRefPlayBtn');
+    const cloneRefClearBtn = document.getElementById('cloneRefClearBtn');
     const cloneTextInput  = document.getElementById('cloneText');
     const cloneSpeakBtn   = document.getElementById('cloneSpeakBtn');
     const cloneReplayBtn  = document.getElementById('cloneReplayBtn');
@@ -17857,9 +17889,77 @@ self.addEventListener('message', async (e) => {
     const cloneProgressFill = document.getElementById('cloneProgressFill');
     const cloneProgressText = document.getElementById('cloneProgressText');
     const CLONE_PROGRESS_DEFAULT = 'Record or upload a 5–10s voice sample, then type text and Speak. First use downloads Chatterbox (~1.5 GB) once, then runs offline. WebGPU — best on Chrome/Edge.';
-    const CB = { worker: null, ready: false, loading: false, busy: false, hasVoice: false, reqId: 0, rec: null, recStream: null, recChunks: [], lastPcm: null, lastSr: 24000, sources: [], _pendingClonePcm: null };
+    // refPcm/refSr: a copy of the decoded reference voice, kept for playback (▶ Hear it)
+    // and re-encoding a restored reference. hasVoice = the worker has encode_speech'd it.
+    // _pendingSpeak: text queued while a restored reference is (re)encoded on first Speak.
+    const CB = { worker: null, ready: false, loading: false, busy: false, hasVoice: false, reqId: 0, rec: null, recStream: null, recChunks: [], lastPcm: null, lastSr: 24000, sources: [], _pendingClonePcm: null, refPcm: null, refSr: 24000, _pendingSpeak: null };
 
     function cloneSetProgress(msg) { if (cloneProgressText) cloneProgressText.textContent = msg; }
+    // Indeterminate sweep on the progress bar for the ~2 s encode (no % to show).
+    function cloneSetCloning(on) {
+      if (!cloneProgressFill) return;
+      cloneProgressFill.classList.toggle('indeterminate', !!on);
+      if (!on) cloneProgressFill.classList.remove('indeterminate');
+    }
+
+    // ── Reference-voice persistence (survives refresh until ✕-dismissed) ──
+    // Store the decoded reference PCM in IndexedDB so a captured voice isn't lost
+    // on reload. The heavy Chatterbox weights are cached separately (Cache Storage),
+    // so a restored reference re-encodes quickly without re-downloading the model.
+    const CLONE_REF_DB = 'localmind-voiceclone';
+    function cloneRefOpenDB() {
+      return new Promise((resolve, reject) => {
+        const r = indexedDB.open(CLONE_REF_DB, 1);
+        r.onupgradeneeded = () => { const db = r.result; if (!db.objectStoreNames.contains('ref')) db.createObjectStore('ref'); };
+        r.onsuccess = () => resolve(r.result);
+        r.onerror = () => reject(r.error);
+      });
+    }
+    async function cloneRefSave(pcm, sr) {
+      try {
+        const db = await cloneRefOpenDB();
+        await new Promise((res, rej) => {
+          const tx = db.transaction('ref', 'readwrite');
+          tx.objectStore('ref').put({ pcm: pcm.buffer.slice(0), sr, len: pcm.length, savedAt: Date.now() }, 'current');
+          tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+        });
+        db.close();
+      } catch (_) { /* persistence is best-effort */ }
+    }
+    async function cloneRefLoad() {
+      try {
+        const db = await cloneRefOpenDB();
+        const rec = await new Promise((res, rej) => { const q = db.transaction('ref', 'readonly').objectStore('ref').get('current'); q.onsuccess = () => res(q.result || null); q.onerror = () => rej(q.error); });
+        db.close();
+        if (rec && rec.pcm) return { pcm: new Float32Array(rec.pcm), sr: rec.sr || 24000 };
+      } catch (_) {}
+      return null;
+    }
+    async function cloneRefDelete() {
+      try { const db = await cloneRefOpenDB(); await new Promise((res) => { const tx = db.transaction('ref', 'readwrite'); tx.objectStore('ref').delete('current'); tx.oncomplete = res; tx.onerror = res; }); db.close(); } catch (_) {}
+    }
+
+    // Show/hide the ▶ Hear it / ✕ controls when a reference clip is present.
+    function cloneShowRefControls(present) {
+      if (cloneRefPlayBtn) cloneRefPlayBtn.style.display = present ? '' : 'none';
+      if (cloneRefClearBtn) cloneRefClearBtn.style.display = present ? '' : 'none';
+    }
+    // Adopt a decoded reference clip: keep a copy for playback + persist it.
+    function cloneSetReference(pcm, sr, label) {
+      CB.refPcm = pcm; CB.refSr = sr || 24000;
+      if (cloneRefStatus) cloneRefStatus.textContent = label || ('Reference: ' + (pcm.length / (sr || 24000)).toFixed(1) + 's');
+      cloneShowRefControls(true);
+      cloneRefSave(pcm, sr || 24000);
+    }
+    async function cloneClearReference() {
+      CB.refPcm = null; CB.hasVoice = false; CB._pendingSpeak = null;
+      if (cloneRefStatus) cloneRefStatus.textContent = 'No reference voice yet.';
+      cloneShowRefControls(false);
+      await cloneRefDelete();
+      // Drop the encoded speaker in the worker too, so a stale voice can't be reused.
+      try { if (CB.worker) CB.worker.postMessage({ type: 'reset' }); } catch (_) {}
+      cloneUpdateButtons();
+    }
 
     // Decode a recorded/uploaded audio Blob to mono Float32 at a target rate,
     // via OfflineAudioContext (same approach as the Whisper decode path).
@@ -17874,7 +17974,10 @@ self.addEventListener('message', async (e) => {
     }
 
     function cloneUpdateButtons() {
-      if (cloneSpeakBtn) cloneSpeakBtn.disabled = !(CB.ready && CB.hasVoice && !CB.busy);
+      // Speak is live whenever there's a voice to use — either one the worker has
+      // already encoded (hasVoice), or a captured/restored reference (refPcm) whose
+      // first Speak will load+encode it. Disabled only while busy.
+      if (cloneSpeakBtn) cloneSpeakBtn.disabled = !((CB.hasVoice || CB.refPcm) && !CB.busy);
       if (cloneReplayBtn) cloneReplayBtn.disabled = !(CB.lastPcm && !CB.busy);
     }
 
@@ -17887,24 +17990,35 @@ self.addEventListener('message', async (e) => {
         const d = e.data || {};
         if (d.type === 'progress') {
           const p = d.data || {};
-          if (p.status === 'progress') { cloneProgressFill.style.width = Math.round(p.progress || 0) + '%'; cloneSetProgress('Downloading Chatterbox — ' + (p.file || '') + ' ' + Math.round(p.progress || 0) + '%'); }
+          if (p.status === 'progress') { cloneSetCloning(false); cloneProgressFill.style.width = Math.round(p.progress || 0) + '%'; cloneSetProgress('Downloading Chatterbox — ' + (p.file || '') + ' ' + Math.round(p.progress || 0) + '%'); }
         } else if (d.type === 'ready') {
           CB.ready = true; CB.loading = false; cloneProgressFill.style.width = '100%';
-          cloneSetProgress(CB.hasVoice ? 'Ready — type text and Speak.' : 'Chatterbox ready — record or upload a voice sample.');
+          cloneSetProgress(CB.hasVoice ? 'Ready — type text and Speak.' : (CB.refPcm ? 'Chatterbox ready — Speak to clone your saved voice.' : 'Chatterbox ready — record or upload a voice sample.'));
           if (CB._pendingClonePcm) { const pcm = CB._pendingClonePcm; CB._pendingClonePcm = null; cloneSendClone(pcm); }
           cloneUpdateButtons();
         } else if (d.type === 'cloned') {
           CB.hasVoice = true; CB.busy = false;
-          cloneRefStatus.textContent = 'Reference voice captured ✓';
-          cloneSetProgress('Voice cloned — type text and Speak.');
-          cloneUpdateButtons();
+          cloneSetCloning(false); cloneProgressFill.style.width = '100%';
+          if (cloneRefStatus && CB.refPcm) cloneRefStatus.textContent = 'Reference: ' + (CB.refPcm.length / (CB.refSr || 24000)).toFixed(1) + 's ✓';
+          cloneShowRefControls(!!CB.refPcm);
+          // Flush a speak queued while a restored reference was (re)encoded.
+          if (CB._pendingSpeak) {
+            const q = CB._pendingSpeak; CB._pendingSpeak = null;
+            cloneSetProgress('Generating speech in the cloned voice…');
+            CB.busy = true; cloneUpdateButtons();
+            ensureCloneWorker().postMessage({ type: 'speak', id: ++CB.reqId, text: q.text, exaggeration: q.exaggeration });
+          } else {
+            cloneSetProgress('Voice cloned — type text and Speak.');
+            cloneUpdateButtons();
+          }
         } else if (d.type === 'audio') {
           CB.busy = false;
           clonePlay(d.pcm, d.sampleRate || 24000);
           cloneSetProgress('Spoke ' + (d.pcm.length / (d.sampleRate || 24000)).toFixed(1) + 's. Edit the text and Speak again, or clone a new voice.');
           cloneUpdateButtons();
         } else if (d.type === 'error') {
-          CB.busy = false; CB.loading = false;
+          CB.busy = false; CB.loading = false; CB._pendingSpeak = null;
+          cloneSetCloning(false);
           cloneSetProgress('Voice-clone error: ' + (d.message || 'failed'));
           cloneUpdateButtons();
         }
@@ -17930,7 +18044,8 @@ self.addEventListener('message', async (e) => {
     function cloneSendClone(pcm) {
       if (!CB.ready) { CB._pendingClonePcm = pcm; loadCloneModel(); return; }
       CB.busy = true; cloneUpdateButtons();
-      cloneSetProgress('Encoding the reference voice…');
+      cloneSetProgress('Cloning your voice… (a few seconds)');
+      cloneSetCloning(true);
       ensureCloneWorker().postMessage({ type: 'clone', id: ++CB.reqId, pcm }, [pcm.buffer]);
     }
 
@@ -17939,7 +18054,9 @@ self.addEventListener('message', async (e) => {
         cloneSetProgress('Decoding the reference clip…');
         const pcm = await cloneDecodePCM(blob, 24000);
         if (!pcm || pcm.length < 24000) { cloneSetProgress('That clip is too short — aim for 5–10 seconds.'); return; }
-        cloneRefStatus.textContent = 'Reference: ' + (pcm.length / 24000).toFixed(1) + 's';
+        // Keep a copy for playback (▶ Hear it) + persistence; the copy sent to the
+        // worker is transferred (its buffer is neutered), so encode from a separate slice.
+        cloneSetReference(pcm.slice(0), 24000);
         cloneSendClone(pcm);
       } catch (e) { cloneSetProgress('Could not read that audio (' + ((e && e.message) || e) + ').'); }
     }
@@ -17961,12 +18078,18 @@ self.addEventListener('message', async (e) => {
         mr.start();
         cloneRecordBtn.textContent = '⏹ Stop';
         cloneSetProgress('Recording… speak naturally for 5–10 seconds, then Stop.');
+        // Prefetch the model while the user records — it downloads (~1.4 GB, first use)
+        // in parallel, so it's ready to encode by the time they hit Stop. Idempotent:
+        // no-op if already loaded/loading.
+        loadCloneModel();
       } catch (e) { cloneSetProgress('Mic blocked or unavailable (' + ((e && e.name) || e) + '). You can upload a clip instead.'); }
     }
     function cloneStopRecording() { try { if (CB.rec && CB.rec.state !== 'inactive') CB.rec.stop(); } catch {} }
 
-    function clonePlay(pcm, sr) {
-      CB.lastPcm = pcm; CB.lastSr = sr;
+    // Play a PCM buffer through the shared Web-Audio path. Used for both generated
+    // speech and reference playback, so it must NOT mutate CB.lastPcm (that's the
+    // last *generated* clip, which the ↻ Replay button reuses).
+    function clonePlayBuffer(pcm, sr) {
       try {
         const ctx = ttsGetCtx();
         try { if (ctx.state === 'suspended') { ctx.resume().catch(() => {}); ttsArmResumeOnGesture(ctx); } } catch (_) {}
@@ -17976,6 +18099,10 @@ self.addEventListener('message', async (e) => {
         node.start(ctx.currentTime + 0.02);
         CB.sources.push(node);
       } catch (e) { cloneSetProgress('Playback failed: ' + ((e && e.message) || e)); }
+    }
+    function clonePlay(pcm, sr) {
+      CB.lastPcm = pcm; CB.lastSr = sr;
+      clonePlayBuffer(pcm, sr);
       cloneUpdateButtons();
     }
     function cloneStopAudio() { CB.sources.forEach(s => { try { s.stop(); } catch (_) {} }); CB.sources = []; }
@@ -17983,13 +18110,25 @@ self.addEventListener('message', async (e) => {
     function cloneSpeak() {
       const text = (cloneTextInput.value || '').trim();
       if (!text) { cloneSetProgress('Type something for the voice to say.'); return; }
-      if (!CB.hasVoice) { cloneSetProgress('Record or upload a reference voice first.'); return; }
-      if (!CB.ready) { loadCloneModel(); cloneSetProgress('Model still loading — Speak again once it is ready.'); return; }
       if (CB.busy) return;
+      const exaggeration = parseFloat((cloneExagRange && cloneExagRange.value) || '0.5') || 0.5;
+      // A reference the worker hasn't encoded yet (e.g. restored from a prior session):
+      // encode it first, then speak once it's ready. cloneSendClone loads the model if
+      // needed — the weights are cached, so this is a quick re-load, not a re-download.
+      if (!CB.hasVoice) {
+        if (CB.refPcm) {
+          cloneStopAudio();
+          CB._pendingSpeak = { text, exaggeration };
+          cloneSendClone(CB.refPcm.slice(0));
+          return;
+        }
+        cloneSetProgress('Record or upload a reference voice first.');
+        return;
+      }
+      if (!CB.ready) { loadCloneModel(); cloneSetProgress('Model still loading — Speak again once it is ready.'); return; }
       CB.busy = true; cloneUpdateButtons();
       cloneStopAudio();
       cloneSetProgress('Generating speech in the cloned voice…');
-      const exaggeration = parseFloat((cloneExagRange && cloneExagRange.value) || '0.5') || 0.5;
       ensureCloneWorker().postMessage({ type: 'speak', id: ++CB.reqId, text, exaggeration });
     }
 
@@ -17998,9 +18137,23 @@ self.addEventListener('message', async (e) => {
     if (cloneFileInput) cloneFileInput.addEventListener('change', () => { const f = cloneFileInput.files && cloneFileInput.files[0]; if (f) cloneUseBlob(f); cloneFileInput.value = ''; });
     if (cloneSpeakBtn) cloneSpeakBtn.addEventListener('click', () => cloneSpeak());
     if (cloneReplayBtn) cloneReplayBtn.addEventListener('click', () => { if (CB.lastPcm) { cloneStopAudio(); clonePlay(CB.lastPcm, CB.lastSr); } });
+    if (cloneRefPlayBtn) cloneRefPlayBtn.addEventListener('click', () => { if (CB.refPcm) { cloneStopAudio(); clonePlayBuffer(CB.refPcm, CB.refSr); } });
+    if (cloneRefClearBtn) cloneRefClearBtn.addEventListener('click', () => { cloneStopAudio(); cloneClearReference(); cloneSetProgress(CB.ready ? 'Chatterbox ready — record or upload a voice sample.' : CLONE_PROGRESS_DEFAULT); });
+
+    // Restore a reference voice saved in a prior session (lazy: no model download
+    // until the user actually Speaks). Runs once at startup.
+    (async function cloneRestoreReference() {
+      const saved = await cloneRefLoad();
+      if (!saved || !saved.pcm || !saved.pcm.length) return;
+      if (CB.refPcm) return; // a fresh capture this session already won
+      CB.refPcm = saved.pcm; CB.refSr = saved.sr || 24000;
+      if (cloneRefStatus) cloneRefStatus.textContent = 'Reference: ' + (saved.pcm.length / (saved.sr || 24000)).toFixed(1) + 's (saved)';
+      cloneShowRefControls(true);
+      cloneUpdateButtons();
+    })();
 
     function onEnterCloneMode() {
-      if (!CB.ready && !CB.loading) cloneSetProgress(CLONE_PROGRESS_DEFAULT);
+      if (!CB.ready && !CB.loading) cloneSetProgress(CB.refPcm ? 'Saved reference voice ready — type text and Speak (loads Chatterbox on first Speak).' : CLONE_PROGRESS_DEFAULT);
       cloneUpdateButtons();
     }
     function onLeaveCloneMode() {
