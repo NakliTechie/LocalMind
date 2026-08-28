@@ -7976,23 +7976,21 @@ self.addEventListener('message', async (e) => {
         ...inputs, ...speaker,
         exaggeration: (typeof d.exaggeration === 'number') ? d.exaggeration : 0.5,
         max_new_tokens: d.maxTokens || 1000,
-        // The exported generation_config lists eos_token_id [2, 6562]. 6562 = [STOP_SPEECH],
-        // the true end of a spoken utterance; but 2 = " " is a TEXT-vocab token that leaked
-        // into the SPEECH stop set. Left in, it makes certain inputs — notably any line
-        // ending in "!" — stop generating almost immediately under greedy decoding, so the
-        // audio comes back near-silent ("the voice gen stops"). Restrict the stop to the
-        // real speech terminator. This can only prevent spurious early stops; 6562 still ends
-        // a normal utterance. Verified: "!" tokenizes to id 3 (a plain content token), so the
-        // early stop is on the generation side, not the input side.
-        eos_token_id: [6562],
       };
+      // First pass uses the model's own generation_config verbatim — the healthy path
+      // (normal text) is unchanged, so it can't regress.
       let waveform = await model.generate(genArgs);
-      // Safety net: if the model hit an early stop anyway (via 6562), a real line of text
-      // returns a degenerately short clip (< 100 ms @ 24 kHz = 2400 samples). Force a
-      // minimum length and regenerate once. Never fires for normal-length output, so the
-      // healthy path is unchanged.
+      // Repair pass for the "!" bug: some inputs — notably any line ending in "!" — come
+      // back near-silent because generation stops almost immediately. Diagnosis: "!"
+      // tokenizes to id 3 (a plain content token, not a stop), so the early stop is on the
+      // GENERATION side. The exported generation_config lists eos_token_id [2, 6562], where
+      // 6562 = [STOP_SPEECH] (the real end of an utterance) but 2 = " " is a TEXT-vocab
+      // token that leaked into the SPEECH stop set; under greedy decoding it deterministically
+      // trips an early stop on those inputs. Only when the clip is degenerately short for
+      // real text (< 100 ms @ 24 kHz = 2400 samples) do we regenerate once with the stop set
+      // restricted to the true terminator + a small floor. Never fires for healthy output.
       if (waveform.data.length < 2400 && text.replace(/\s+/g, '').length >= 2) {
-        waveform = await model.generate({ ...genArgs, min_new_tokens: 24 });
+        waveform = await model.generate({ ...genArgs, eos_token_id: [6562], min_new_tokens: 24 });
       }
       let pcm = waveform.data;
       // Guard against clipping (observed peak ~1.16): normalise if it exceeds 1.
