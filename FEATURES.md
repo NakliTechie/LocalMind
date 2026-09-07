@@ -10,34 +10,39 @@ Pick a model from the dropdown. It downloads once, caches in the browser, and ru
 
 | Model | Size | Runtime | Capabilities | Best for |
 |---|---|---|---|---|
-| **Ternary Bonsai 1.7B** (default) | ~470 MB | WebGPU | Text + agent (tools) | Smallest download with tool calling; strong reasoning |
+| **Ternary Bonsai 1.7B** | ~470 MB | WebGPU | Text + agent (tools) | Smallest ONNX download with tool calling; strong reasoning |
 | **Ternary Bonsai 4B** | ~1.1 GB | WebGPU | Text + agent | Same, better quality |
 | **Ternary Bonsai 8B** | ~2.2 GB | WebGPU | Text + agent | Best Bonsai quality; 65K context |
 | **Qwen3.5 4B** | ~3 GB | WebGPU | Text + image + agent | Qwen3.5 at q4f16; native tool calling; 262K native context capped to 32K in-browser |
+| **LFM2.5 230M** | ~210 MB | WebGPU | Text + agent | The ONNX build of the default model; 32K context |
+| **LFM2.5 1.2B** | ~760 MB | WebGPU | Text + agent | Liquid AI's LFM2.5-1.2B-Instruct, RL-tuned for instruction following + tool use |
 | **LFM2 8B A1B** | ~4.8 GB | WebGPU | Text + agent | Liquid AI sparse-MoE (8B total / ~1B active); needs a capable GPU + ~8 GB RAM |
-| **Apertus 4B** | ~2.7 GB | WebGPU | Text (chat) | Swiss AI fully-open multilingual (1800+ languages); v1.1 distilled from the 8B; chat-only |
+| **SmolLM3 3B** | ~2.1 GB | WebGPU | Text + agent | HuggingFace SmolLM3; dual tool interfaces (xml + python), 6 languages |
 | **Gemma 3 1B** | ~760 MB | WebGPU | Text only | Lightweight fallback |
 | **Gemma 4 E2B** | ~1.5 GB | WebGPU | Text + image + audio + agent | Multimodal on any device |
 | **Gemma 4 E4B** | ~4.9 GB | WebGPU | Text + image + audio + agent | Best multimodal quality |
+| **Gemini Nano** | 0 MB | Chrome built-in | Text (chat) | Chrome ships the weights — no download, no WebGPU. Chrome/Edge only |
 | **LFM2.5 230M · WebGPU kernels** | ~140 MB | Custom WGSL (in-tab) | Text + agent | LFM2.5 230M on a from-scratch WebGPU engine — every kernel hand-written WGSL; ~hundreds of tok/s. **Default model.** |
 | **Gemma 4 E2B · WebGPU kernels** | ~2 GB | Custom WGSL (in-tab) | Text + agent | Gemma 4 E2B (QAT int4) on hand-written WGSL kernels; ~250 tok/s on an M4 Max |
-| **SmolLM2 360M · GGUF** | ~270 MB | wllama (in-tab) | Text + agent | Tiniest; runs on CPU without WebGPU |
-| **Llama 3.2 1B · GGUF** | ~810 MB | wllama (in-tab) | Text + agent | Popular GGUF instruct model |
+| **Ternary Bonsai 27B** | ~3.8 GB | Custom WGSL (in-tab) | Text + agent | 27B at 1-bit (Qwen3.6 backbone) on hand-written WGSL — the biggest in-browser model here. A reasoning model; 16K context |
+| **LFM2.5 230M · GGUF** | ~170 MB | wllama (in-tab) | Text + agent | Same model as the default, as a Q5_K_M GGUF — runs on CPU without WebGPU |
+| **SmolLM2 360M · GGUF** | ~270 MB | wllama (in-tab) | Text + agent | Tiniest GGUF; runs on CPU without WebGPU |
 | **Qwen2.5 1.5B · GGUF** | ~1.1 GB | wllama (in-tab) | Text + agent | More capable GGUF option |
 | **MiniCPM5 2B · GGUF** | ~1.6 GB | wllama (in-tab) | Text (chat) | Largest GGUF entry; 16K context for long documents; no ONNX export exists, so wllama is the only in-tab path |
 
 Plus any **custom Hugging Face ONNX model** (paste a repo id) or any model served by **your own Ollama / LM Studio** (see Runtimes).
 
-The Bonsai family are 1.58-bit ternary-weight LLMs from Prism ML (Apache-2.0, Qwen3 backbone) — they punch above their download size on reasoning/code/tool-calling. LFM2 8B A1B is Liquid AI's sparse mixture-of-experts; note the **symmetric** QMoE export (`onnx-community/LFM2-8B-A1B-ONNX`) is the one that loads on WebGPU — the asymmetric/zero-point builds don't. **Apertus 4B** is Swiss AI's fully-open (open data + weights), Apache-2.0, multilingual model (1800+ languages) — a pretraining distillation of their 8B teacher (`onnx-community` q4f16 ONNX, runs via Transformers.js ≥4.0). It's a strong chat model but an unreliable tool-caller at this size, so it's exposed for chat only. **MiniCPM5 2B** is OpenBMB's Apache-2.0 2B (Sept 2026) — a plain `LlamaForCausalLM` whose gains come from data and post-training rather than architecture. It shipped without an ONNX export, so wllama is the only in-tab path; its 16K context (double the other GGUF entries) is affordable because GQA with just 2 KV heads makes the cache cheap, and long-context retrieval is the axis its own card scores highest. It also ships chat-only: it emits tool calls as XML (`<function name="…"><param name="…">…</param></function>`), which LocalMind's `<tool_call>` parser doesn't read.
+The Bonsai family are 1.58-bit ternary-weight LLMs from Prism ML (Apache-2.0, Qwen3 backbone) — they punch above their download size on reasoning/code/tool-calling. LFM2 8B A1B is Liquid AI's sparse mixture-of-experts; note the **symmetric** QMoE export (`onnx-community/LFM2-8B-A1B-ONNX`) is the one that loads on WebGPU — the asymmetric/zero-point builds don't. **MiniCPM5 2B** is OpenBMB's Apache-2.0 2B (Sept 2026) — a plain `LlamaForCausalLM` whose gains come from data and post-training rather than architecture. It shipped without an ONNX export, so wllama is the only in-tab path; its 16K context (double the other GGUF entries) is affordable because GQA with just 2 KV heads makes the cache cheap, and long-context retrieval is the axis its own card scores highest. It also ships chat-only: it emits tool calls as XML (`<function name="…"><param name="…">…</param></function>`), which LocalMind's `<tool_call>` parser doesn't read.
 
-## Runtimes — four ways to run a model
+## Runtimes — five ways to run a model
 
 You're not locked into one engine. Every option is local; nothing leaves your device.
 
 1. **In your browser (ONNX + WebGPU)** — the default. Models run on your GPU via Transformers.js. Zero setup, fully private, supports multimodal + tools.
 2. **In-browser GGUF (wllama)** — load a GGUF model straight from a Hugging Face URL into the tab (llama.cpp compiled to WebAssembly). Taps the huge GGUF ecosystem with no ONNX export needed; WebGPU-accelerated when available (~48 tok/s on a 360M), or pure CPU when not — **the only in-tab path that works without WebGPU**.
-3. **Custom WebGPU kernels (in-tab)** — purpose-built, from-scratch WebGPU inference engines where *every* kernel is hand-written WGSL — no ONNX runtime, no llama.cpp. Two are bundled: **LFM2.5 230M** (`Lfm2Mobile`, from `webml-community/lfm2-webgpu-kernels` — RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) and **Gemma 4 E2B** (`Gemma4Mobile`, from `webml-community/gemma-4-webgpu-kernels` — QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm, GQA + sliding-window attention). Each reads its quantized weights directly and is tuned for maximal decode throughput. WebGPU-only (no CPU fallback).
+3. **Custom WebGPU kernels (in-tab)** — purpose-built, from-scratch WebGPU inference engines where *every* kernel is hand-written WGSL — no ONNX runtime, no llama.cpp. Three are bundled: **LFM2.5 230M** (`Lfm2Mobile`, from `webml-community/lfm2-webgpu-kernels` — RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention), **Gemma 4 E2B** (`Gemma4Mobile`, from `webml-community/gemma-4-webgpu-kernels` — QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm, GQA + sliding-window attention), and **Ternary Bonsai 27B** (`Bonsai27bMobile`, from `webml-community/bonsai-webgpu-kernels` — Q1_0 on-the-fly dequant, the Gated-DeltaNet linear-attention recurrence, RoPE/RMSNorm, SwiGLU, GQA attention). Each reads its quantized weights directly and is tuned for maximal decode throughput. WebGPU-only (no CPU fallback).
 4. **Your own local server (endpoint)** — point LocalMind at an OpenAI-compatible server on your machine (Ollama, LM Studio, llama.cpp, Atomic) in Settings → Models. The model runs on the server at native speed; the browser just streams. Lets you use big models (7B–70B+) and the whole Ollama / LM Studio library. Still local (localhost) — nothing leaves the device.
+5. **Chrome's built-in model (Gemini Nano)** — Chrome ships the weights, so there is no download and no WebGPU needed; LocalMind talks to it through the Prompt API (`self.LanguageModel`). Chrome/Edge only, small context, no tool calling. On a desktop Chrome/Edge that already has Nano, LocalMind starts on it so you can chat with nothing to download.
 
 ## Generation modes
 
@@ -61,7 +66,7 @@ Large models on the browser's WebGPU backend can occasionally run out of GPU mem
 
 ## Agent tools
 
-Tool-capable models (Bonsai, Qwen3.5, LFM2, Gemma 4) decide when to use tools based on your question.
+Tool-capable models (Bonsai, Qwen3.5, LFM2, SmolLM3, Gemma 4, and the smaller GGUF models) decide when to use tools based on your question.
 
 | Tool | What it does |
 |---|---|
