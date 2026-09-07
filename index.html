@@ -2193,6 +2193,7 @@
                 <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; text-only, no tool calling. Fallback option.</li>
                 <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
                 <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
+                <li><strong>MiniCPM5 2B &middot; GGUF</strong> (~1.6 GB) &mdash; text chat, no tool calling. OpenBMB&rsquo;s MiniCPM5-2B (Sept 2026, Apache-2.0) loaded from its first-party GGUF through wllama (llama.cpp &rarr; WebAssembly) &mdash; there is no ONNX export, so this is the only way to run it in the tab. WebGPU when your browser has it, CPU otherwise. Gets <strong>16K context</strong>, twice the other GGUF models, because its 2 KV heads make the cache unusually cheap; its native 131K is capped since wllama reserves the whole cache up front. Long-document retrieval is what it is best at. It emits tool calls in its own XML format, which LocalMind&rsquo;s parser doesn&rsquo;t read yet, so it is exposed for chat only.</li>
               </ul>
               <h4>Agent Tools (Ternary Bonsai + Qwen3.5 + LFM2 + SmolLM3 + Gemma 4)</h4>
               <ul>
@@ -2697,6 +2698,7 @@
           <option value="gemma4-e2b-webgpu">Gemma 4 E2B &middot; WebGPU kernels (~2 GB)</option>
           <option value="smollm2-360m-gguf">SmolLM2 360M &middot; GGUF (~270 MB)</option>
           <option value="qwen25-1.5b-gguf">Qwen2.5 1.5B &middot; GGUF (~1.1 GB)</option>
+          <option value="minicpm5-2b-gguf">MiniCPM5 2B &middot; GGUF (~1.6 GB)</option>
         </select>
       </div>
 
@@ -8329,6 +8331,48 @@ self.addEventListener('message', async (e) => {
         agentCapable: true,
         contextSize: 8192,
         genConfig: { temperature: 0.7, top_k: 20, top_p: 0.8, max_new_tokens: 1024 },
+      },
+      'minicpm5-2b-gguf': {
+        id: 'https://huggingface.co/openbmb/MiniCPM5-2B-GGUF/resolve/main/MiniCPM5-2B-Q4_K_M.gguf',
+        label: 'MiniCPM5 2B · GGUF',
+        backend: 'wllama',
+        size: '~1.6 GB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: false,
+        contextSize: 16384,
+        // OpenBMB's MiniCPM5-2B (2026-09-07) as first-party GGUF via wllama.
+        // wllama is the ONLY in-tab path for this model: OpenBMB shipped eight
+        // variants on day one (BF16, SFT-only, mid-train, base, GGUF, MLX-4bit,
+        // GPTQ, a DSpark draft model) and no ONNX export, so the Transformers.js
+        // loadCausal path can't reach it. Architecturally it is a plain
+        // LlamaForCausalLM — 42 layers, GQA 16 Q / 2 KV heads, and the GGUF
+        // declares general.architecture=llama — so llama.cpp needs no new arch
+        // support. The one thing that could have rejected it is the tokenizer:
+        // tokenizer.ggml.pre is 'minicpm5', added upstream in llama.cpp 9777256c3
+        // (2026-05-27); wllama 3.4.1 pins llama.cpp aa46bda (2026-05-30, 83 commits
+        // later), so the pinned build already carries it. Q4_K_M (1,561,318,368
+        // bytes), Apache-2.0.
+        // Native context is 131,072 but wllama allocates the KV cache up front, so
+        // 131K is unusable in a tab. Capped at 16K — twice the other GGUF entries,
+        // which is the point: 2 KV heads make the cache unusually cheap
+        // (~42 KB/token), so 16K costs ~700 MB on top of ~1.6 GB of weights and
+        // still fits wasm32's ~4 GB ceiling, and long-context retrieval is the one
+        // axis where this 2B beats a 4B (vendor-reported NoLiMa 68.1 vs 43.5 for
+        // Qwen3.5-4B). Its weak axis is the opposite one: Terminal-Bench v2.1 8.6
+        // says long-horizon agentic execution is not there.
+        // agentCapable:false, decided by test, not by the card. The vendor claims
+        // strong tool use (τ²-Bench Telecom 97.1, BFCL v4 66.6) and the model does
+        // try — but it emits its OWN chat template's XML shape,
+        // <function name="fn"><param name="p">v</param></function>, not the
+        // <tool_call> JSON _adapterParseToolCalls understands. Asked for the time
+        // with tools on, it produced a <function name="get_current_time"> call that
+        // no pass in the parser matched, so no tool ran and the raw markup leaked
+        // into the reply. Teaching the parser the XML form is a separate change;
+        // until then this ships as a chat model, the way Apertus 4B did.
+        // Sampling per the model card (temperature 1.0, top_p 0.95); top_k is
+        // wllama's own default, made explicit.
+        genConfig: { temperature: 1.0, top_k: 40, top_p: 0.95, max_new_tokens: 2048 },
       },
     };
 
