@@ -16,7 +16,7 @@ It began as a private chatbot and grew into a small **AI workbench**: chat, imag
 
 ## What you can do
 
-- 💬 **Chat with private local models** — several to choose from, from a tiny ~470 MB model up to a **27B-class model (Ternary Bonsai 27B, 1-bit)** running entirely in the tab. They reason, write, and code.
+- 💬 **Chat with private local models** — nineteen to choose from, from a tiny ~140 MB model (or Chrome's own Gemini Nano, a 0-byte download) up to a **27B-class model (Ternary Bonsai 27B, 1-bit)** running entirely in the tab. They reason, write, and code.
 - 🎨 **Generate images** — text-to-image on your GPU, right in the tab.
 - 🌫️ **Watch text "denoise"** — an experimental diffusion-text mode (a different way of generating).
 - 🌐 **Search the web** *(optional)* — bring your own free search key; answers come back with clickable sources.
@@ -41,6 +41,8 @@ Pick whatever fits your hardware — all three are local, nothing leaves your de
 | **In your browser** | On your GPU via WebGPU — zero setup | The private default; nothing to install |
 | **In-browser GGUF** | A GGUF loaded into the tab (llama.cpp → WebAssembly) — from a URL **or a local file on disk** | The huge GGUF ecosystem, no setup; runs on CPU even without a GPU |
 | **Your own server** | Point it at Ollama / LM Studio on your machine | Big models (7B–70B+) at full speed |
+
+Four GGUF models ship in the picker: LFM2.5 230M, SmolLM2 360M, Qwen2.5 1.5B, and **MiniCPM5 2B** — OpenBMB's Apache-2.0 2B, the largest of them, which gets a 16K context for long documents. It's a GGUF-only release with no ONNX build, so the in-tab llama.cpp path is the only way to run it in a browser; it's a chat model here, without tool calling.
 
 ### Custom WebGPU engine (the default)
 
