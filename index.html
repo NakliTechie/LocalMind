@@ -2193,9 +2193,9 @@
                 <li><strong>Gemma 3 1B</strong> (~760 MB) &mdash; text-only, no tool calling. Fallback option.</li>
                 <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
                 <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
-                <li><strong>MiniCPM5 2B &middot; GGUF</strong> (~1.6 GB) &mdash; text chat, no tool calling. OpenBMB&rsquo;s MiniCPM5-2B (Sept 2026, Apache-2.0) loaded from its first-party GGUF through wllama (llama.cpp &rarr; WebAssembly) &mdash; there is no ONNX export, so this is the only way to run it in the tab. WebGPU when your browser has it, CPU otherwise. Gets <strong>16K context</strong>, twice the other GGUF models, because its 2 KV heads make the cache unusually cheap; its native 131K is capped since wllama reserves the whole cache up front. Long-document retrieval is what it is best at. It emits tool calls in its own XML format, which LocalMind&rsquo;s parser doesn&rsquo;t read yet, so it is exposed for chat only.</li>
+                <li><strong>MiniCPM5 2B &middot; GGUF</strong> (~1.6 GB) &mdash; text + agent (tool calling). OpenBMB&rsquo;s MiniCPM5-2B (Sept 2026, Apache-2.0) loaded from its first-party GGUF through wllama (llama.cpp &rarr; WebAssembly) &mdash; there is no ONNX export, so this is the only way to run it in the tab. WebGPU when your browser has it, CPU otherwise. Gets <strong>16K context</strong>, twice the other GGUF models, because its 2 KV heads make the cache unusually cheap; its native 131K is capped since wllama reserves the whole cache up front. Long-document retrieval is what it is best at. It emits tool calls in its own XML format rather than the <code>&lt;tool_call&gt;</code> JSON the other models use; LocalMind parses both. Short-horizon tool use is its strength &mdash; don&rsquo;t expect long multi-step agent runs to hold up.</li>
               </ul>
-              <h4>Agent Tools (Ternary Bonsai + Qwen3.5 + LFM2 + SmolLM3 + Gemma 4)</h4>
+              <h4>Agent Tools (Ternary Bonsai + Qwen3.5 + LFM2 + SmolLM3 + MiniCPM5 + Gemma 4)</h4>
               <ul>
                 <li><strong>calculate</strong> &mdash; math, percentages, conversions</li>
                 <li><strong>get_current_time</strong> &mdash; date/time with timezone</li>
@@ -8339,7 +8339,7 @@ self.addEventListener('message', async (e) => {
         size: '~1.6 GB',
         type: 'causal',
         multimodal: false,
-        agentCapable: false,
+        agentCapable: true,
         contextSize: 16384,
         // OpenBMB's MiniCPM5-2B (2026-09-07) as first-party GGUF via wllama.
         // wllama is the ONLY in-tab path for this model: OpenBMB shipped eight
@@ -8361,15 +8361,21 @@ self.addEventListener('message', async (e) => {
         // axis where this 2B beats a 4B (vendor-reported NoLiMa 68.1 vs 43.5 for
         // Qwen3.5-4B). Its weak axis is the opposite one: Terminal-Bench v2.1 8.6
         // says long-horizon agentic execution is not there.
-        // agentCapable:false, decided by test, not by the card. The vendor claims
-        // strong tool use (τ²-Bench Telecom 97.1, BFCL v4 66.6) and the model does
-        // try — but it emits its OWN chat template's XML shape,
-        // <function name="fn"><param name="p">v</param></function>, not the
-        // <tool_call> JSON _adapterParseToolCalls understands. Asked for the time
-        // with tools on, it produced a <function name="get_current_time"> call that
-        // no pass in the parser matched, so no tool ran and the raw markup leaked
-        // into the reply. Teaching the parser the XML form is a separate change;
-        // until then this ships as a chat model, the way Apertus 4B did.
+        // agentCapable:true, decided by test, not by the card. It ignores the
+        // <tool_call> JSON the tool prompt asks for and emits its OWN template's
+        // XML shape — <function name="fn"><param name="p">v</param></function> —
+        // so it first shipped chat-only. The twist: its vocab marks <function,
+        // </function>, <param and </param> as CONTROL tokens, and llama.cpp
+        // renders control tokens as the empty string, so the tags never even
+        // reach us; the stream carries only the residue ` name="fn"> name="p">v`.
+        // _adapterParseToolCalls pass 6 reconstructs the call from that (pass 5
+        // handles the intact tags, should a future wllama preserve them).
+        // Verified live: get_current_time executed and returned real data.
+        // Caveat, seen in testing: the model is inconsistent about format — it
+        // sometimes emits the JSON shape instead, and because <tool_call> is a
+        // control token too (id 2) that wrapper is stripped as well, leaving
+        // bare JSON that llama.cpp sometimes truncates mid-object. Short-horizon
+        // tool use works; Terminal-Bench v2.1 8.6 says don't bank on long runs.
         // Sampling per the model card (temperature 1.0, top_p 0.95); top_k is
         // wllama's own default, made explicit.
         genConfig: { temperature: 1.0, top_k: 40, top_p: 0.95, max_new_tokens: 2048 },
@@ -12950,6 +12956,65 @@ Rules:
       return out;
     }
 
+    // Parse MiniCPM5-style XML tool calls — the shape that model's own chat
+    // template is trained to emit:
+    //   <function name="fn"><param name="p">value</param></function>
+    // A param value may be multi-line, and the template wraps it in CDATA when
+    // it contains '<', '&' or a newline. XML carries no types, so values arrive
+    // as strings and are coerced against the tool's declared JSON-schema type —
+    // schema first, never guessing: a param with no schema stays a string, so
+    // e.g. calculate's expression "2+2" is not mangled into a number.
+    // Returns [{ name, arguments, raw }]; `raw` is the matched span so the
+    // caller can strip it from the visible reply.
+    function _adapterCoerceXmlParam(raw, schema) {
+      const t = schema && schema.type;
+      if (t === 'number' || t === 'integer') {
+        const n = Number(String(raw).trim());
+        return Number.isFinite(n) ? n : raw;
+      }
+      if (t === 'boolean') {
+        const v = String(raw).trim().toLowerCase();
+        if (v === 'true') return true;
+        if (v === 'false') return false;
+        return raw;
+      }
+      if (t === 'array' || t === 'object') {
+        try { const p = JSON.parse(raw); if (p && typeof p === 'object') return p; } catch (_) {}
+        return raw;
+      }
+      return raw;
+    }
+
+    function _adapterParseXmlFunctionCalls(text, toolDefs) {
+      const out = [];
+      const propsFor = (name) => {
+        const t = (toolDefs || []).find(d => d && d.name === name);
+        return (t && t.parameters && t.parameters.properties) || {};
+      };
+      const readParams = (body, name) => {
+        const props = propsFor(name);
+        const args = {};
+        // Unclosed </param> is tolerated (small models truncate at EOS).
+        const pRe = /<param\s+name\s*=\s*["']([^"']+)["']\s*>([\s\S]*?)(?:<\/param>|$)/g;
+        let pm;
+        while ((pm = pRe.exec(body)) !== null) {
+          let v = pm[2];
+          const cd = v.match(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/);
+          v = cd ? cd[1] : v.trim();
+          args[pm[1]] = _adapterCoerceXmlParam(v, props[pm[1]]);
+        }
+        return args;
+      };
+      // Self-closing / no-argument form: <function name="get_current_time"/>
+      const selfRe = /<function\s+name\s*=\s*["']([^"']+)["']\s*\/>/g;
+      let m;
+      while ((m = selfRe.exec(text)) !== null) out.push({ name: m[1], arguments: {}, raw: m[0] });
+      // Paired form, closing tag optional for the same truncation reason.
+      const fnRe = /<function\s+name\s*=\s*["']([^"']+)["']\s*>([\s\S]*?)(?:<\/function>|$)/g;
+      while ((m = fnRe.exec(text)) !== null) out.push({ name: m[1], arguments: readParams(m[2], m[1]), raw: m[0] });
+      return out;
+    }
+
     // Scan `str` from index `start` (which must point at '{') and return the
     // first brace-balanced JSON object substring, honouring string literals so
     // braces inside "…" don't miscount. Returns null if never balanced. Used to
@@ -12969,6 +13034,35 @@ Rules:
         else if (c === '}') { if (--depth === 0) return str.slice(start, i + 1); }
       }
       return null;
+    }
+
+    // Recover a MiniCPM5 XML tool call AFTER the runtime has eaten its tags.
+    // MiniCPM5's vocab defines <function (18), </function> (19), <param (20)
+    // and </param> (21) as CONTROL tokens, and llama.cpp renders control tokens
+    // as the empty string, so what actually reaches us is the residue:
+    //   <function name="fn"><param name="p">v</param></function>
+    //     arrives as:  name="fn"> name="p">v
+    // llama-server has a request param for keeping such tokens
+    // (preserved_tokens), but the OAI chat path overwrites it from the chat
+    // template (server-common.cpp), and the minicpm5 chat parser landed
+    // upstream in llama.cpp c818263f2 (2026-06-28), AFTER the llama.cpp commit
+    // wllama 3.4.1 pins (aa46bda, 2026-05-30) — so it cannot be reached from
+    // JS on this pin. Hence parsing the residue.
+    // Each ` name="X">` segment is a marker: the first names the function, the
+    // rest name params whose value runs to the next marker. Returns null unless
+    // the shape is unambiguous, so this can only ever fire on a real call.
+    function _adapterParseStrippedXmlCall(text) {
+      const segRe = /\s*name\s*=\s*["']([^"']+)["']\s*>/g;
+      const segs = [];
+      let m;
+      while ((m = segRe.exec(text)) !== null) segs.push({ name: m[1], start: m.index, end: m.index + m[0].length });
+      if (!segs.length) return null;
+      const args = {};
+      for (let i = 1; i < segs.length; i++) {
+        const stop = (i + 1 < segs.length) ? segs[i + 1].start : text.length;
+        args[segs[i].name] = text.slice(segs[i].end, stop).trim();
+      }
+      return { name: segs[0].name, args, start: segs[0].start, end: text.length };
     }
 
     function _adapterParseToolCalls(text, knownToolNames, toolDefs) {
@@ -13084,6 +13178,42 @@ Rules:
             toolCalls.push({ name, arguments: _adapterParsePythonicArgs(m[2]) });
             cleanText = cleanText.replace(/<\|tool_call_start\|>[\s\S]*?(<\|tool_call_end\|>|$)/, '').trim();
           }
+        }
+      }
+
+      // 5. Native MiniCPM5-style call: <function name="fn"><param …>v</param></function>
+      // LocalMind prompts every model for <tool_call> JSON, but MiniCPM5 was
+      // trained on this XML shape and emits it regardless — which every pass
+      // above misses, so the call was silently dropped AND the markup leaked
+      // into the reply (the browser parses <function>/<param> as unknown
+      // elements, leaving a bare `name="…">` fragment on screen). Gated on
+      // toolCalls being empty, the distinctive '<function' marker, AND a known
+      // tool name, so no model that matched above ever reaches here and a
+      // hallucinated name is ignored rather than executed.
+      if (toolCalls.length === 0 && text.indexOf('<function') !== -1) {
+        for (const c of _adapterParseXmlFunctionCalls(text, toolDefs)) {
+          const allowed = !knownToolNames || !knownToolNames.length || knownToolNames.indexOf(c.name) !== -1;
+          if (allowed) toolCalls.push({ name: c.name, arguments: c.arguments });
+          // Strip the markup either way — a rejected call must not render raw.
+          cleanText = cleanText.replace(c.raw, '');
+        }
+      }
+
+      // 6. The same MiniCPM5 XML call, but with its tags already stripped by the
+      // runtime — see _adapterParseStrippedXmlCall for why that happens. Gated
+      // hard: only when nothing above matched, only when the raw '<function'
+      // marker is ABSENT (so a stream that did keep its tags goes to pass 5,
+      // never here), and only when the first segment names a real tool. Prose
+      // would have to contain a literal name="<a real tool name>"> to misfire.
+      if (toolCalls.length === 0 && text.indexOf('<function') === -1 && /name\s*=\s*["'][^"']+["']\s*>/.test(text)) {
+        const c = _adapterParseStrippedXmlCall(text);
+        if (c && knownToolNames && knownToolNames.indexOf(c.name) !== -1) {
+          const t = (toolDefs || []).find(d => d && d.name === c.name);
+          const props = (t && t.parameters && t.parameters.properties) || {};
+          const args = {};
+          for (const k of Object.keys(c.args)) args[k] = _adapterCoerceXmlParam(c.args[k], props[k]);
+          toolCalls.push({ name: c.name, arguments: args });
+          cleanText = (cleanText.slice(0, c.start) + cleanText.slice(c.end)).trim();
         }
       }
 
