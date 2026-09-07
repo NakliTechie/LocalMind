@@ -42,7 +42,7 @@ Pick whatever fits your hardware — all three are local, nothing leaves your de
 | **In-browser GGUF** | A GGUF loaded into the tab (llama.cpp → WebAssembly) — from a URL **or a local file on disk** | The huge GGUF ecosystem, no setup; runs on CPU even without a GPU |
 | **Your own server** | Point it at Ollama / LM Studio on your machine | Big models (7B–70B+) at full speed |
 
-Four GGUF models ship in the picker: LFM2.5 230M, SmolLM2 360M, Qwen2.5 1.5B, and **MiniCPM5 2B** — OpenBMB's Apache-2.0 2B, the largest of them, which gets a 16K context for long documents. It's a GGUF-only release with no ONNX build, so the in-tab llama.cpp path is the only way to run it in a browser; it's a chat model here, without tool calling.
+Four GGUF models ship in the picker: LFM2.5 230M, SmolLM2 360M, Qwen2.5 1.5B, and **MiniCPM5 2B** — OpenBMB's Apache-2.0 2B, the largest of them, which gets a 16K context for long documents. It's a GGUF-only release with no ONNX build, so the in-tab llama.cpp path is the only way to run it in a browser. It calls tools too, in its own XML format rather than the JSON the other models use — LocalMind reads both.
 
 ### Custom WebGPU engine (the default)
 

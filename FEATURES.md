@@ -28,11 +28,11 @@ Pick a model from the dropdown. It downloads once, caches in the browser, and ru
 | **LFM2.5 230M · GGUF** | ~170 MB | wllama (in-tab) | Text + agent | Same model as the default, as a Q5_K_M GGUF — runs on CPU without WebGPU |
 | **SmolLM2 360M · GGUF** | ~270 MB | wllama (in-tab) | Text + agent | Tiniest GGUF; runs on CPU without WebGPU |
 | **Qwen2.5 1.5B · GGUF** | ~1.1 GB | wllama (in-tab) | Text + agent | More capable GGUF option |
-| **MiniCPM5 2B · GGUF** | ~1.6 GB | wllama (in-tab) | Text (chat) | Largest GGUF entry; 16K context for long documents; no ONNX export exists, so wllama is the only in-tab path |
+| **MiniCPM5 2B · GGUF** | ~1.6 GB | wllama (in-tab) | Text + agent | Largest GGUF entry; 16K context for long documents; no ONNX export exists, so wllama is the only in-tab path |
 
 Plus any **custom Hugging Face ONNX model** (paste a repo id) or any model served by **your own Ollama / LM Studio** (see Runtimes).
 
-The Bonsai family are 1.58-bit ternary-weight LLMs from Prism ML (Apache-2.0, Qwen3 backbone) — they punch above their download size on reasoning/code/tool-calling. LFM2 8B A1B is Liquid AI's sparse mixture-of-experts; note the **symmetric** QMoE export (`onnx-community/LFM2-8B-A1B-ONNX`) is the one that loads on WebGPU — the asymmetric/zero-point builds don't. **MiniCPM5 2B** is OpenBMB's Apache-2.0 2B (Sept 2026) — a plain `LlamaForCausalLM` whose gains come from data and post-training rather than architecture. It shipped without an ONNX export, so wllama is the only in-tab path; its 16K context (double the other GGUF entries) is affordable because GQA with just 2 KV heads makes the cache cheap, and long-context retrieval is the axis its own card scores highest. It also ships chat-only: it emits tool calls as XML (`<function name="…"><param name="…">…</param></function>`), which LocalMind's `<tool_call>` parser doesn't read.
+The Bonsai family are 1.58-bit ternary-weight LLMs from Prism ML (Apache-2.0, Qwen3 backbone) — they punch above their download size on reasoning/code/tool-calling. LFM2 8B A1B is Liquid AI's sparse mixture-of-experts; note the **symmetric** QMoE export (`onnx-community/LFM2-8B-A1B-ONNX`) is the one that loads on WebGPU — the asymmetric/zero-point builds don't. **MiniCPM5 2B** is OpenBMB's Apache-2.0 2B (Sept 2026) — a plain `LlamaForCausalLM` whose gains come from data and post-training rather than architecture. It shipped without an ONNX export, so wllama is the only in-tab path; its 16K context (double the other GGUF entries) is affordable because GQA with just 2 KV heads makes the cache cheap, and long-context retrieval is the axis its own card scores highest. It calls tools in its own XML shape (`<function name="…"><param name="…">…</param></function>`) rather than the `<tool_call>` JSON every other model here emits; the tool-call parser reads both, coercing XML's untyped values against each tool's declared schema.
 
 ## Runtimes — five ways to run a model
 
@@ -66,7 +66,7 @@ Large models on the browser's WebGPU backend can occasionally run out of GPU mem
 
 ## Agent tools
 
-Tool-capable models (Bonsai, Qwen3.5, LFM2, SmolLM3, Gemma 4, and the smaller GGUF models) decide when to use tools based on your question.
+Tool-capable models (Bonsai, Qwen3.5, LFM2, SmolLM3, MiniCPM5, Gemma 4, and the smaller GGUF models) decide when to use tools based on your question.
 
 | Tool | What it does |
 |---|---|
