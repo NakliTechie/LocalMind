@@ -13224,6 +13224,42 @@ Rules:
         }
       }
 
+      // 7. <tool_call> with XML CHILDREN instead of JSON:
+      //   <tool_call><name>fn</name><arguments><p>v</p></arguments></tool_call>
+      // Seen live from LFM2.5 230M GGUF (2026-09-17). Pass 1 wants a JSON
+      // object after the marker and finds none, so the call was dropped and
+      // the markup leaked into the bubble. Parse it: the name from <name>,
+      // params from <arguments>'s child elements (or a JSON body, if the
+      // model mixed shapes), coerced against the tool schema like pass 5.
+      // Gated on toolCalls being empty, a <name> element, and a known tool.
+      if (toolCalls.length === 0 && text.indexOf('<tool_call>') !== -1 && text.indexOf('<name>') !== -1) {
+        const re = /<tool_call>\s*<name>\s*([a-zA-Z_][\w.-]*)\s*<\/name>\s*(?:<arguments>([\s\S]*?)(?:<\/arguments>|(?=<\/tool_call>)|$))?\s*(?:<\/tool_call>)?/g;
+        let m7;
+        while ((m7 = re.exec(text)) !== null) {
+          const name = m7[1];
+          const allowed = knownToolNames && knownToolNames.indexOf(name) !== -1;
+          if (allowed) {
+            const body = (m7[2] || '').trim();
+            const t = (toolDefs || []).find(d => d && d.name === name);
+            const props = (t && t.parameters && t.parameters.properties) || {};
+            let args = null;
+            if (body[0] === '{') args = _adapterRepairJSON(body);
+            if (!args) {
+              args = {};
+              const pr = /<([a-zA-Z_][\w.-]*)>([\s\S]*?)<\/\1>/g;
+              let pm;
+              while ((pm = pr.exec(body)) !== null) args[pm[1]] = _adapterCoerceXmlParam(pm[2].trim(), props[pm[1]]);
+            }
+            toolCalls.push({ name, arguments: args });
+          }
+          // Strip the markup either way — a rejected call must not render raw.
+          // Pass 1 may already have removed the <tool_call> marker (its
+          // no-JSON branch), so match from <name> and tolerate a missing tag.
+          const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          cleanText = cleanText.replace(new RegExp('(?:<tool_call>\\s*)?<name>\\s*' + esc + '\\s*<\\/name>[\\s\\S]*?(?:<\\/tool_call>|$)'), '').trim();
+        }
+      }
+
       return { toolCalls, cleanText: cleanText.trim() };
     }
 
