@@ -12788,9 +12788,16 @@ self.addEventListener('message', async (e) => {
     // the tags don't leak into the visible bubble or saved message history.
     // (They're still present in loopMessages when feeding the model its own
     // turn back, so the model continues to see its own output format.)
+    // Handles three shapes: closed <tool_call>…</tool_call> blocks, an
+    // UNCLOSED trailing <tool_call> (llama.cpp truncating MiniCPM5's JSON
+    // mid-object), and LFM2's <|tool_call_start|>…<|tool_call_end|> markers.
     function stripToolCallTags(text) {
       if (!text) return text;
-      return text.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+      return text
+        .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
+        .replace(/<tool_call>[\s\S]*$/, '')
+        .replace(/<\|tool_call_start\|>[\s\S]*?(<\|tool_call_end\|>|$)/g, '')
+        .trim();
     }
 
     function saveChat() {
@@ -16656,8 +16663,17 @@ self.addEventListener('message', async (e) => {
         }
 
         if (turn.toolCalls.length === 0) {
-          // No tool calls — we're done
-          finishWithOverlay(turn.fullText, allSources, toolsUsedInLoop);
+          // No tool calls — we're done. The parser may still have seen a
+          // <tool_call> body it couldn't turn into a call (unknown shape,
+          // truncated JSON); that markup streamed into the bubble live, so
+          // strip it and repaint, exactly as the tool-calls branch below does.
+          let finalText = stripToolCallTags(turn.fullText);
+          if (finalText !== turn.fullText) {
+            if (!finalText && turn.fullText) finalText = '_(The model attempted a tool call it could not complete.)_';
+            currentAssistantText = finalText;
+            if (currentAssistantEl) updateAssistantBubble(currentAssistantEl.bubble, finalText);
+          }
+          finishWithOverlay(finalText, allSources, toolsUsedInLoop);
           return;
         }
 
