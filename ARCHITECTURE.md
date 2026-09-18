@@ -78,6 +78,17 @@ Implementation details:
 
 Toggle: Settings → Model cache → "Resumable downloads" (on by default).
 
+**Cache inventory + eviction.** Each in-tab backend caches weights in its own place:
+transformers.js in Cache Storage `transformers-cache`; the LFM2.5 kernels engine in Cache
+Storage `gguf-v1`; the Bonsai 2 kernels engine in IndexedDB `gguf-cache-v1`; wllama in
+OPFS `cache/`; resumable ONNX downloads in IndexedDB `localmind-downloads`; the retired
+Gemma 4 kernels engine left IndexedDB `safetensors-cache-v1` behind.
+`inventoryModelCaches()` walks all of them, groups entries by Hugging Face repo, and backs
+the per-model Delete list in Settings → Models. At boot `sweepRetiredModelCaches()`
+deletes only groups whose repo is in `RETIRED_MODEL_REPOS` — models LocalMind once
+shipped and no longer does — so an engine swap or roster cut never strands gigabytes.
+The test suite asserts the retired list never names a live registry entry.
+
 ## Build & deployment
 
 Zero build tooling. One HTML file (~15k lines, ~800 KB), the DOM-free

@@ -150,7 +150,7 @@ Translate that list to Hindi: {{previous}}
 
 - **Save as Markdown** — download any response (or write it straight into your open folder).
 - **Code download** — per code-block download button with the right extension.
-- **Model cache** — view cached model sizes and clear cache in Settings.
+- **Model cache** — Settings → Models lists every cached model (ONNX, GGUF, WebGPU-kernel weights and partial downloads) with its size and a per-model Delete; models that have left the picker are tagged *retired* and their caches are removed automatically at boot.
 
 ## Custom models (paste a HF ONNX repo)
 

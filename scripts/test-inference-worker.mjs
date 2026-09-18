@@ -48,6 +48,21 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   assert.deepEqual([...options].sort(), [...keys].sort(), 'picker options and MODELS registry keys must match');
   assert.equal(options.length, 10);
 }
+// Retired-repo list drives the boot cache sweep: it must never name a live registry model.
+{
+  const retiredSrc = /const RETIRED_MODEL_REPOS = \[([\s\S]*?)\];/.exec(indexSource);
+  assert.ok(retiredSrc, 'RETIRED_MODEL_REPOS missing');
+  const retired = [...retiredSrc[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'));
+  const liveIds = [...registry.slice(0, registry.indexOf('\n    };')).matchAll(/^\s+id: '([^']+)'/gm)].map((m) => m[1]);
+  const liveRepos = liveIds.map((id) => (/^https?:/.test(id) ? (/huggingface\.co\/([^/]+\/[^/]+)\//.exec(id) || [])[1] || id : id));
+  for (const repo of retired) assert.ok(!liveRepos.includes(repo), `retired repo still in the registry: ${repo}`);
+  for (const repo of ['onnx-community/Ternary-Bonsai-1.7B-ONNX', 'onnx-community/Ternary-Bonsai-8B-ONNX', 'LiquidAI/LFM2.5-230M-ONNX',
+    'onnx-community/LFM2-8B-A1B-ONNX', 'HuggingFaceTB/SmolLM3-3B-ONNX', 'onnx-community/gemma-3-1b-it-ONNX-GQA',
+    'google/gemma-4-E2B-it-qat-mobile-transformers', 'bartowski/SmolLM2-360M-Instruct-GGUF', 'Qwen/Qwen2.5-1.5B-Instruct-GGUF',
+    'lmstudio-community/Bonsai-27B-GGUF']) assert.ok(retired.includes(repo), `retired list lacks ${repo}`);
+  assert.match(indexSource, /^\s+sweepRetiredModelCaches\(\);/m);
+}
 assert.equal(catalog.defaultKey, 'lfm2-230m-webgpu');
 assert.deepEqual(
   catalog.models.map((model) => model.key),

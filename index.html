@@ -8040,6 +8040,21 @@ self.addEventListener('message', async (e) => {
     }
 
     // ── Model registry ──────────────────────────────────────────
+    // Repos LocalMind once shipped in the picker and no longer does. No code path can
+    // read their caches again, so sweepRetiredModelCaches() removes them at boot.
+    // Append here whenever a MODELS entry is retired; scripts/test-inference-worker.mjs
+    // checks the list never overlaps the live registry.
+    const RETIRED_MODEL_REPOS = [
+      'onnx-community/Ternary-Bonsai-1.7B-ONNX', 'onnx-community/Ternary-Bonsai-8B-ONNX',
+      'LiquidAI/LFM2.5-230M-ONNX', 'onnx-community/LFM2-8B-A1B-ONNX', 'HuggingFaceTB/SmolLM3-3B-ONNX',
+      'onnx-community/gemma-3-1b-it-ONNX', 'onnx-community/gemma-3-1b-it-ONNX-GQA',
+      'google/gemma-4-E2B-it-qat-mobile-transformers', // Gemma 4 kernels engine (IndexedDB 'safetensors-cache-v1')
+      'bartowski/SmolLM2-360M-Instruct-GGUF', 'Qwen/Qwen2.5-1.5B-Instruct-GGUF', 'bartowski/Llama-3.2-1B-Instruct-GGUF',
+      'lmstudio-community/Bonsai-27B-GGUF', // 1-bit Bonsai 27B v1 (IndexedDB 'gguf-cache-v1'; 3.8 GB on the live origin)
+      'onnx-community/Apertus-v1.1-4B-Instruct-ONNX', 'onnx-community/Qwen3-4B-ONNX',
+      'onnx-community/granite-4.0-1b-ONNX-web', 'onnx-community/granite-4.0-micro-ONNX-web',
+    ];
+
     const MODELS = {
       'bonsai-ternary-4b': {
         id: 'onnx-community/Ternary-Bonsai-4B-ONNX',
@@ -9620,48 +9635,186 @@ self.addEventListener('message', async (e) => {
       closeHistorySidebar();
     });
 
-    // ── Model cache management ────────────────────────────────
+    // ── Model cache inventory + eviction ──────────────────────
+    // Every in-tab backend caches weights somewhere different:
+    //   transformers.js (ONNX)     → Cache Storage 'transformers-cache', keyed by HF URL
+    //   LFM2.5 WebGPU kernels      → Cache Storage 'gguf-v1' (+ '-headers'), keyed by GGUF URL
+    //   Ternary Bonsai 2 kernels   → IndexedDB 'gguf-cache-v1' (meta + chunk stores keyed by GGUF URL)
+    //   wllama (GGUF)              → OPFS 'cache/' (data file + '__metadata__' twin holding originalURL)
+    //   resumable ONNX downloads   → IndexedDB 'localmind-downloads' (meta keyed by URL, chunks 'url|n')
+    // Retired engines left more behind: the Gemma 4 kernels engine used IndexedDB
+    // 'safetensors-cache-v1' + Cache Storage 'bonsai-pipeline-v1'. inventoryModelCaches() walks all of it and groups by
+    // Hugging Face repo (or URL origin for custom GGUF URLs), so Settings shows one row
+    // per model with its own Delete, and sweepRetiredModelCaches() removes at boot only
+    // the groups whose repo is in RETIRED_MODEL_REPOS. Everything else is the user's call.
     const cacheInfo = document.getElementById('cacheInfo');
+
+    function repoOfUrl(url) {
+      let u; try { u = new URL(url); } catch { return null; }
+      const segs = u.pathname.split('/').filter(Boolean);
+      if (u.host === 'huggingface.co' || u.host === 'hf.co') return segs.length >= 2 ? segs[0] + '/' + segs[1] : null;
+      if (/\.(gguf|onnx|safetensors|bin)$/i.test(u.pathname)) return u.host + segs.slice(0, 2).map(s => '/' + s).join('');
+      return null;
+    }
+    // Every picker entry backed by this repo (the 230M GGUF and WebGPU-kernels
+    // entries share one), joined for the row label; null when none is.
+    function registryLabelForRepo(repo) {
+      const labels = [];
+      for (const m of Object.values(MODELS)) {
+        const id = String(m.id || '');
+        if (id === repo || (id.startsWith('http') && repoOfUrl(id) === repo)) labels.push(m.label);
+      }
+      return labels.length ? labels.join(' / ') : null;
+    }
+    const fmtBytes = (n) => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : Math.round(n / 1048576) + ' MB';
+    const idbReq = (req) => new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
+    const idbOpenExisting = (name) => new Promise((res, rej) => {
+      const q = indexedDB.open(name);
+      q.onupgradeneeded = () => { q.transaction.abort(); rej(new Error('db ' + name + ' does not exist')); };
+      q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); q.onblocked = () => rej(new Error('blocked'));
+    });
+
+    // Returns Map<repo, { repo, label, retired, bytes, stores:Set, remove() }>.
+    // measure:false skips reading sizes (the boot sweep sizes via storage.estimate()).
+    async function inventoryModelCaches({ measure = true } = {}) {
+      const groups = new Map();
+      const add = (repo, store, bytes, deleter) => {
+        let g = groups.get(repo);
+        if (!g) {
+          g = { repo, label: registryLabelForRepo(repo), retired: RETIRED_MODEL_REPOS.includes(repo), bytes: 0, stores: new Set(), deleters: [] };
+          g.remove = async () => { for (const d of g.deleters) { try { await d(); } catch (e) { console.warn('cache delete failed:', repo, e); } } };
+          groups.set(repo, g);
+        }
+        g.bytes += bytes || 0; g.stores.add(store); g.deleters.push(deleter);
+      };
+      // 1. Cache Storage (transformers.js, LFM2 kernels, retired Gemma kernels)
+      try {
+        if (self.caches) for (const name of await caches.keys()) {
+          const c = await caches.open(name);
+          for (const req of await c.keys()) {
+            const repo = repoOfUrl(req.url); if (!repo) continue;
+            let bytes = 0;
+            if (measure) { try { const res = await c.match(req); const cl = res && res.headers.get('content-length'); bytes = cl ? +cl : (res ? (await res.blob()).size : 0); } catch {} }
+            add(repo, name, bytes, () => c.delete(req));
+          }
+        }
+      } catch (e) { console.warn('cache inventory (Cache Storage):', e); }
+      // 2. IndexedDB
+      let dbNames = [];
+      try { dbNames = (await indexedDB.databases()).map(d => d.name); } catch {}
+      // The kernel engines' byte-range cache library: a 'meta' store keyed by URL
+      // ({size, dataStart, header}) and a 'chunks' store keyed [url, start, end].
+      // 'gguf-cache-v1' is Bonsai 2's; 'safetensors-cache-v1' was the retired Gemma
+      // 4 kernels engine's (2.4 GB of orphaned weights on the dev origin, 2026-09-18).
+      for (const dbName of ['gguf-cache-v1', 'safetensors-cache-v1']) {
+        if (!dbNames.includes(dbName)) continue;
+        try {
+          const db = await idbOpenExisting(dbName);
+          let metaStore = null, chunkStore = null;
+          for (const s of db.objectStoreNames) {
+            const k = await idbReq(db.transaction(s, 'readonly').objectStore(s).getAllKeys(null, 1));
+            if (Array.isArray(k[0])) chunkStore = s; else if (typeof k[0] === 'string') metaStore = s;
+          }
+          if (metaStore) {
+            for (const key of await idbReq(db.transaction(metaStore, 'readonly').objectStore(metaStore).getAllKeys())) {
+              const meta = measure ? await idbReq(db.transaction(metaStore, 'readonly').objectStore(metaStore).get(key)) : null;
+              add(repoOfUrl(key) || key, dbName, (meta && meta.size) || 0, async () => {
+                if (chunkStore) await idbReq(db.transaction(chunkStore, 'readwrite').objectStore(chunkStore).delete(IDBKeyRange.bound([key], [key, [], []])));
+                await idbReq(db.transaction(metaStore, 'readwrite').objectStore(metaStore).delete(key));
+                // Drop the database once nothing is left in it; an engine that still
+                // uses it recreates the stores on its next open. Not awaited: Chrome
+                // takes a minute to delete a multi-GB store and the request never
+                // settles while another connection holds the database open.
+                const left = await idbReq(db.transaction(metaStore, 'readonly').objectStore(metaStore).count());
+                if (left === 0) { db.close(); try { indexedDB.deleteDatabase(dbName); } catch {} }
+              });
+            }
+          }
+        } catch (e) { console.warn('cache inventory (' + dbName + '):', e); }
+      }
+      if (dbNames.includes('localmind-downloads')) {
+        try {
+          const db = await idbOpenExisting('localmind-downloads');
+          const urls = await idbReq(db.transaction('meta', 'readonly').objectStore('meta').getAllKeys());
+          for (const url of urls) {
+            const range = IDBKeyRange.bound(url + '|', url + '|\uffff');
+            const n = measure ? await idbReq(db.transaction('chunks', 'readonly').objectStore('chunks').count(range)) : 0;
+            add(repoOfUrl(url) || url, 'partial download', n * 5 * 1048576, async () => {
+              await idbReq(db.transaction('chunks', 'readwrite').objectStore('chunks').delete(range));
+              await idbReq(db.transaction('meta', 'readwrite').objectStore('meta').delete(url));
+            });
+          }
+        } catch (e) { console.warn('cache inventory (localmind-downloads):', e); }
+      }
+      // 3. OPFS (wllama)
+      try {
+        const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('cache');
+        const metas = [];
+        for await (const [name, handle] of dir.entries()) if (handle.kind === 'file' && name.startsWith('__metadata__')) metas.push(name);
+        for (const mname of metas) {
+          const dataName = mname.slice('__metadata__'.length);
+          let meta = null, size = 0;
+          try { meta = JSON.parse(await (await (await dir.getFileHandle(mname)).getFile()).text()); } catch {}
+          if (measure) { try { size = (await (await dir.getFileHandle(dataName)).getFile()).size; } catch {} }
+          add((meta && meta.originalURL && repoOfUrl(meta.originalURL)) || dataName, 'wllama', size, async () => {
+            for (const n of [dataName, mname]) { try { await dir.removeEntry(n); } catch {} }
+          });
+        }
+      } catch {}
+      return groups;
+    }
 
     async function refreshCacheInfo() {
       try {
-        const keys = await caches.keys();
-        const modelCaches = keys.filter(k => k.includes('transformers'));
-        if (modelCaches.length === 0) {
-          cacheInfo.innerHTML = 'No cached models';
-          return;
-        }
-        let totalSize = 0;
-        const entries = [];
-        for (const key of modelCaches) {
-          const cache = await caches.open(key);
-          const requests = await cache.keys();
-          let size = 0;
-          for (const req of requests) {
-            try {
-              const res = await cache.match(req);
-              if (res) {
-                const blob = await res.blob();
-                size += blob.size;
-              }
-            } catch {}
-          }
-          totalSize += size;
-          entries.push({ key, size, count: requests.length });
-        }
-        const sizeMB = (totalSize / 1024 / 1024).toFixed(0);
-        let html = `<strong>${sizeMB} MB</strong> cached (${entries.reduce((a, e) => a + e.count, 0)} files)<br>`;
-        html += `<button class="btn-icon btn-danger-text" style="font-size:0.7rem;margin-top:4px" id="clearCacheBtn">Clear model cache</button>`;
+        const groups = await inventoryModelCaches();
+        const rows = [...groups.values()].sort((x, y) => y.bytes - x.bytes);
+        if (rows.length === 0) { cacheInfo.innerHTML = 'No cached models'; return; }
+        const total = rows.reduce((n, g) => n + g.bytes, 0);
+        let html = `<strong>${fmtBytes(total)}</strong> cached across ${rows.length} model${rows.length === 1 ? '' : 's'}`;
+        html += '<div style="margin-top:6px;display:grid;grid-template-columns:1fr auto auto;gap:2px 10px;align-items:center">';
+        rows.forEach((g, i) => {
+          const name = g.label ? escapeHtml(g.label) : `<code style="font-size:0.68rem">${escapeHtml(g.repo)}</code>`;
+          const tag = g.retired ? ' <span style="color:var(--error-text)">retired</span>' : (g.label ? '' : ' <span style="color:var(--gray-400)">not in the picker</span>');
+          html += `<span title="${escapeHtml([...g.stores].join(', '))}">${name}${tag}</span><span>${fmtBytes(g.bytes)}</span><button class="btn-icon btn-danger-text" style="font-size:0.68rem" data-cache-row="${i}">Delete</button>`;
+        });
+        html += '</div>';
+        html += '<button class="btn-icon btn-danger-text" style="font-size:0.7rem;margin-top:6px" id="clearCacheBtn">Delete all model caches</button>';
         cacheInfo.innerHTML = html;
+        cacheInfo.querySelectorAll('[data-cache-row]').forEach((btn) => btn.addEventListener('click', async () => {
+          const g = rows[+btn.dataset.cacheRow];
+          if (!confirm(`Delete the cached weights of ${g.label || g.repo} (${fmtBytes(g.bytes)})? It will re-download on next use.`)) return;
+          btn.disabled = true;
+          await g.remove();
+          refreshCacheInfo();
+          showToast(`Deleted ${fmtBytes(g.bytes)} — ${g.label || g.repo}`);
+        }));
         document.getElementById('clearCacheBtn')?.addEventListener('click', async () => {
           if (!confirm('Delete all cached models? They will re-download on next use.')) return;
-          for (const key of modelCaches) await caches.delete(key);
+          for (const g of rows) await g.remove();
           refreshCacheInfo();
           showToast('Model cache cleared');
         });
       } catch (e) {
+        console.warn('cache info:', e);
         cacheInfo.innerHTML = 'Cache info unavailable';
       }
+    }
+
+    // Boot sweep: drop caches only for repos in RETIRED_MODEL_REPOS. Sized via
+    // storage.estimate() before/after so the boot path never reads blobs.
+    async function sweepRetiredModelCaches() {
+      try {
+        const groups = await inventoryModelCaches({ measure: false });
+        const retired = [...groups.values()].filter(g => g.retired);
+        if (retired.length === 0) return;
+        const before = (await navigator.storage.estimate()).usage || 0;
+        for (const g of retired) await g.remove();
+        const after = (await navigator.storage.estimate()).usage || 0;
+        const names = retired.map(g => g.repo.split('/').pop()).join(', ');
+        console.info(`[LocalMind] removed cached weights of retired models: ${names} (${fmtBytes(Math.max(0, before - after))} freed)`);
+        showToast(`Freed ${fmtBytes(Math.max(0, before - after))} — removed cached weights of retired models (${names})`);
+        if (settingsPanel.classList.contains('open')) refreshCacheInfo();
+      } catch (e) { console.warn('retired-cache sweep skipped:', e); }
     }
 
     // Refresh cache info when settings panel opens
@@ -19080,6 +19233,7 @@ self.addEventListener('message', async (e) => {
     // ── Init ────────────────────────────────────────────────────
     renderRestoredMessages();
     refreshHistoryPanel();   // populate the docked desktop history rail on load
+    sweepRetiredModelCaches();   // async; frees caches of models no longer in the picker
     // Prefer Chrome's built-in Gemini Nano as a ZERO-download default when it's actually
     // ready on desktop (Prompt API present + availability()==='available') — the user gets
     // a first token with no model download. Nano is a chrome-ai backend (no WebGPU needed),
