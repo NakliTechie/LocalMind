@@ -64,6 +64,20 @@ export function extractTernaryBonsai2Engine(html) {
     'let s=Dh(e);if(s.length===0)return 0;let i;try{i=this.#h(s,!1,t)}catch{return 0}let n=this.tokenizer.encode(i,{add_special_tokens:!1}).ids;',
   );
 
+  // 2c. More range streams in flight. The engine's parallel download is bounded
+  //     by an in-flight byte budget, not by its concurrency cap (32): with the
+  //     default 96 MB budget and 24 MB chunks only ~4 ranges stream at once.
+  //     Hugging Face's CDN throttles PER CONNECTION (measured 2026-09-18: one
+  //     stream 134 KB/s, eight parallel 548 KB/s aggregate), so 4 streams turn a
+  //     5.9 GB load into hours. 256 MB → ~10 streams. Cost: up to 256 MB of
+  //     in-flight buffers during download only — trivial next to the 6 GB of
+  //     weights the same machine is about to hold on the GPU.
+  const budgetMarker = 'Y1=24<<20,J1=1<<20,e3=96<<20,t3=32';
+  if (engine.split(budgetMarker).length !== 2) {
+    throw new Error('bonsai2 bundle: download tuning constants (Y1/J1/e3/t3) marker not found exactly once; re-locate before patching');
+  }
+  engine = engine.replace(budgetMarker, 'Y1=24<<20,J1=1<<20,e3=256<<20,t3=32');
+
   // 3. Guard the baked-in defaults so a silent upstream repoint is noticed.
   const idMarker = `var Ri="${UPSTREAM_MODEL_ID}",Cl="${UPSTREAM_GGUF_FILE}"`;
   if (!engine.includes(idMarker)) {
@@ -80,8 +94,10 @@ export function extractTernaryBonsai2Engine(html) {
     '   Upstream ships NO explicit license; vendored consistent with LocalMind\'s other\n' +
     '   webml-community engines (lfm2_5.js, gemma-4-e2b.js).\n' +
     '   Boot scene + Space UI (token gate / chat panel) stripped; exports kept verbatim;\n' +
-    '   ONE patch: system-prefix priming (#m) returns 0 instead of throwing when the chat\n' +
-    '   template refuses a system-only render (Qwen3.8: "No user query found in messages.").\n' +
+    '   TWO patches: (1) system-prefix priming (#m) returns 0 instead of throwing when the\n' +
+    '   chat template refuses a system-only render (Qwen3.8: "No user query found in\n' +
+    '   messages."); (2) download byteBudget 96 MB -> 256 MB (~10 range streams in flight\n' +
+    '   instead of ~4; HF CDN throttles per connection).\n' +
     `   DEFAULT_MODEL_ID is upstream's own ungated ${UPSTREAM_MODEL_ID} (${UPSTREAM_GGUF_FILE}).\n` +
     '   Model weights are Apache-2.0 (prism-ml Ternary Bonsai 2, Qwen3.8-27B backbone).\n' +
     '   Regenerate with scripts/extract-ternary-bonsai-2-27b.mjs. */\n' +
