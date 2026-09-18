@@ -58,6 +58,9 @@ const loadModel = async (request) => {
   if (!Lfm2Mobile) ({ Lfm2Mobile } = await import(ENGINE_URL));
   post({ type: 'progress', data: { status: 'initiate', file: GGUF_FILE } }, id);
   model = await Lfm2Mobile.load(request.modelId || DEFAULT_MODEL_ID, {
+    // Optional Hugging Face token (Settings → Models); the engine sends it as
+    // Authorization: Bearer on its huggingface.co requests.
+    accessToken: (typeof request.hfToken === 'string' && request.hfToken.trim()) || undefined,
     onProgress: (event) => {
       if (!event) return;
       if (event.status === 'weights') {

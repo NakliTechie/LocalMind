@@ -49,6 +49,12 @@ worker.postMessage({
 `modelClass` is `gemma4` or `qwen3_5` for the curated multimodal entries and
 is omitted for ordinary causal-language models.
 
+Every load request may also carry an optional `hfToken` (a Hugging Face read
+token). The custom-WebGPU workers pass it to their engine as `accessToken`, which
+sends it as `Authorization: Bearer` on requests to `huggingface.co` only — for
+gated repos and the account's (rather than the anonymous per-IP) rate limit.
+Omit it or pass `null` for anonymous downloads.
+
 The worker emits `progress` events followed by `ready`. Model weights use the
 engine's Cache Storage cache and are downloaded only when absent.
 

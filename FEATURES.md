@@ -165,6 +165,8 @@ Translate that list to Hindi: {{previous}}
 
 Settings → **Custom models** → paste a Hugging Face repo id (e.g. `onnx-community/Phi-3.5-mini-instruct-onnx-web`) → **Add**. The validator confirms `.onnx` files exist, picks the best quantisation, estimates the real load size, checks it against your WebGPU limits (hard-block over 6 GB, soft-warn over 2 GB), and rejects multimodal repos (deferred). Added models persist across reloads. Causal LMs only.
 
+**Hugging Face token (optional).** Settings → Models → paste a read token. It is sent as `Authorization: Bearer` to `huggingface.co` only — when the WebGPU-kernel engines (LFM2.5, Gemma 4, Ternary Bonsai 2) download weights and when a custom model is looked up — which unlocks gated repos and moves you from the anonymous per-IP rate limit (3,000 resolver requests / 5 min) to your account's. Stored in this browser only; never synced to the data folder; the field checks the token against `whoami` so a bad one is flagged instead of silently failing every download. It does not change the CDN's per-connection bandwidth.
+
 ## Developer API
 
 Scripts in the same tab can drive the loaded model via an OpenAI-shaped `window.localmind` object (opt-in, Settings → JavaScript API). Non-streaming + streaming. Full reference: **[API.md](./API.md)** · live demo: **[demo.html](./demo.html)**.

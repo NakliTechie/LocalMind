@@ -2573,6 +2573,18 @@
             custom models are not yet supported. Added models appear in the model selector.
           </div>
         </div>
+        <div class="settings-divider" data-tab="models">
+          <label for="hfTokenInput">Hugging Face token <span style="font-weight:400;color:var(--gray-500)">(optional)</span></label>
+          <input type="password" id="hfTokenInput" class="settings-input" placeholder="hf_… (read access is enough)" autocomplete="off" spellcheck="false">
+          <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
+            Sent only to huggingface.co, as <code>Authorization: Bearer</code>, when LocalMind downloads
+            weights for the WebGPU-kernel models (LFM2.5, Gemma 4, Ternary Bonsai 2) or looks up a custom
+            model. Unlocks gated repos and lifts you from the anonymous per-IP rate limit to your
+            account's. Stored on this device only &mdash; never synced to the data folder, never sent anywhere else.
+            <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">Create a read token</a>.
+          </div>
+          <div id="hfTokenStatus" style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;min-height:1em"></div>
+        </div>
         <div class="settings-divider" data-tab="tools">
           <label>Custom tools <span style="font-weight:400;color:var(--gray-500)">(agent-capable models; HTTP POST to your endpoint)</span></label>
           <textarea id="customToolInput" class="settings-input" rows="6" placeholder='{
@@ -7514,6 +7526,7 @@ self.onmessage = async (e) => {
       // load(modelId, opts): a repo id resolves the QAT-mobile weight root;
       // null falls back to the engine's DEFAULT_MODEL_ID (the same repo).
       model = await Gemma4Mobile.load(d.modelId || null, {
+        accessToken: d.hfToken || undefined,
         onProgress: (ev) => {
           if (!ev) return;
           if (ev.status === 'weights') {
@@ -7636,9 +7649,20 @@ const parseRangeHeader = (init) => {
   const m = h && /^bytes=(\d+)-(\d*)$/.exec(h.trim());
   return m ? { start: Number(m[1]), end: m[2] === '' ? null : Number(m[2]) } : null;
 };
+// Settings → Models token (posted as `hfToken` on the load message). Sent as
+// Authorization: Bearer on huggingface.co requests only; the CDN hop after the
+// 302 carries its own signed URL and gets no header.
+let hfToken = null;
+const isHfOrigin = (u) => { try { return new URL(u, self.location.href).host === 'huggingface.co'; } catch (_) { return false; } };
+const withAuth = (url, init) => {
+  if (!hfToken || !isHfOrigin(url)) return init;
+  const headers = new Headers(init.headers);
+  headers.set('Authorization', 'Bearer ' + hfToken);
+  return { ...init, headers };
+};
 const engineFetch = async (url, init = {}) => {
   const range = parseRangeHeader(init);
-  if (!range) return fetch(url, init);
+  if (!range) return fetch(url, withAuth(url, init));
   const signal = init.signal;
   const throwIfAborted = () => {
     if (signal && signal.aborted) throw (signal.reason || new DOMException('aborted', 'AbortError'));
@@ -7650,7 +7674,7 @@ const engineFetch = async (url, init = {}) => {
       try {
         const headers = new Headers(init.headers);
         headers.set('Range', `bytes=${start}-${range.end == null ? '' : range.end}`);
-        const r = await fetch(url, { ...init, headers });
+        const r = await fetch(url, withAuth(url, { ...init, headers }));
         if (r.status === 429 || r.status >= 500) throw new Error(`HTTP ${r.status} on range read`);
         return r;
       } catch (err) {
@@ -7696,6 +7720,7 @@ self.onmessage = async (e) => {
   try {
     if (d.type === 'load') {
       if (!TernaryBonsai2) ({ TernaryBonsai2 } = await import(ENGINE_URL));
+      hfToken = (typeof d.hfToken === 'string' && d.hfToken.trim()) || null;
       post({ type: 'progress', data: { status: 'initiate', file: WEIGHTS_LABEL } });
       // load(modelId, opts): null falls back to the engine's DEFAULT_MODEL_ID
       // (upstream's own ungated prism-ml/Ternary-Bonsai-2-27B-gguf, PTQ1_0 file).
@@ -9406,7 +9431,7 @@ self.addEventListener('message', async (e) => {
     let pendingFolderHandle = null;  // stored but needs a click to re-grant permission
     let suppressSync = false;        // true while hydrating, so restore writes don't re-sync
     const SYNC_DB = 'localmind_sync';
-    // Non-secret settings to mirror — API keys (lm_search_key) deliberately excluded.
+    // Non-secret settings to mirror — API keys (lm_search_key, lm_hf_token) deliberately excluded.
     const SYNC_SETTINGS_KEYS = ['lm_search_provider', 'lm_searxng_url', 'lm_planner_enabled',
       'lm_resumable_downloads', 'lm_auto_backup', 'lm_sam_model', 'lm_voice_language', 'lm_api_enabled',
       'lm_tts_voice', 'lm_tts_speed', 'lm_tts_autoplay', 'lm_auto_escalation',
@@ -10540,7 +10565,7 @@ self.addEventListener('message', async (e) => {
       // 1. HF model info. ?blobs=true populates each sibling's .size.
       let info;
       try {
-        const res = await fetch('https://huggingface.co/api/models/' + id + '?blobs=true', { signal: AbortSignal.timeout(10000) });
+        const res = await fetch('https://huggingface.co/api/models/' + id + '?blobs=true', { signal: AbortSignal.timeout(10000), headers: hfAuthHeaders() });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         info = await res.json();
       } catch (e) {
@@ -11260,6 +11285,42 @@ self.addEventListener('message', async (e) => {
       updateSearchUI();
     });
     searchApiKey.addEventListener('input', () => localStorage.setItem('lm_search_key', searchApiKey.value));
+    // Hugging Face token: device-local like the search key. Read at load time by
+    // hfToken() so a token pasted mid-session applies to the next model load.
+    const hfTokenInput = document.getElementById('hfTokenInput');
+    const hfTokenStatus = document.getElementById('hfTokenStatus');
+    if (hfTokenInput) {
+      hfTokenInput.value = localStorage.getItem('lm_hf_token') || '';
+      hfTokenInput.addEventListener('input', () => {
+        const v = hfTokenInput.value.trim();
+        try { if (v) localStorage.setItem('lm_hf_token', v); else localStorage.removeItem('lm_hf_token'); } catch {}
+        if (hfTokenStatus) hfTokenStatus.textContent = v ? 'Saved on this device. Checking…' : '';
+        clearTimeout(hfTokenInput._checkT);
+        // A wrong token would turn every HF download into a 401, so check it
+        // once it stops changing (whoami is the API bucket; one call, on edit only).
+        if (v) hfTokenInput._checkT = setTimeout(() => checkHfToken(v), 800);
+      });
+    }
+    async function checkHfToken(token) {
+      if (!hfTokenStatus) return;
+      try {
+        const r = await fetch('https://huggingface.co/api/whoami-v2', { headers: { 'Authorization': 'Bearer ' + token }, signal: AbortSignal.timeout(10000) });
+        if (r.ok) {
+          const j = await r.json().catch(() => ({}));
+          hfTokenStatus.textContent = 'Token OK' + (j.name ? ' — ' + j.name : '') + '. Applies to the next model load.';
+        } else if (r.status === 401) {
+          hfTokenStatus.textContent = 'Hugging Face rejected this token (401). Downloads will fail until it is fixed or cleared.';
+        } else {
+          hfTokenStatus.textContent = 'Token check returned HTTP ' + r.status + '.';
+        }
+      } catch (e) {
+        hfTokenStatus.textContent = 'Could not reach huggingface.co to check the token (' + ((e && e.name) || 'error') + '); it is saved anyway.';
+      }
+    }
+    function hfToken() { try { return (localStorage.getItem('lm_hf_token') || '').trim() || null; } catch { return null; } }
+    // Authorization header for huggingface.co requests made from the main thread
+    // (the custom-model probe); empty when no token is set.
+    function hfAuthHeaders() { const t = hfToken(); return t ? { 'Authorization': 'Bearer ' + t } : {}; }
     searxngUrl.addEventListener('input', () => localStorage.setItem('lm_searxng_url', searxngUrl.value));
 
     // ── Data-folder sync UI ──────────────────────────────────────
@@ -13603,7 +13664,9 @@ ${JSON.stringify({ name, result })}
             // The LFM2/Gemma engines ignore contextSize (they read it from the
             // model metadata); the Bonsai 2 worker passes it to the engine as
             // maxLength. The shared load message shape is harmless either way.
-            w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0, localFile: (isWllama && MODELS[modelId]) ? (MODELS[modelId].localFile || null) : null });
+            // hfToken (Settings → Models) rides along for the three custom-WGSL
+            // engines, which send it as Authorization: Bearer to huggingface.co.
+            w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0, localFile: (isWllama && MODELS[modelId]) ? (MODELS[modelId].localFile || null) : null, hfToken: isWllama ? null : hfToken() });
           } else {
             const resumable = localStorage.getItem('lm_resumable_downloads') !== '0';
             w.postMessage({ type: 'load', modelId, dtype, modelType, modelClass, resumable });
