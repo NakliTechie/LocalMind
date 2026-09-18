@@ -10,29 +10,20 @@ Pick a model from the dropdown. It downloads once, caches in the browser, and ru
 
 | Model | Size | Runtime | Capabilities | Best for |
 |---|---|---|---|---|
-| **Ternary Bonsai 1.7B** | ~470 MB | WebGPU | Text + agent (tools) | Smallest ONNX download with tool calling; strong reasoning |
-| **Ternary Bonsai 4B** | ~1.1 GB | WebGPU | Text + agent | Same, better quality |
-| **Ternary Bonsai 8B** | ~2.2 GB | WebGPU | Text + agent | Best Bonsai quality; 65K context |
+| **Ternary Bonsai 4B** | ~1.1 GB | WebGPU | Text + agent (tools) | The small ternary tier: 1.58-bit weights, strong reasoning for its download |
 | **Qwen3.5 4B** | ~3 GB | WebGPU | Text + image + agent | Qwen3.5 at q4f16; native tool calling; 262K native context capped to 32K in-browser |
-| **LFM2.5 230M** | ~210 MB | WebGPU | Text + agent | The ONNX build of the default model; 32K context |
 | **LFM2.5 1.2B** | ~760 MB | WebGPU | Text + agent | Liquid AI's LFM2.5-1.2B-Instruct, RL-tuned for instruction following + tool use |
-| **LFM2 8B A1B** | ~4.8 GB | WebGPU | Text + agent | Liquid AI sparse-MoE (8B total / ~1B active); needs a capable GPU + ~8 GB RAM |
-| **SmolLM3 3B** | ~2.1 GB | WebGPU | Text + agent | HuggingFace SmolLM3; dual tool interfaces (xml + python), 6 languages |
-| **Gemma 3 1B** | ~760 MB | WebGPU | Text only | Lightweight fallback |
 | **Gemma 4 E2B** | ~1.5 GB | WebGPU | Text + image + audio + agent | Multimodal on any device |
 | **Gemma 4 E4B** | ~4.9 GB | WebGPU | Text + image + audio + agent | Best multimodal quality |
 | **Gemini Nano** | 0 MB | Chrome built-in | Text (chat) | Chrome ships the weights — no download, no WebGPU. Chrome/Edge only |
 | **LFM2.5 230M · WebGPU kernels** | ~140 MB | Custom WGSL (in-tab) | Text + agent | LFM2.5 230M on a from-scratch WebGPU engine — every kernel hand-written WGSL; ~hundreds of tok/s. **Default model.** |
-| **Gemma 4 E2B · WebGPU kernels** | ~2 GB | Custom WGSL (in-tab) | Text + agent | Gemma 4 E2B (QAT int4) on hand-written WGSL kernels; ~250 tok/s on an M4 Max |
 | **Ternary Bonsai 2 27B** | ~5.9 GB | Custom WGSL (in-tab) | Text + agent | 27B at ternary 1.75-bit (Qwen3.8 backbone, 98% of full-precision benchmark score) on hand-written WGSL — the biggest in-browser model here. A reasoning model; 16K context |
 | **LFM2.5 230M · GGUF** | ~170 MB | wllama (in-tab) | Text + agent | Same model as the default, as a Q5_K_M GGUF — runs on CPU without WebGPU |
-| **SmolLM2 360M · GGUF** | ~270 MB | wllama (in-tab) | Text + agent | Tiniest GGUF; runs on CPU without WebGPU |
-| **Qwen2.5 1.5B · GGUF** | ~1.1 GB | wllama (in-tab) | Text + agent | More capable GGUF option |
 | **MiniCPM5 2B · GGUF** | ~1.6 GB | wllama (in-tab) | Text + agent | Largest GGUF entry; 16K context for long documents; no ONNX export exists, so wllama is the only in-tab path |
 
 Plus any **custom Hugging Face ONNX model** (paste a repo id) or any model served by **your own Ollama / LM Studio** (see Runtimes).
 
-The Bonsai family are 1.58-bit ternary-weight LLMs from Prism ML (Apache-2.0, Qwen3 backbone) — they punch above their download size on reasoning/code/tool-calling. LFM2 8B A1B is Liquid AI's sparse mixture-of-experts; note the **symmetric** QMoE export (`onnx-community/LFM2-8B-A1B-ONNX`) is the one that loads on WebGPU — the asymmetric/zero-point builds don't. **MiniCPM5 2B** is OpenBMB's Apache-2.0 2B (Sept 2026) — a plain `LlamaForCausalLM` whose gains come from data and post-training rather than architecture. It shipped without an ONNX export, so wllama is the only in-tab path; its 16K context (double the other GGUF entries) is affordable because GQA with just 2 KV heads makes the cache cheap, and long-context retrieval is the axis its own card scores highest. It calls tools in its own XML shape (`<function name="…"><param name="…">…</param></function>`) rather than the `<tool_call>` JSON every other model here emits; the tool-call parser reads both, coercing XML's untyped values against each tool's declared schema.
+The Bonsai family are 1.58-bit ternary-weight LLMs from Prism ML (Apache-2.0, Qwen3 backbone) — they punch above their download size on reasoning/code/tool-calling. **MiniCPM5 2B** is OpenBMB's Apache-2.0 2B (Sept 2026) — a plain `LlamaForCausalLM` whose gains come from data and post-training rather than architecture. It shipped without an ONNX export, so wllama is the only in-tab path; its 16K context (double the other GGUF entries) is affordable because GQA with just 2 KV heads makes the cache cheap, and long-context retrieval is the axis its own card scores highest. It calls tools in its own XML shape (`<function name="…"><param name="…">…</param></function>`) rather than the `<tool_call>` JSON every other model here emits; the tool-call parser reads both, coercing XML's untyped values against each tool's declared schema.
 
 ## Runtimes — five ways to run a model
 
@@ -66,7 +57,7 @@ Large models on the browser's WebGPU backend can occasionally run out of GPU mem
 
 ## Agent tools
 
-Tool-capable models (Bonsai, Qwen3.5, LFM2, SmolLM3, MiniCPM5, Gemma 4, and the smaller GGUF models) decide when to use tools based on your question.
+Tool-capable models (Bonsai, Qwen3.5, LFM2, MiniCPM5, Gemma 4) decide when to use tools based on your question.
 
 | Tool | What it does |
 |---|---|

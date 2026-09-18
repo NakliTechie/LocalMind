@@ -168,7 +168,7 @@ the slots the transformers.js v4 frontier moved past, and make the Edge-First la
 *automatic* instead of a manual model picker. Anchor = the voice loop. Everything
 else is a registry entry or a worker swap. LocalMind is Edge-First / on-device;
 every item runs fully local, zero new egress. New models load from HF/CDN; any new
-engine is a vendored sibling like `lfm2_5.js` / `gemma-4-e2b.js`.
+engine is a vendored sibling like `lfm2_5.js` / `ternary_bonsai_2_27b.js`.
 
 ### 1. 🎙 Voice — the bench gets a mouth  · **ANCHOR, handoff written** (`VOICE-LOOP-HANDOFF.md`)
 

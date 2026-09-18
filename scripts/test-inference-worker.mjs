@@ -38,6 +38,16 @@ assert.match(indexSource, /new URL\('ternary_bonsai_2_27b\.js', document\.baseUR
 assert.match(indexSource, /\(\{ TernaryBonsai2 \} = await import\(ENGINE_URL\)\)/);
 assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',\s*label: 'Ternary Bonsai 2 27B',\s*backend: 'bonsai2-webgpu'/);
 assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgpu/);
+// Picker ↔ registry parity: every <option> in #modelSelect has a MODELS entry and vice versa.
+{
+  const select = /<select[^>]*\bid="modelSelect"[^>]*>([\s\S]*?)<\/select>/.exec(indexSource);
+  assert.ok(select, '#modelSelect missing');
+  const options = [...select[1].matchAll(/<option value="([^"]+)"/g)].map((m) => m[1]);
+  const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'));
+  const keys = [...registry.slice(0, registry.indexOf('\n    };')).matchAll(/^      '([^']+)': \{/gm)].map((m) => m[1]);
+  assert.deepEqual([...options].sort(), [...keys].sort(), 'picker options and MODELS registry keys must match');
+  assert.equal(options.length, 10);
+}
 assert.equal(catalog.defaultKey, 'lfm2-230m-webgpu');
 assert.deepEqual(
   catalog.models.map((model) => model.key),

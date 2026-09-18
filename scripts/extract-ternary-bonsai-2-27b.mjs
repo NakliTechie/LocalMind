@@ -92,7 +92,7 @@ export function extractTernaryBonsai2Engine(html) {
     '   webml-community/ternary-bonsai-2-webgpu-kernels HF Space (custom-WGSL Qwen3.8 /\n' +
     '   Ternary Bonsai 2 engine: PRISM_PTQ1_0 + PRISM_PQ2_0 ternary GGUF packings).\n' +
     '   Upstream ships NO explicit license; vendored consistent with LocalMind\'s other\n' +
-    '   webml-community engines (lfm2_5.js, gemma-4-e2b.js).\n' +
+    '   webml-community engines (lfm2_5.js).\n' +
     '   Boot scene + Space UI (token gate / chat panel) stripped; exports kept verbatim;\n' +
     '   TWO patches: (1) system-prefix priming (#m) returns 0 instead of throwing when the\n' +
     '   chat template refuses a system-only render (Qwen3.8: "No user query found in\n' +
