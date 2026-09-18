@@ -2181,7 +2181,7 @@
                 <li><strong>Ternary Bonsai 1.7B</strong> (~470 MB, default) &mdash; text + agent (tool calling). Smallest download with tool calling. 1.58-bit ternary weights, Qwen3 backbone, Apache-2.0.</li>
                 <li><strong>Ternary Bonsai 4B</strong> (~1.1 GB) &mdash; same capabilities, better quality.</li>
                 <li><strong>Ternary Bonsai 8B</strong> (~2.2 GB) &mdash; best Bonsai quality, 65K context.</li>
-                <li><strong>Ternary Bonsai 27B</strong> (~3.8 GB) &mdash; text + agent. PrismML's Bonsai 27B (1-bit, Qwen3.6-27B backbone) on a from-scratch WebGPU engine: hand-written WGSL for 1-bit dequant + Gated-DeltaNet linear attention, reading a Q1_0 GGUF directly. Ported from <em>webml-community/bonsai-webgpu-kernels</em>; Apache-2.0 weights. WebGPU-only &mdash; the biggest in-browser model here. A reasoning model: flip <strong>Show reasoning</strong> in Settings for its chain-of-thought.</li>
+                <li><strong>Ternary Bonsai 2 27B</strong> (~5.9 GB) &mdash; text + agent. PrismML's Ternary Bonsai 2 27B (Sept 2026; ternary 1.75-bit weights, Qwen3.8-27B backbone, 98% of the full-precision model's benchmark score) on a from-scratch WebGPU engine: hand-written WGSL for ternary dequant + Gated-DeltaNet linear attention, reading the PTQ1_0 GGUF directly. Ported from <em>webml-community/ternary-bonsai-2-webgpu-kernels</em>; Apache-2.0 weights. WebGPU-only &mdash; the biggest in-browser model here. A reasoning model: flip <strong>Show reasoning</strong> in Settings for its chain-of-thought. Text-only here (its optional vision tower is not loaded).</li>
                 <li><strong>Qwen3.5 4B</strong> (~3 GB) &mdash; text + image + agent (tool calling). Qwen3.5 at q4f16, Apache-2.0; its native 262K context is capped to 32K to keep browser memory bounded.</li>
                 <li><strong>LFM2.5 230M</strong> (~210 MB) &mdash; text + agent (tool calling). Liquid AI's smallest model (released 2026-06-25) &mdash; a dense LFM2 hybrid post-trained for on-device agents; strong at tool use + data extraction for its size, not for math/code/creative writing. q4, 32K context. The smallest tool-capable model here.</li>
                 <li><strong>LFM2 8B A1B</strong> (~4.8 GB) &mdash; text + agent (tool calling). Liquid AI sparse-MoE (8B total / ~1B active) at q4f16, 32K context. WebGPU-only and large &mdash; needs a capable GPU (Chrome/Edge, ~8 GB+ RAM recommended).</li>
@@ -2683,7 +2683,7 @@
           <option value="bonsai-ternary-1.7b">Ternary Bonsai 1.7B &middot; Agent (~470 MB)</option>
           <option value="bonsai-ternary-4b">Ternary Bonsai 4B &middot; Agent (~1.1 GB)</option>
           <option value="bonsai-ternary-8b">Ternary Bonsai 8B &middot; Agent (~2.2 GB)</option>
-          <option value="bonsai-27b-webgpu">Ternary Bonsai 27B &middot; Agent (~3.8 GB)</option>
+          <option value="ternary-bonsai-2-27b-webgpu">Ternary Bonsai 2 27B &middot; Agent (~5.9 GB)</option>
           <option value="qwen35-4b">Qwen3.5 4B &middot; Vision + Agent (~3 GB)</option>
           <option value="lfm2-230m">LFM2.5 230M &middot; Agent (~210 MB)</option>
           <option value="lfm2-8b-a1b">LFM2 8B A1B &middot; Agent (~4.8 GB)</option>
@@ -7600,31 +7600,82 @@ self.onmessage = async (e) => {
   }
 };
   </script>
-  <script type="text/worker" id="bonsai27bWebgpuWorkerSrc">
-// The factory replaces __BONSAI27B_ENGINE_URL__ with the engine's absolute same-origin URL.
-const ENGINE_URL = '__BONSAI27B_ENGINE_URL__';
+  <script type="text/worker" id="ternaryBonsai2WebgpuWorkerSrc">
+// The factory replaces __TERNARY_BONSAI2_ENGINE_URL__ with the engine's absolute same-origin URL.
+const ENGINE_URL = '__TERNARY_BONSAI2_ENGINE_URL__';
 
-let Bonsai27bMobile = null;
+let TernaryBonsai2 = null;
 let model = null;
 let abortController = null;
 let stopFlag = false;
 let lastHistoryLen = 0; // tracks conversation length to reset KV/recurrent state on a fresh chat
 
-const WEIGHTS_LABEL = 'Bonsai 27B (1-bit)';
+const WEIGHTS_LABEL = 'Ternary Bonsai 2 27B (PTQ1_0)';
 const post = (m) => self.postMessage(m);
+
+// The engine yields between load stages with requestAnimationFrame whenever that
+// global exists (Chrome exposes it in dedicated workers). rAF never fires while
+// the tab is hidden, so a load started and then tabbed away stalls at "Loading
+// tokenizer" / "warmup" until the tab is fronted again. A timer-backed rAF keeps
+// the ~6 GB load moving in the background; nothing on the worker path needs real
+// frame timing. Must be installed before the engine is imported.
+self.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 0);
+
+// The engine reads each ~32 MB weight range exactly once, so a single dropped
+// connection aborts the whole ~6 GB load (one 'Failed to fetch' at 70% did, in
+// the 2026-09-18 live check). Range reads go through this wrapper: transient
+// failures (network errors, 429/5xx) are retried with backoff, and the body is
+// buffered so a drop inside the body is retried too. Every other request (the
+// HEAD size probe, tokenizer/resource fetches) passes straight through.
+const RANGE_RETRIES = 4;
+const engineFetch = async (url, init = {}) => {
+  const isRange = !!(init.headers && new Headers(init.headers).has('range'));
+  if (!isRange) return fetch(url, init);
+  let lastErr = null;
+  for (let attempt = 0; attempt < RANGE_RETRIES; attempt++) {
+    if (init.signal && init.signal.aborted) throw (init.signal.reason || new DOMException('aborted', 'AbortError'));
+    try {
+      const r = await fetch(url, init);
+      if (r.status === 429 || r.status >= 500) throw new Error(`HTTP ${r.status} on range read`);
+      const buf = await r.arrayBuffer();
+      return new Response(buf, { status: r.status, statusText: r.statusText, headers: r.headers });
+    } catch (err) {
+      lastErr = err;
+      if (init.signal && init.signal.aborted) throw err;
+      await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+};
 
 self.onmessage = async (e) => {
   const d = e.data || {};
   try {
     if (d.type === 'load') {
-      if (!Bonsai27bMobile) ({ Bonsai27bMobile } = await import(ENGINE_URL));
+      if (!TernaryBonsai2) ({ TernaryBonsai2 } = await import(ENGINE_URL));
       post({ type: 'progress', data: { status: 'initiate', file: WEIGHTS_LABEL } });
       // load(modelId, opts): null falls back to the engine's DEFAULT_MODEL_ID
-      // (the ungated lmstudio-community/Bonsai-27B-GGUF Q1_0 mirror baked in).
-      model = await Bonsai27bMobile.load(d.modelId || null, {
+      // (upstream's own ungated prism-ml/Ternary-Bonsai-2-27B-gguf, PTQ1_0 file).
+      // maxLength sizes the KV/recurrent cache; the registry's contextSize wins
+      // over the engine's 16K default so the two never drift apart.
+      model = await TernaryBonsai2.load(d.modelId || null, {
+        fetch: engineFetch,
+        maxLength: d.contextSize > 0 ? d.contextSize : undefined,
         onProgress: (ev) => {
           if (!ev) return;
-          if (ev.status === 'weights') {
+          if (ev.status === 'weights' && ev.kind === 'tensors') {
+            // Post-download phases: tensor upload to the GPU (counted in tensors,
+            // not bytes — must not drive the MB bar), then kernel warmup / decode
+            // tuning (no counts at all).
+            const loaded = typeof ev.loaded === 'number' ? ev.loaded : null;
+            const total = typeof ev.total === 'number' ? ev.total : null;
+            if (loaded != null && total != null && total > 0) {
+              // No '/' in the label: the host splits `file` on '/' to show a basename.
+              post({ type: 'progress', data: { status: 'loading', file: `weights to GPU (${loaded} of ${total} tensors)` } });
+            } else {
+              post({ type: 'warmup' });
+            }
+          } else if (ev.status === 'weights') {
             const loaded = typeof ev.loaded === 'number' ? ev.loaded : null;
             const total = typeof ev.total === 'number' ? ev.total : null;
             if (loaded != null && total != null && total > 0) {
@@ -7643,7 +7694,7 @@ self.onmessage = async (e) => {
       try { if (typeof model.warmup === 'function') await model.warmup(); } catch (_) {}
       post({ type: 'ready', backend: 'webgpu' });
     } else if (d.type === 'generate') {
-      if (!model) { post({ type: 'error', message: 'Bonsai 27B WebGPU model not loaded' }); return; }
+      if (!model) { post({ type: 'error', message: 'Ternary Bonsai 2 27B WebGPU model not loaded' }); return; }
       stopFlag = false;
       const cfg = d.generationConfig || {};
       // Toggle-controlled thinking. LocalMind posts `enableThinking` (from the
@@ -7653,7 +7704,7 @@ self.onmessage = async (e) => {
       // → clean answer; ON → the model thinks and we collapse it (below).
       const wantThink = d.enableThinking === true;
       try { model.chatTemplateArgs = { enable_thinking: wantThink }; } catch (_) {}
-      // Qwen3.6 / Bonsai has a real system role and applies its chat template
+      // Qwen3.8 / Bonsai 2 has a real system role and applies its chat template
       // internally, so pass {role, content} straight through (strip multimodal
       // blocks to text). Unlike Gemma, no system-folding.
       const msgs = (d.messages || []).map((m) => {
@@ -7675,6 +7726,20 @@ self.onmessage = async (e) => {
       // chain-of-thought into the "Thought process" block instead of dumping it.
       const thinkClose = (wantThink && model && model.thinkCloseTokenId != null)
         ? model.thinkCloseTokenId : null;
+      // Same story for tool calls: <tool_call> / </tool_call> are added tokens in
+      // the Qwen3.8 tokenizer, so the decoder's skip_special_tokens drops them and
+      // LocalMind would see bare JSON (the 2026-09-18 live check did: the call
+      // leaked into the bubble, the tool never ran). Re-emit the literal tags
+      // from the raw token id so _adapterParseToolCalls() sees the block it
+      // prompted for.
+      const tagIds = new Map();
+      for (const tag of ['<tool_call>', '</tool_call>']) {
+        try {
+          const f = model.tokenizer && model.tokenizer.token_to_id;
+          const id = f ? f.call(model.tokenizer, tag) : null;
+          if (typeof id === 'number' && id >= 0) tagIds.set(id, tag);
+        } catch (_) {}
+      }
       let thinkOpened = false;
       let inThink = thinkClose != null;
       let prev = '';
@@ -7697,6 +7762,7 @@ self.onmessage = async (e) => {
             continue;
           }
           if (delta) post({ type: 'token', token: delta });
+          if (out && tagIds.has(out.token)) post({ type: 'token', token: tagIds.get(out.token) });
         }
       } catch (err) {
         const s = String((err && err.message) || err);
@@ -8290,23 +8356,25 @@ self.addEventListener('message', async (e) => {
         // WebGPU-only (no CPU fallback). Text-only here (this engine is a decoder).
         genConfig: { max_new_tokens: 2048 },
       },
-      // backend:'bonsai27b-webgpu' → loaded by the custom-WGSL Bonsai27bMobile engine
-      // (bonsai_27b.js), a from-scratch WebGPU engine for the 1-bit Bonsai 27B
-      // (Qwen3.6-27B backbone, hybrid Gated-DeltaNet + full attention): hand-written
-      // WGSL for Q1_0_g128 on-the-fly dequant, the linear-attention recurrence, RoPE,
-      // RMSNorm, SwiGLU, GQA attention — reading the Q1_0 GGUF directly. Vendored from
-      // the webml-community/bonsai-webgpu-kernels Space; weights from the ungated
-      // Apache-2.0 lmstudio-community/Bonsai-27B-GGUF mirror (engine resolves it itself).
-      // Context capped for browser memory; raise after a foreground-VRAM check.
-      'bonsai-27b-webgpu': {
-        id: 'lmstudio-community/Bonsai-27B-GGUF',
-        label: 'Ternary Bonsai 27B',
-        backend: 'bonsai27b-webgpu',
-        size: '~3.8 GB',
+      // backend:'bonsai2-webgpu' → loaded by the custom-WGSL TernaryBonsai2 engine
+      // (ternary_bonsai_2_27b.js), a from-scratch WebGPU engine for PrismML's ternary
+      // Bonsai 2 27B (Qwen3.8-27B backbone, hybrid ~75% Gated-DeltaNet linear / ~25%
+      // full attention): hand-written WGSL for the PRISM_PTQ1_0 (dense trits, 1.75
+      // bits/weight) on-the-fly dequant, the linear-attention recurrence, RoPE,
+      // RMSNorm, SwiGLU, GQA attention — reading the ternary GGUF directly. Vendored
+      // from the webml-community/ternary-bonsai-2-webgpu-kernels Space; weights from
+      // the ungated Apache-2.0 prism-ml/Ternary-Bonsai-2-27B-gguf repo (the engine
+      // resolves the PTQ1_0 file itself). Text-only: the optional mmproj vision tower
+      // is not loaded. Native 262K context capped to 16K for browser memory.
+      'ternary-bonsai-2-27b-webgpu': {
+        id: 'prism-ml/Ternary-Bonsai-2-27B-gguf',
+        label: 'Ternary Bonsai 2 27B',
+        backend: 'bonsai2-webgpu',
+        size: '~5.9 GB',
         type: 'causal',
         multimodal: false,
         agentCapable: true,
-        thinking: true,   // Qwen3.6 reasoning model — shows the "Show reasoning" toggle
+        thinking: true,   // Qwen3.8 reasoning model — shows the "Show reasoning" toggle
         contextSize: 16384,
         genConfig: { max_new_tokens: 2048 },
       },
@@ -13449,10 +13517,10 @@ ${JSON.stringify({ name, result })}
         const isWllama = options.backend === 'wllama';
         const isLfm2Webgpu = options.backend === 'lfm2-webgpu';
         const isGemma4Webgpu = options.backend === 'gemma4-webgpu';
-        const isBonsai27bWebgpu = options.backend === 'bonsai27b-webgpu';
+        const isBonsai2Webgpu = options.backend === 'bonsai2-webgpu';
         const w = isLfm2Webgpu ? createLfm2WebgpuWorker()
           : isGemma4Webgpu ? createGemma4WebgpuWorker()
-          : isBonsai27bWebgpu ? createBonsai27bWebgpuWorker()
+          : isBonsai2Webgpu ? createTernaryBonsai2WebgpuWorker()
           : isWllama ? createWllamaWorker()
           : createWorker();
         this._worker = w;
@@ -13488,9 +13556,10 @@ ${JSON.stringify({ name, result })}
             cleanup();
             reject(new Error(ev.message || 'Worker startup failed'));
           });
-          if (isWllama || isLfm2Webgpu || isGemma4Webgpu) {
-            // The custom-WGSL engines ignore contextSize (they read it from the
-            // model metadata) but the shared load message shape is harmless.
+          if (isWllama || isLfm2Webgpu || isGemma4Webgpu || isBonsai2Webgpu) {
+            // The LFM2/Gemma engines ignore contextSize (they read it from the
+            // model metadata); the Bonsai 2 worker passes it to the engine as
+            // maxLength. The shared load message shape is harmless either way.
             w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0, localFile: (isWllama && MODELS[modelId]) ? (MODELS[modelId].localFile || null) : null });
           } else {
             const resumable = localStorage.getItem('lm_resumable_downloads') !== '0';
@@ -14400,21 +14469,21 @@ self.addEventListener('message', async (e) => {
       return w;
     }
 
-    // ── Bonsai 27B WebGPU-kernels worker factory (custom-WGSL Bonsai27bMobile engine) ──
-    // Twin of createGemma4WebgpuWorker(): reads #bonsai27bWebgpuWorkerSrc, injects the
-    // vendored bonsai_27b.js engine's absolute same-origin URL, and builds a blob module
-    // worker that speaks the shared chat protocol. 1-bit Q1_0 GGUF (~3.8 GB).
-    function createBonsai27bWebgpuWorker() {
-      const src = document.getElementById('bonsai27bWebgpuWorkerSrc');
+    // ── Ternary Bonsai 2 27B WebGPU-kernels worker factory (custom-WGSL TernaryBonsai2 engine) ──
+    // Twin of createGemma4WebgpuWorker(): reads #ternaryBonsai2WebgpuWorkerSrc, injects the
+    // vendored ternary_bonsai_2_27b.js engine's absolute same-origin URL, and builds a blob
+    // module worker that speaks the shared chat protocol. Ternary PTQ1_0 GGUF (~5.9 GB).
+    function createTernaryBonsai2WebgpuWorker() {
+      const src = document.getElementById('ternaryBonsai2WebgpuWorkerSrc');
       let code = src ? src.textContent : '';
-      if (!code) throw new Error('Bonsai 27B WebGPU worker source missing');
-      const engineUrl = new URL('bonsai_27b.js', document.baseURI).href;
-      code = code.replaceAll('__BONSAI27B_ENGINE_URL__', engineUrl);
+      if (!code) throw new Error('Ternary Bonsai 2 27B WebGPU worker source missing');
+      const engineUrl = new URL('ternary_bonsai_2_27b.js', document.baseURI).href;
+      code = code.replaceAll('__TERNARY_BONSAI2_ENGINE_URL__', engineUrl);
       const blob = new Blob([code], { type: 'application/javascript' });
       const url = URL.createObjectURL(blob);
       const w = new Worker(url, { type: 'module' });
       w.addEventListener('error', (e) => {
-        console.error('Bonsai 27B WebGPU worker error:', e.message);
+        console.error('Ternary Bonsai 2 27B WebGPU worker error:', e.message);
       });
       return w;
     }

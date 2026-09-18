@@ -29,6 +29,15 @@ assert.match(onnxSource, /request\.type === 'unload'/);
 assert.doesNotMatch(onnxSource, /transformers@4\/\+esm/);
 assert.match(indexSource, /Qwen3_5ForConditionalGeneration/);
 assert.doesNotMatch(indexSource, /transformers@4\/\+esm/);
+// Ternary Bonsai 2 27B: the worker block, its engine file, and the registry entry agree.
+const bonsai2Engine = await readFile(new URL('../ternary_bonsai_2_27b.js', import.meta.url), 'utf8');
+assert.match(bonsai2Engine, /export\{[^}]*zl as TernaryBonsai2[^}]*\}/);
+assert.match(bonsai2Engine, /var Ri="prism-ml\/Ternary-Bonsai-2-27B-gguf",Cl="Ternary-Bonsai-2-27B-PTQ1_0\.gguf"/);
+assert.match(indexSource, /id="ternaryBonsai2WebgpuWorkerSrc"/);
+assert.match(indexSource, /new URL\('ternary_bonsai_2_27b\.js', document\.baseURI\)/);
+assert.match(indexSource, /\(\{ TernaryBonsai2 \} = await import\(ENGINE_URL\)\)/);
+assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',\s*label: 'Ternary Bonsai 2 27B',\s*backend: 'bonsai2-webgpu'/);
+assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgpu/);
 assert.equal(catalog.defaultKey, 'lfm2-230m-webgpu');
 assert.deepEqual(
   catalog.models.map((model) => model.key),

@@ -49,6 +49,10 @@ build that will not load is a standing interrupt, not an invitation to port anyt
 | Ternary Bonsai 27B | ~5.9 GB | Opt-in quality tier where memory allows |
 | Existing 2B / 4B / 8B | ~0.6–2.2 GB | Unchanged defaults |
 
+*Registry as shipped 2026-09-18: one 27B entry, **Ternary Bonsai 2 27B** (PTQ1_0, ~5.9 GB,
+Qwen3.8 backbone, `ternary_bonsai_2_27b.js`), which replaced the 1-bit Bonsai 27B v1. The
+two-tier split above is a design target for this milestone, not the current registry.*
+
 **Detect, do not configure.** Probe GPU memory and WebGPU limits at load. Offer 27B
 only where it will plausibly run; say plainly why when it will not. **Never
 surprise-download gigabytes** — show the size, ask, cache. Note the memory budget is
