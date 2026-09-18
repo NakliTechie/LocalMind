@@ -7504,6 +7504,105 @@ self.onmessage = async (e) => {
        RoPE, RMSNorm, GQA + sliding-window attention — are hand-written WGSL reading
        Google's QAT-mobile weights (google/gemma-4-E2B-it-qat-mobile-transformers)
        directly. Same Gemma4Mobile API as Lfm2Mobile; same shared chat protocol. -->
+  <script type="text/worker" id="engineWorkerPreludeSrc">
+// ── Shared engine-worker prelude ──────────────────────────────────────────
+// Prepended verbatim to every custom-WGSL engine worker (LFM2.5 / Gemma 4 /
+// Ternary Bonsai 2): the hidden-tab rAF shim, the optional Hugging Face token,
+// and `engineFetch`, the streaming + resuming range-read wrapper the engines
+// take as `load(…, { fetch })`. In index.html it lives in #engineWorkerPreludeSrc
+// and the blob-worker factories splice it in; inference-worker.js (the
+// standalone, NakliOS-vendored entry point) carries a byte-identical copy,
+// enforced by scripts/test-engine-fetch.mjs. Edit both or neither.
+// The engine yields between load stages with requestAnimationFrame whenever that
+// global exists (Chrome exposes it in dedicated workers). rAF never fires while
+// the tab is hidden, so a load started and then tabbed away stalls at "Loading
+// tokenizer" / "warmup" until the tab is fronted again. A timer-backed rAF keeps
+// a multi-GB load moving in the background; nothing on the worker path needs real
+// frame timing. Must be installed before the engine is imported.
+self.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 0);
+
+// The engines read each weight range exactly once, so a single dropped
+// connection aborts the whole load (one 'Failed to fetch' at 70% of Bonsai 2's
+// ~6 GB did, in the 2026-09-18 live check). Range reads go through this wrapper: the request
+// is retried with backoff on transient failures (network errors, 429/5xx), and
+// the body is STREAMED — not buffered — so the engine's per-chunk byte progress
+// keeps flowing on slow links; if the body drops mid-range, the remainder is
+// re-requested from the next byte (`Range: bytes=<start+delivered>-<end>`) and
+// spliced into the same stream. Every other request (the HEAD size probe,
+// tokenizer/resource fetches) passes straight through.
+const RANGE_RETRIES = 4;
+const parseRangeHeader = (init) => {
+  const h = init.headers ? new Headers(init.headers).get('range') : null;
+  const m = h && /^bytes=(\d+)-(\d*)$/.exec(h.trim());
+  return m ? { start: Number(m[1]), end: m[2] === '' ? null : Number(m[2]) } : null;
+};
+// Settings → Models token (posted as `hfToken` on the load message). Sent as
+// Authorization: Bearer on huggingface.co requests only; the CDN hop after the
+// 302 carries its own signed URL and gets no header.
+let hfToken = null;
+const isHfOrigin = (u) => { try { return new URL(u, self.location.href).host === 'huggingface.co'; } catch (_) { return false; } };
+const withAuth = (url, init) => {
+  if (!hfToken || !isHfOrigin(url)) return init;
+  const headers = new Headers(init.headers);
+  headers.set('Authorization', 'Bearer ' + hfToken);
+  return { ...init, headers };
+};
+const engineFetch = async (url, init = {}) => {
+  const range = parseRangeHeader(init);
+  if (!range) return fetch(url, withAuth(url, init));
+  const signal = init.signal;
+  const throwIfAborted = () => {
+    if (signal && signal.aborted) throw (signal.reason || new DOMException('aborted', 'AbortError'));
+  };
+  const request = async (start) => {
+    let lastErr = null;
+    for (let attempt = 0; attempt < RANGE_RETRIES; attempt++) {
+      throwIfAborted();
+      try {
+        const headers = new Headers(init.headers);
+        headers.set('Range', `bytes=${start}-${range.end == null ? '' : range.end}`);
+        const r = await fetch(url, withAuth(url, { ...init, headers }));
+        if (r.status === 429 || r.status >= 500) throw new Error(`HTTP ${r.status} on range read`);
+        return r;
+      } catch (err) {
+        lastErr = err;
+        throwIfAborted();
+        await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)));
+      }
+    }
+    throw lastErr;
+  };
+  const first = await request(range.start);
+  // Anything but a partial-content body (e.g. a 200 full-response fallback) is
+  // the engine's to interpret; only 206 bodies get the resume treatment.
+  if (first.status !== 206 || !first.body) return first;
+  let delivered = 0;
+  let reader = first.body.getReader();
+  const body = new ReadableStream({
+    async pull(controller) {
+      for (;;) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) { controller.close(); return; }
+          delivered += value.byteLength;
+          controller.enqueue(value);
+          return;
+        } catch (err) {
+          throwIfAborted();
+          try { reader.cancel().catch(() => {}); } catch (_) {}
+          // Body dropped mid-range: reopen from the next byte and keep streaming.
+          const r = await request(range.start + delivered);
+          if (r.status !== 206 || !r.body) throw err;
+          reader = r.body.getReader();
+        }
+      }
+    },
+    cancel() { try { reader.cancel().catch(() => {}); } catch (_) {} },
+  });
+  return new Response(body, { status: first.status, statusText: first.statusText, headers: first.headers });
+};
+// ── End shared engine-worker prelude ──────────────────────────────────────
+  </script>
   <script type="text/worker" id="gemma4WebgpuWorkerSrc">
 // The factory replaces __GEMMA4_ENGINE_URL__ with the engine's absolute same-origin URL.
 const ENGINE_URL = '__GEMMA4_ENGINE_URL__';
@@ -7516,20 +7615,34 @@ let lastHistoryLen = 0; // tracks conversation length to reset KV state on a fre
 
 const WEIGHTS_LABEL = 'Gemma 4 E2B (QAT)';
 const post = (m) => self.postMessage(m);
+// The hidden-tab rAF shim, `hfToken` and `engineFetch` come from the shared
+// prelude (#engineWorkerPreludeSrc) that the factory prepends to this source.
 
 self.onmessage = async (e) => {
   const d = e.data || {};
   try {
     if (d.type === 'load') {
       if (!Gemma4Mobile) ({ Gemma4Mobile } = await import(ENGINE_URL));
+      hfToken = (typeof d.hfToken === 'string' && d.hfToken.trim()) || null;
       post({ type: 'progress', data: { status: 'initiate', file: WEIGHTS_LABEL } });
       // load(modelId, opts): a repo id resolves the QAT-mobile weight root;
       // null falls back to the engine's DEFAULT_MODEL_ID (the same repo).
       model = await Gemma4Mobile.load(d.modelId || null, {
-        accessToken: d.hfToken || undefined,
+        fetch: engineFetch,
         onProgress: (ev) => {
           if (!ev) return;
-          if (ev.status === 'weights') {
+          if (ev.status === 'weights' && ev.kind === 'tensors') {
+            // Post-download phases: tensor upload to the GPU (counted in tensors,
+            // not bytes — must not drive the MB bar), then kernel warmup.
+            const loaded = typeof ev.loaded === 'number' ? ev.loaded : null;
+            const total = typeof ev.total === 'number' ? ev.total : null;
+            if (loaded != null && total != null && total > 0) {
+              // No '/' in the label: the host splits `file` on '/' to show a basename.
+              post({ type: 'progress', data: { status: 'loading', file: `weights to GPU (${loaded} of ${total} tensors)` } });
+            } else {
+              post({ type: 'warmup' });
+            }
+          } else if (ev.status === 'weights') {
             const loaded = typeof ev.loaded === 'number' ? ev.loaded : null;
             const total = typeof ev.total === 'number' ? ev.total : null;
             if (loaded != null && total != null && total > 0) {
@@ -7626,94 +7739,9 @@ let lastHistoryLen = 0; // tracks conversation length to reset KV/recurrent stat
 const WEIGHTS_LABEL = 'Ternary Bonsai 2 27B (PTQ1_0)';
 const post = (m) => self.postMessage(m);
 
-// The engine yields between load stages with requestAnimationFrame whenever that
-// global exists (Chrome exposes it in dedicated workers). rAF never fires while
-// the tab is hidden, so a load started and then tabbed away stalls at "Loading
-// tokenizer" / "warmup" until the tab is fronted again. A timer-backed rAF keeps
-// the ~6 GB load moving in the background; nothing on the worker path needs real
-// frame timing. Must be installed before the engine is imported.
-self.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 0);
+// The hidden-tab rAF shim, `hfToken` and `engineFetch` come from the shared
+// prelude (#engineWorkerPreludeSrc) that the factory prepends to this source.
 
-// The engine reads each ~32 MB weight range exactly once, so a single dropped
-// connection aborts the whole ~6 GB load (one 'Failed to fetch' at 70% did, in
-// the 2026-09-18 live check). Range reads go through this wrapper: the request
-// is retried with backoff on transient failures (network errors, 429/5xx), and
-// the body is STREAMED — not buffered — so the engine's per-chunk byte progress
-// keeps flowing on slow links; if the body drops mid-range, the remainder is
-// re-requested from the next byte (`Range: bytes=<start+delivered>-<end>`) and
-// spliced into the same stream. Every other request (the HEAD size probe,
-// tokenizer/resource fetches) passes straight through.
-const RANGE_RETRIES = 4;
-const parseRangeHeader = (init) => {
-  const h = init.headers ? new Headers(init.headers).get('range') : null;
-  const m = h && /^bytes=(\d+)-(\d*)$/.exec(h.trim());
-  return m ? { start: Number(m[1]), end: m[2] === '' ? null : Number(m[2]) } : null;
-};
-// Settings → Models token (posted as `hfToken` on the load message). Sent as
-// Authorization: Bearer on huggingface.co requests only; the CDN hop after the
-// 302 carries its own signed URL and gets no header.
-let hfToken = null;
-const isHfOrigin = (u) => { try { return new URL(u, self.location.href).host === 'huggingface.co'; } catch (_) { return false; } };
-const withAuth = (url, init) => {
-  if (!hfToken || !isHfOrigin(url)) return init;
-  const headers = new Headers(init.headers);
-  headers.set('Authorization', 'Bearer ' + hfToken);
-  return { ...init, headers };
-};
-const engineFetch = async (url, init = {}) => {
-  const range = parseRangeHeader(init);
-  if (!range) return fetch(url, withAuth(url, init));
-  const signal = init.signal;
-  const throwIfAborted = () => {
-    if (signal && signal.aborted) throw (signal.reason || new DOMException('aborted', 'AbortError'));
-  };
-  const request = async (start) => {
-    let lastErr = null;
-    for (let attempt = 0; attempt < RANGE_RETRIES; attempt++) {
-      throwIfAborted();
-      try {
-        const headers = new Headers(init.headers);
-        headers.set('Range', `bytes=${start}-${range.end == null ? '' : range.end}`);
-        const r = await fetch(url, withAuth(url, { ...init, headers }));
-        if (r.status === 429 || r.status >= 500) throw new Error(`HTTP ${r.status} on range read`);
-        return r;
-      } catch (err) {
-        lastErr = err;
-        throwIfAborted();
-        await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)));
-      }
-    }
-    throw lastErr;
-  };
-  const first = await request(range.start);
-  // Anything but a partial-content body (e.g. a 200 full-response fallback) is
-  // the engine's to interpret; only 206 bodies get the resume treatment.
-  if (first.status !== 206 || !first.body) return first;
-  let delivered = 0;
-  let reader = first.body.getReader();
-  const body = new ReadableStream({
-    async pull(controller) {
-      for (;;) {
-        try {
-          const { done, value } = await reader.read();
-          if (done) { controller.close(); return; }
-          delivered += value.byteLength;
-          controller.enqueue(value);
-          return;
-        } catch (err) {
-          throwIfAborted();
-          try { reader.cancel().catch(() => {}); } catch (_) {}
-          // Body dropped mid-range: reopen from the next byte and keep streaming.
-          const r = await request(range.start + delivered);
-          if (r.status !== 206 || !r.body) throw err;
-          reader = r.body.getReader();
-        }
-      }
-    },
-    cancel() { try { reader.cancel().catch(() => {}); } catch (_) {} },
-  });
-  return new Response(body, { status: first.status, statusText: first.statusText, headers: first.headers });
-};
 
 self.onmessage = async (e) => {
   const d = e.data || {};
@@ -14556,16 +14584,26 @@ self.addEventListener('message', async (e) => {
       return w;
     }
 
+    // Shared prelude for the blob-built engine workers (rAF shim, HF token,
+    // streaming/resuming range wrapper). inference-worker.js carries its own copy.
+    function engineWorkerPrelude() {
+      const src = document.getElementById('engineWorkerPreludeSrc');
+      const code = src ? src.textContent : '';
+      if (!code) throw new Error('engine worker prelude missing');
+      return code;
+    }
+
     // ── Gemma 4 WebGPU-kernels worker factory (custom-WGSL Gemma4Mobile engine) ──
-    // Twin of createLfm2WebgpuWorker(): reads #gemma4WebgpuWorkerSrc, injects the
-    // vendored gemma-4-e2b.js engine's absolute same-origin URL, and builds a blob
+    // Twin of createLfm2WebgpuWorker(): prepends the shared prelude, reads
+    // #gemma4WebgpuWorkerSrc, injects the vendored gemma-4-e2b.js engine's
+    // absolute same-origin URL, and builds a blob
     // module worker that speaks the shared chat protocol.
     function createGemma4WebgpuWorker() {
       const src = document.getElementById('gemma4WebgpuWorkerSrc');
       let code = src ? src.textContent : '';
       if (!code) throw new Error('Gemma 4 WebGPU worker source missing');
       const engineUrl = new URL('gemma-4-e2b.js', document.baseURI).href;
-      code = code.replaceAll('__GEMMA4_ENGINE_URL__', engineUrl);
+      code = engineWorkerPrelude() + code.replaceAll('__GEMMA4_ENGINE_URL__', engineUrl);
       const blob = new Blob([code], { type: 'application/javascript' });
       const url = URL.createObjectURL(blob);
       const w = new Worker(url, { type: 'module' });
@@ -14584,7 +14622,7 @@ self.addEventListener('message', async (e) => {
       let code = src ? src.textContent : '';
       if (!code) throw new Error('Ternary Bonsai 2 27B WebGPU worker source missing');
       const engineUrl = new URL('ternary_bonsai_2_27b.js', document.baseURI).href;
-      code = code.replaceAll('__TERNARY_BONSAI2_ENGINE_URL__', engineUrl);
+      code = engineWorkerPrelude() + code.replaceAll('__TERNARY_BONSAI2_ENGINE_URL__', engineUrl);
       const blob = new Blob([code], { type: 'application/javascript' });
       const url = URL.createObjectURL(blob);
       const w = new Worker(url, { type: 'module' });

@@ -5,7 +5,7 @@
  * shared, vendorable runtime entry point used by LocalMind and NakliOS.
  *
  * Protocol:
- *   -> { type: "load", id?, modelId? }
+ *   -> { type: "load", id?, modelId?, hfToken? }
  *   <- progress*; ready
  *   -> { type: "generate", id, messages, generationConfig? }
  *   <- token*; complete
@@ -27,6 +27,104 @@ let abortController = null;
 let stopFlag = false;
 let lastHistoryLen = 0;
 let activeRequestId = null;
+
+// ── Shared engine-worker prelude ──────────────────────────────────────────
+// Prepended verbatim to every custom-WGSL engine worker (LFM2.5 / Gemma 4 /
+// Ternary Bonsai 2): the hidden-tab rAF shim, the optional Hugging Face token,
+// and `engineFetch`, the streaming + resuming range-read wrapper the engines
+// take as `load(…, { fetch })`. In index.html it lives in #engineWorkerPreludeSrc
+// and the blob-worker factories splice it in; inference-worker.js (the
+// standalone, NakliOS-vendored entry point) carries a byte-identical copy,
+// enforced by scripts/test-engine-fetch.mjs. Edit both or neither.
+// The engine yields between load stages with requestAnimationFrame whenever that
+// global exists (Chrome exposes it in dedicated workers). rAF never fires while
+// the tab is hidden, so a load started and then tabbed away stalls at "Loading
+// tokenizer" / "warmup" until the tab is fronted again. A timer-backed rAF keeps
+// a multi-GB load moving in the background; nothing on the worker path needs real
+// frame timing. Must be installed before the engine is imported.
+self.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 0);
+
+// The engines read each weight range exactly once, so a single dropped
+// connection aborts the whole load (one 'Failed to fetch' at 70% of Bonsai 2's
+// ~6 GB did, in the 2026-09-18 live check). Range reads go through this wrapper: the request
+// is retried with backoff on transient failures (network errors, 429/5xx), and
+// the body is STREAMED — not buffered — so the engine's per-chunk byte progress
+// keeps flowing on slow links; if the body drops mid-range, the remainder is
+// re-requested from the next byte (`Range: bytes=<start+delivered>-<end>`) and
+// spliced into the same stream. Every other request (the HEAD size probe,
+// tokenizer/resource fetches) passes straight through.
+const RANGE_RETRIES = 4;
+const parseRangeHeader = (init) => {
+  const h = init.headers ? new Headers(init.headers).get('range') : null;
+  const m = h && /^bytes=(\d+)-(\d*)$/.exec(h.trim());
+  return m ? { start: Number(m[1]), end: m[2] === '' ? null : Number(m[2]) } : null;
+};
+// Settings → Models token (posted as `hfToken` on the load message). Sent as
+// Authorization: Bearer on huggingface.co requests only; the CDN hop after the
+// 302 carries its own signed URL and gets no header.
+let hfToken = null;
+const isHfOrigin = (u) => { try { return new URL(u, self.location.href).host === 'huggingface.co'; } catch (_) { return false; } };
+const withAuth = (url, init) => {
+  if (!hfToken || !isHfOrigin(url)) return init;
+  const headers = new Headers(init.headers);
+  headers.set('Authorization', 'Bearer ' + hfToken);
+  return { ...init, headers };
+};
+const engineFetch = async (url, init = {}) => {
+  const range = parseRangeHeader(init);
+  if (!range) return fetch(url, withAuth(url, init));
+  const signal = init.signal;
+  const throwIfAborted = () => {
+    if (signal && signal.aborted) throw (signal.reason || new DOMException('aborted', 'AbortError'));
+  };
+  const request = async (start) => {
+    let lastErr = null;
+    for (let attempt = 0; attempt < RANGE_RETRIES; attempt++) {
+      throwIfAborted();
+      try {
+        const headers = new Headers(init.headers);
+        headers.set('Range', `bytes=${start}-${range.end == null ? '' : range.end}`);
+        const r = await fetch(url, withAuth(url, { ...init, headers }));
+        if (r.status === 429 || r.status >= 500) throw new Error(`HTTP ${r.status} on range read`);
+        return r;
+      } catch (err) {
+        lastErr = err;
+        throwIfAborted();
+        await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)));
+      }
+    }
+    throw lastErr;
+  };
+  const first = await request(range.start);
+  // Anything but a partial-content body (e.g. a 200 full-response fallback) is
+  // the engine's to interpret; only 206 bodies get the resume treatment.
+  if (first.status !== 206 || !first.body) return first;
+  let delivered = 0;
+  let reader = first.body.getReader();
+  const body = new ReadableStream({
+    async pull(controller) {
+      for (;;) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) { controller.close(); return; }
+          delivered += value.byteLength;
+          controller.enqueue(value);
+          return;
+        } catch (err) {
+          throwIfAborted();
+          try { reader.cancel().catch(() => {}); } catch (_) {}
+          // Body dropped mid-range: reopen from the next byte and keep streaming.
+          const r = await request(range.start + delivered);
+          if (r.status !== 206 || !r.body) throw err;
+          reader = r.body.getReader();
+        }
+      }
+    },
+    cancel() { try { reader.cancel().catch(() => {}); } catch (_) {} },
+  });
+  return new Response(body, { status: first.status, statusText: first.statusText, headers: first.headers });
+};
+// ── End shared engine-worker prelude ──────────────────────────────────────
 
 const post = (message, id = activeRequestId) => {
   const payload = id == null ? message : { ...message, id };
@@ -56,14 +154,28 @@ const loadModel = async (request) => {
     return;
   }
   if (!Lfm2Mobile) ({ Lfm2Mobile } = await import(ENGINE_URL));
+  hfToken = (typeof request.hfToken === 'string' && request.hfToken.trim()) || null;
   post({ type: 'progress', data: { status: 'initiate', file: GGUF_FILE } }, id);
   model = await Lfm2Mobile.load(request.modelId || DEFAULT_MODEL_ID, {
-    // Optional Hugging Face token (Settings → Models); the engine sends it as
-    // Authorization: Bearer on its huggingface.co requests.
-    accessToken: (typeof request.hfToken === 'string' && request.hfToken.trim()) || undefined,
+    // Range reads stream + resume and carry the optional HF token (prelude).
+    fetch: engineFetch,
     onProgress: (event) => {
       if (!event) return;
-      if (event.status === 'weights') {
+      if (event.status === 'weights' && event.kind === 'tensors') {
+        // Post-download phases: tensor upload to the GPU (counted in tensors,
+        // not bytes — must not drive the MB bar), then kernel warmup.
+        const loaded = typeof event.loaded === 'number' ? event.loaded : null;
+        const total = typeof event.total === 'number' ? event.total : null;
+        if (loaded != null && total != null && total > 0) {
+          // No '/' in the label: the host splits `file` on '/' to show a basename.
+          post({
+            type: 'progress',
+            data: { status: 'loading', file: `weights to GPU (${loaded} of ${total} tensors)` },
+          }, id);
+        } else {
+          post({ type: 'warmup' }, id);
+        }
+      } else if (event.status === 'weights') {
         const loaded = typeof event.loaded === 'number' ? event.loaded : null;
         const total = typeof event.total === 'number' ? event.total : null;
         if (loaded != null && total != null && total > 0) {

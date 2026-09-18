@@ -50,13 +50,23 @@ worker.postMessage({
 is omitted for ordinary causal-language models.
 
 Every load request may also carry an optional `hfToken` (a Hugging Face read
-token). The custom-WebGPU workers pass it to their engine as `accessToken`, which
-sends it as `Authorization: Bearer` on requests to `huggingface.co` only — for
-gated repos and the account's (rather than the anonymous per-IP) rate limit.
-Omit it or pass `null` for anonymous downloads.
+token). The custom-WebGPU workers (LFM2.5, Gemma 4, Ternary Bonsai 2) hand
+their engine a shared `fetch` wrapper — `engineFetch`, from the engine-worker
+prelude that `inference-worker.js` carries verbatim and the blob workers splice
+in from `#engineWorkerPreludeSrc` — which sends the token as
+`Authorization: Bearer` on requests to `huggingface.co` only (for gated repos
+and the account's, rather than the anonymous per-IP, rate limit), retries
+range reads on transient failures, and resumes a range whose body drops
+mid-stream from the exact next byte. The same prelude installs a timer-backed
+`requestAnimationFrame` so a load keeps moving in a hidden tab. Omit the token
+or pass `null` for anonymous downloads; the wrapper then adds no header.
+`scripts/test-engine-fetch.mjs` proves the wrapper and pins the two copies.
 
 The worker emits `progress` events followed by `ready`. Model weights use the
-engine's Cache Storage cache and are downloaded only when absent.
+engine's Cache Storage cache and are downloaded only when absent. Download
+progress arrives as `progress_total` (bytes); the post-download tensor upload
+arrives as `loading` with a `weights to GPU (n of m tensors)` label; a bare
+`{ type: 'warmup' }` marks kernel compilation, which reports no counts.
 
 Generate:
 
