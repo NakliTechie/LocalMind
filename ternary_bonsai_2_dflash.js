@@ -2,7 +2,7 @@
    Bonsai 2 engine: the block drafter (5 Qwen3 layers, WGSL, weights stay Q4_K/Q6_K on
    the GPU) + the generate loop behind ternary_bonsai_2_27b.js's specDecodeRunner()
    seam. Output is greedy-identical to the engine's own decode. Built from
-   NakliTechie/dflash-mlx-bonsai2 @ 7a70a1c (Apache-2.0) by scripts/build-bonsai2-dflash.mjs;
+   NakliTechie/dflash-mlx-bonsai2 @ bbc9d7a (Apache-2.0) by scripts/build-bonsai2-dflash.mjs;
    drafter weights: naklitechie/Qwen3.8-27B-DFlash2-ternary-bonsai2 (Q4_K_M GGUF, 1.14 GB). */
 // ---- lab/webgpu/drafter/gguf.js ----
 // Minimal GGUF v3 reader + K-quant dequantizers (Q4_K, Q6_K, F16, F32) for the DFlash2 drafter port.
@@ -755,12 +755,18 @@ class Drafter {
 
 
 const TAPS = [6, 20, 34, 48, 62];   // entry-of-layer convention == output of the drafter's target_layer_ids [5,19,33,47,61]
-const PREFILL_T = 32;               // prompt chunks go through a tapped 32-row session (real_len <= 32)
+// Prompt prefill mirrors the engine's own chunk plan (graph blocks 16/32/64/128/256/512, the smallest that holds the
+// remainder) through tapped sessions, so it costs what the engine's prefill costs; only the rows inside the drafter's
+// context window (sink + window, the tail of the prompt) are appended to the drafter context.
+const PREFILL_BLOCKS = [16, 32, 64, 128, 256, 512];
 
 class DFlashRunner {
   static async create(engine, opts = {}) {
     const r = new DFlashRunner(engine, opts);
     await r.#init(opts);
+    // build the per-cache sessions for the engine's persistent cache now, off the first turn's critical path
+    const cache = engine.generationState?.cache;
+    if (cache) await r.#resources(cache);
     return r;
   }
 
@@ -817,10 +823,11 @@ class DFlashRunner {
     // verify: all-rows head on the small-M route + the recurrence tee; prefill: taps only (next_token from the last row)
     const session = async (T, opts) => { let s = sessions.get(T); if (s) return s; class S extends I.ch { buildEmission() { return I.lh(this.model, this.cache, this.blockLen, opts); } } s = new S(inner, cache, T); await s.build(); sessions.set(T, s); return s; };
     const verify = await session(LV, { tapLayers: taps, allRowsHead: true, ...(smallM ? { smallM } : {}), teeRecurrence: true });
-    const prefill = await session(PREFILL_T, { tapLayers: taps });
+    const prefill = (T) => session(T, { tapLayers: taps });
+    await prefill(16); await prefill(512);   // the two blocks every turn tends to need: a short suffix, a long first prompt
     const rewind = new I.RewindSession(inner, cache, LV, verify); await rewind.build();
     const slot = await cache.allocateCheckpointSlot();
-    const ctx = this.dr.createContext(this.sink + this.window > 0 ? this.sink + this.window + PREFILL_T : cache.maxLength + PREFILL_T, { sink: this.sink, window: this.window });
+    const ctx = this.dr.createContext(this.sink + this.window > 0 ? this.sink + this.window + 16 : cache.maxLength + 16, { sink: this.sink, window: this.window });
     r = { sessions, verify, prefill, rewind, slot, ctx, ctxEnd: -1 }; this.res.set(cache, r); return r;
   }
 
@@ -880,13 +887,16 @@ class DFlashRunner {
     // drafter context: keep it when it still mirrors the cache (prefix reuse without truncation), else rebuild from the suffix
     const past = cache.get_seq_length();
     if (r.ctxEnd !== past) dr.resetContext(r.ctx);
-    // prompt prefill through the tapped 32-row session, so the drafter context covers the suffix; anchor = next token
+    // prompt prefill in the engine's block sizes through tapped sessions; anchor = next token after the last chunk.
+    // Only the last (sink + window) rows of the suffix feed the drafter context — earlier rows would be evicted anyway.
+    const ids = Array.from(tokenIds); const keep = this.sink + this.window > 0 ? this.sink + this.window : ids.length; const firstKept = Math.max(0, ids.length - keep);
     let anchor = null;
-    for (let i = 0; i < tokenIds.length; i += PREFILL_T) {
-      const chunk = Array.from(tokenIds.subarray ? tokenIds.subarray(i, i + PREFILL_T) : tokenIds.slice(i, i + PREFILL_T));
-      const run = await this.#runBlock(r, r.prefill, chunk); anchor = run.next;
-      // the drafter's context projection takes <= 8 rows per call: walk the chunk's feature rows in 8-row slices
-      for (let o = 0; o < chunk.length; o += CFG.BLOCK) { const n = Math.min(CFG.BLOCK, chunk.length - o); dr.appendContext(r.ctx, { buffer: run.feat.buffer, offset: run.feat.offset + o * 5 * H * 4, size: n * 5 * H * 4 }, n); }
+    for (let i = 0; i < ids.length;) {
+      const remaining = ids.length - i; const T = PREFILL_BLOCKS.find(b => b >= remaining) ?? PREFILL_BLOCKS[PREFILL_BLOCKS.length - 1];
+      const chunk = ids.slice(i, i + T); const run = await this.#runBlock(r, await r.prefill(T), chunk); anchor = run.next;
+      // the drafter's context projection takes <= 8 rows per call: walk the kept feature rows in 8-row slices
+      for (let o = Math.max(0, firstKept - i); o < chunk.length; o += CFG.BLOCK) { const n = Math.min(CFG.BLOCK, chunk.length - o); dr.appendContext(r.ctx, { buffer: run.feat.buffer, offset: run.feat.offset + o * 5 * H * 4, size: n * 5 * H * 4 }, n); }
+      i += chunk.length;
     }
     await rt.queueIdle();
     onPrefillDone?.({ tokens: tokenIds.length, cache_length: cache.get_seq_length() });
