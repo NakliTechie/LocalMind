@@ -38,6 +38,27 @@ assert.match(indexSource, /new URL\('ternary_bonsai_2_27b\.js', document\.baseUR
 assert.match(indexSource, /\(\{ TernaryBonsai2 \} = await import\(ENGINE_URL\)\)/);
 assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',\s*label: 'Ternary Bonsai 2 27B',\s*backend: 'bonsai2-webgpu'/);
 assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgpu/);
+// DFlash 2 speculative decoding: the engine carries the seam + internals hook (scripts/bonsai2-dflash-patches.mjs),
+// the vendored runner module exports DFlashRunner, and the worker attaches it after `ready` behind the Settings toggle.
+{
+  assert.match(bonsai2Engine, /specDecodeRunner\(\)\{return this\.dflashRunner\?\?null\}/);
+  assert.match(bonsai2Engine, /zl\.__dflashInternals=\{/);
+  assert.match(bonsai2Engine, /Lf\.set\("com\.xenova\.Lut2SmallMGemm"/);
+  assert.match(bonsai2Engine, /class \$RewindSession\{/);
+  assert.match(bonsai2Engine, /function lh\(e,t,r,\$v\)\{/);
+  const dflashModule = await readFile(new URL('../ternary_bonsai_2_dflash.js', import.meta.url), 'utf8');
+  assert.match(dflashModule, /^export \{ DFlashRunner, Drafter, CFG \};$/m);
+  assert.match(dflashModule, /async \*generate\(tokenIds, cache, generationArgs, beginDecode, eosTokenId\)/);
+  assert.match(dflashModule, /release\(cache\)/);
+  assert.doesNotMatch(dflashModule, /^import\s/m);
+  assert.match(indexSource, /new URL\('ternary_bonsai_2_dflash\.js', document\.baseURI\)/);
+  assert.match(indexSource, /const DRAFTER_URL = 'https:\/\/huggingface\.co\/naklitechie\/Qwen3\.8-27B-DFlash2-ternary-bonsai2\/resolve\/main\/Qwen3\.8-27B-DFlash2-r3-Q4_K_M\.gguf'/);
+  assert.match(indexSource, /post\(\{ type: 'ready', backend: 'webgpu' \}\);\s*if \(d\.dflash !== false\) attachDFlash\(\)/);
+  assert.match(indexSource, /target\.model\.dflashRunner = runner;/);
+  assert.match(indexSource, /id="dflashToggle"/);
+  assert.match(indexSource, /dflash: isBonsai2Webgpu \? dflashEnabled\(\) : false/);
+  assert.match(indexSource, /data\.type === 'dflash'/);
+}
 // Picker ↔ registry parity: every <option> in #modelSelect has a MODELS entry and vice versa.
 {
   const select = /<select[^>]*\bid="modelSelect"[^>]*>([\s\S]*?)<\/select>/.exec(indexSource);

@@ -2566,6 +2566,17 @@
           </div>
         </div>
         <div class="settings-divider" data-tab="models">
+          <label class="toggle-row">
+            <input type="checkbox" id="dflashToggle" checked>
+            Speculative decoding for Ternary Bonsai 2 27B
+          </label>
+          <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
+            After the model loads, fetches a 1.1 GB DFlash 2 drafter (once, cached) and lets the
+            27B model check several drafted tokens per step: ~1.1&ndash;1.2&times; faster on code and
+            structured text, unchanged output. Uses ~1 GB more GPU memory. Applies to the next model load.
+          </div>
+        </div>
+        <div class="settings-divider" data-tab="models">
           <label for="hfTokenInput">Hugging Face token <span style="font-weight:400;color:var(--gray-500)">(optional)</span></label>
           <input type="password" id="hfTokenInput" class="settings-input" placeholder="hf_… (read access is enough)" autocomplete="off" spellcheck="false">
           <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
@@ -7586,11 +7597,25 @@ const engineFetch = async (url, init = {}) => {
 // ── End shared engine-worker prelude ──────────────────────────────────────
   </script>
   <script type="text/worker" id="ternaryBonsai2WebgpuWorkerSrc">
-// The factory replaces __TERNARY_BONSAI2_ENGINE_URL__ with the engine's absolute same-origin URL.
+// The factory replaces __TERNARY_BONSAI2_ENGINE_URL__ / __TERNARY_BONSAI2_DFLASH_URL__ with the
+// engine's and the DFlash module's absolute same-origin URLs.
 const ENGINE_URL = '__TERNARY_BONSAI2_ENGINE_URL__';
+const DFLASH_URL = '__TERNARY_BONSAI2_DFLASH_URL__';
+// DFlash 2 speculative decoding (Settings → Models toggle, posted as `dflash` on the load
+// message). The drafter — 5 Qwen3 layers re-fitted on the ternary model's own output,
+// naklitechie/Qwen3.8-27B-DFlash2-ternary-bonsai2 — is a 1.14 GB Q4_K_M GGUF, fetched once
+// into Cache Storage (keyed by its HF URL so the Settings cache inventory lists it under its
+// repo) and kept packed on the GPU (~1.06 GB). It attaches AFTER `ready`, so first value is
+// unchanged: turns that start before it lands decode plainly; later turns run the block
+// drafter + the engine's small-M verify graph. Output is greedy-identical either way.
+const DRAFTER_URL = 'https://huggingface.co/naklitechie/Qwen3.8-27B-DFlash2-ternary-bonsai2/resolve/main/Qwen3.8-27B-DFlash2-r3-Q4_K_M.gguf';
+const DRAFTER_CACHE = 'dflash-drafter-v1';
+const DFLASH_BLOCK = 5;   // verify block length: 1.17× on code at 5, 1.09× at 8 (dflash-mlx-bonsai2 lab/webgpu/runner/RESULTS.md)
 
 let TernaryBonsai2 = null;
 let model = null;
+let dflash = null;          // the attached DFlashRunner, or null (plain decode)
+let lastDflashGen = 0, lastDflashStats = { cycles: 0, tokens: 0, accepted: 0 };
 let abortController = null;
 let stopFlag = false;
 let lastHistoryLen = 0; // tracks conversation length to reset KV/recurrent state on a fresh chat
@@ -7648,6 +7673,7 @@ self.onmessage = async (e) => {
       lastHistoryLen = 0;
       try { if (typeof model.warmup === 'function') await model.warmup(); } catch (_) {}
       post({ type: 'ready', backend: 'webgpu' });
+      if (d.dflash !== false) attachDFlash().catch((err) => { post({ type: 'dflash', status: 'error', message: (err && err.message) || String(err) }); });
     } else if (d.type === 'generate') {
       if (!model) { post({ type: 'error', message: 'Ternary Bonsai 2 27B WebGPU model not loaded' }); return; }
       stopFlag = false;
@@ -7724,6 +7750,12 @@ self.onmessage = async (e) => {
         if (!(stopFlag || s.toLowerCase().includes('abort'))) throw err;
       }
       if (inThink && thinkOpened) post({ type: 'token', token: '<|/think|>' });
+      // Speculation telemetry for this turn (accepted drafts per verify cycle); the host logs it.
+      if (dflash && dflash.stats.generations > lastDflashGen) {
+        const st = dflash.stats; const dc = st.cycles - lastDflashStats.cycles, dt = st.tokens - lastDflashStats.tokens, da = st.accepted - lastDflashStats.accepted;
+        lastDflashGen = st.generations; lastDflashStats = { cycles: st.cycles, tokens: st.tokens, accepted: st.accepted };
+        if (dc > 0) post({ type: 'dflash', status: 'turn', cycles: dc, tokens: dt, tokensPerCycle: +(dt / dc).toFixed(2), acceptedPerCycle: +(da / dc).toFixed(2) });
+      }
       post({ type: 'complete' });
     } else if (d.type === 'stop') {
       stopFlag = true;
@@ -7732,6 +7764,8 @@ self.onmessage = async (e) => {
       stopFlag = true;
       if (abortController) { try { abortController.abort(); } catch (_) {} }
       try { if (model && typeof model.reset === 'function') model.reset(); } catch (_) {}
+      try { if (dflash) { if (model) model.model.dflashRunner = null; dflash.dispose(); } } catch (_) {}
+      dflash = null;
       try { if (model && typeof model.dispose === 'function') model.dispose(); } catch (_) {}
       model = null;
       lastHistoryLen = 0;
@@ -7740,6 +7774,66 @@ self.onmessage = async (e) => {
     post({ type: 'error', message: (err && err.message) || String(err) });
   }
 };
+
+// The drafter GGUF: Cache Storage hit, else one streamed download (engineFetch: HF token +
+// retries) stored for next time. Returned as a Blob so the reader slices it from disk
+// instead of holding 1.14 GB in the JS heap.
+async function drafterBlob() {
+  const c = await caches.open(DRAFTER_CACHE);
+  const hit = await c.match(DRAFTER_URL);
+  if (hit) return await hit.blob();
+  // Parallel range streams, like the engine's own loader: the HF CDN throttles per connection
+  // (one stream ~134 KB/s, eight ~550 KB/s aggregate on 2026-09-18), so a single fetch of
+  // 1.14 GB would take hours. 32 MB pieces, 8 in flight, assembled in order.
+  const PIECE = 32 << 20, STREAMS = 8;
+  const probe = await engineFetch(DRAFTER_URL, { headers: { Range: 'bytes=0-0' } });
+  if (probe.status !== 206) throw new Error(`drafter download failed: HTTP ${probe.status} (no range support)`);
+  const total = Number((probe.headers.get('content-range') || '').split('/')[1]) || 0;
+  try { await probe.body?.cancel(); } catch (_) {}
+  if (!total) throw new Error('drafter download failed: unknown size');
+  const pieces = new Array(Math.ceil(total / PIECE)); let loaded = 0, lastPost = 0, next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++; if (i >= pieces.length) return;
+      const start = i * PIECE, end = Math.min(total, start + PIECE) - 1;
+      const r = await engineFetch(DRAFTER_URL, { headers: { Range: `bytes=${start}-${end}` } });
+      if (r.status !== 206 || !r.body) throw new Error(`drafter download failed: HTTP ${r.status} on piece ${i}`);
+      const buf = new Uint8Array(end - start + 1); let off = 0; const reader = r.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf.set(value, off); off += value.byteLength; loaded += value.byteLength;
+        if (loaded - lastPost > 8 << 20) { lastPost = loaded; post({ type: 'dflash', status: 'downloading', loaded, total }); }
+      }
+      if (off !== buf.byteLength) throw new Error(`drafter download failed: short piece ${i}`);
+      pieces[i] = buf;
+    }
+  };
+  await Promise.all(Array.from({ length: STREAMS }, worker));
+  const blob = new Blob(pieces, { type: 'application/octet-stream' });
+  try { await c.put(DRAFTER_URL, new Response(blob, { headers: { 'content-type': 'application/octet-stream', 'content-length': String(blob.size) } })); }
+  catch (err) { console.warn('drafter cache write failed (will re-download next time):', err); }
+  return blob;
+}
+
+async function attachDFlash() {
+  const target = model;
+  post({ type: 'dflash', status: 'loading' });
+  const { DFlashRunner } = await import(DFLASH_URL);
+  const blob = await drafterBlob();
+  if (model !== target) return;   // unloaded while downloading
+  const source = async (off, len) => new Uint8Array(await blob.slice(off, off + len).arrayBuffer());
+  const runner = await DFlashRunner.create(target, {
+    drafter: source, block: DFLASH_BLOCK,
+    onProgress: (p) => post({ type: 'dflash', status: 'loading', loaded: p.done, total: p.total }),
+  });
+  if (model !== target) { runner.dispose(); return; }
+  // The engine reads specDecodeRunner() at the start of each generate, so a turn already
+  // in flight finishes plainly and the next one speculates.
+  target.model.dflashRunner = runner;
+  dflash = runner;
+  post({ type: 'dflash', status: 'ready', block: DFLASH_BLOCK, drafterBytes: runner.dr.stats.weightBytes });
+}
   </script>
   <script type="text/worker" id="ttsWorkerSrc">
 // TTS worker — Kokoro-82M read-aloud via kokoro-js (CDN bundle; brings its own
@@ -11289,6 +11383,13 @@ self.addEventListener('message', async (e) => {
       }
     }
     function hfToken() { try { return (localStorage.getItem('lm_hf_token') || '').trim() || null; } catch { return null; } }
+    // DFlash 2 speculative decoding for Ternary Bonsai 2 (default on; read at load time).
+    function dflashEnabled() { try { return localStorage.getItem('lm_dflash') !== '0'; } catch { return true; } }
+    const dflashToggle = document.getElementById('dflashToggle');
+    if (dflashToggle) {
+      dflashToggle.checked = dflashEnabled();
+      dflashToggle.addEventListener('change', () => { try { localStorage.setItem('lm_dflash', dflashToggle.checked ? '1' : '0'); } catch {} });
+    }
     // Authorization header for huggingface.co requests made from the main thread
     // (the custom-model probe); empty when no token is set.
     function hfAuthHeaders() { const t = hfToken(); return t ? { 'Authorization': 'Bearer ' + t } : {}; }
@@ -13635,7 +13736,7 @@ ${JSON.stringify({ name, result })}
             // maxLength. The shared load message shape is harmless either way.
             // hfToken (Settings → Models) rides along for the three custom-WGSL
             // engines, which send it as Authorization: Bearer to huggingface.co.
-            w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0, localFile: (isWllama && MODELS[modelId]) ? (MODELS[modelId].localFile || null) : null, hfToken: isWllama ? null : hfToken() });
+            w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0, localFile: (isWllama && MODELS[modelId]) ? (MODELS[modelId].localFile || null) : null, hfToken: isWllama ? null : hfToken(), dflash: isBonsai2Webgpu ? dflashEnabled() : false });
           } else {
             const resumable = localStorage.getItem('lm_resumable_downloads') !== '0';
             w.postMessage({ type: 'load', modelId, dtype, modelType, modelClass, resumable });
@@ -14543,7 +14644,8 @@ self.addEventListener('message', async (e) => {
       let code = src ? src.textContent : '';
       if (!code) throw new Error('Ternary Bonsai 2 27B WebGPU worker source missing');
       const engineUrl = new URL('ternary_bonsai_2_27b.js', document.baseURI).href;
-      code = engineWorkerPrelude() + code.replaceAll('__TERNARY_BONSAI2_ENGINE_URL__', engineUrl);
+      const dflashUrl = new URL('ternary_bonsai_2_dflash.js', document.baseURI).href;
+      code = engineWorkerPrelude() + code.replaceAll('__TERNARY_BONSAI2_ENGINE_URL__', engineUrl).replaceAll('__TERNARY_BONSAI2_DFLASH_URL__', dflashUrl);
       const blob = new Blob([code], { type: 'application/javascript' });
       const url = URL.createObjectURL(blob);
       const w = new Worker(url, { type: 'module' });
@@ -15506,6 +15608,18 @@ self.addEventListener('message', async (e) => {
         else if (data.type === 'warmup') {
           progressText.textContent = 'Compiling shaders and warming up...';
           statusText.textContent = 'Warming up...';
+        }
+
+        // DFlash 2 drafter status (Ternary Bonsai 2 only; arrives after `ready`, so
+        // the badge stays green and the model is usable throughout).
+        else if (data.type === 'dflash') {
+          const m = MODELS[activeModelKey];
+          const label = m ? m.label : '';
+          if (data.status === 'downloading' && data.total) statusText.textContent = `${label} · drafter ${Math.round(100 * data.loaded / data.total)}%`;
+          else if (data.status === 'loading') statusText.textContent = `${label} · loading drafter`;
+          else if (data.status === 'ready') statusText.textContent = `${label} · speculative`;
+          else if (data.status === 'turn') console.debug(`DFlash 2: ${data.tokens} tokens in ${data.cycles} cycles (${data.tokensPerCycle} tokens/cycle, ${data.acceptedPerCycle} accepted drafts/cycle)`);
+          else if (data.status === 'error') { statusText.textContent = label; console.warn('DFlash 2 drafter unavailable, plain decode:', data.message); }
         }
 
         else if (data.type === 'ready') {
