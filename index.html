@@ -2600,13 +2600,19 @@
         <div class="settings-divider" data-tab="models">
           <label>Local model endpoint <span style="font-weight:400;color:var(--gray-500)">(OpenAI-compatible local server — Ollama, LM Studio, llama.cpp, Atomic Chat)</span></label>
           <div style="display:flex;gap:6px;margin-top:4px">
+            <select id="endpointPresetSelect" class="settings-select" style="flex:0 0 auto;max-width:42%" title="Fill the URL (and temperature) from a preset"><option value="">Preset…</option></select>
             <input type="text" id="endpointUrlInput" class="settings-input" placeholder="http://localhost:11434/v1" style="flex:1">
             <button class="btn-icon" id="endpointConnectBtn">Connect</button>
           </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
+            <label for="endpointTempInput" style="font-weight:400;font-size:0.72rem;color:var(--gray-500);margin:0">Temperature</label>
+            <input type="number" id="endpointTempInput" class="settings-input" min="0" max="2" step="0.1" value="0.7" style="flex:0 0 5.5em">
+          </div>
+          <div style="font-size:0.7rem;color:var(--gray-500);margin-top:2px;line-height:1.5">0 = greedy. Required for lossless speculative decoding on dflash serve.</div>
           <div id="endpointStatus" style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5;min-height:1em"></div>
           <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
             Run bigger / faster models without the WebGPU limit &mdash; inference runs on your machine, nothing leaves your device. Discovered models appear in the model menu above. The server must allow CORS for this origin (Ollama: set <code>OLLAMA_ORIGINS</code>; LM Studio: enable CORS).
-            Presets: Ollama <code>:11434/v1</code> &middot; LM Studio <code>:1234/v1</code> &middot; llama.cpp <code>:8080/v1</code> &middot; Atomic <code>:1337/v1</code>.
+            Pick a preset to fill the URL: Ollama <code>:11434/v1</code> &middot; LM Studio <code>:1234/v1</code> &middot; llama.cpp <code>:8080/v1</code> &middot; Atomic <code>:1337/v1</code> &middot; dflash serve <code>:8790/v1</code>.
           </div>
         </div>
         <div class="settings-divider" data-tab="tools">
@@ -10659,6 +10665,7 @@ self.addEventListener('message', async (e) => {
       const raw = normalizeEndpointBase(input);
       if (!raw) throw new Error('Enter an endpoint URL');
       const v1 = /\/v1$/.test(raw) ? raw : raw + '/v1';
+      let netErr = null;   // a fetch-level TypeError (not an HTTP status) from either probe
       // 1) OpenAI-shaped /v1/models
       try {
         const r = await fetch(v1 + '/models', { headers: { 'Accept': 'application/json' } });
@@ -10667,7 +10674,7 @@ self.addEventListener('message', async (e) => {
           const ids = (j.data || []).map(x => x.id).filter(Boolean);
           if (ids.length) return { base: v1, models: ids };
         }
-      } catch {}
+      } catch (e) { if (e instanceof TypeError) netErr = e; }
       // 2) Ollama native /api/tags (at the root, not /v1)
       const root = raw.replace(/\/v1$/, '');
       try {
@@ -10677,8 +10684,57 @@ self.addEventListener('message', async (e) => {
           const ids = (j.models || []).map(x => x.name).filter(Boolean);
           if (ids.length) return { base: root + '/v1', models: ids };
         }
-      } catch {}
-      throw new Error('No models found — is the server running, and does it allow CORS for this origin?');
+      } catch (e) { if (e instanceof TypeError) netErr = e; }
+      let msg = 'No models found — is the server running, and does it allow CORS for this origin?';
+      if (netErr && isLocalNetworkHost(raw)) msg += ' ' + LOCAL_NETWORK_HINT;
+      throw new Error(msg);
+    }
+    // Sampling temperature for every endpoint model, persisted beside the URL.
+    // 0 = greedy — dflash serve only speculates at temperature 0, at anything
+    // higher it silently falls back to plain autoregressive decoding.
+    const ENDPOINT_TEMP_KEY = 'lm_endpoint_temp';
+    const ENDPOINT_TEMP_DEFAULT = 0.7;
+    function clampEndpointTemperature(v) {
+      const n = typeof v === 'number' ? v : parseFloat(v);
+      return Number.isFinite(n) ? Math.max(0, Math.min(2, n)) : ENDPOINT_TEMP_DEFAULT;
+    }
+    function getEndpointTemperature() {
+      let raw = null;
+      try { raw = localStorage.getItem(ENDPOINT_TEMP_KEY); } catch {}
+      return raw == null || raw === '' ? ENDPOINT_TEMP_DEFAULT : clampEndpointTemperature(raw);
+    }
+    // Persist and apply to every endpoint model already in the registry, so a
+    // change takes effect on the next message without reconnecting.
+    function setEndpointTemperature(v) {
+      const t = clampEndpointTemperature(v);
+      try { localStorage.setItem(ENDPOINT_TEMP_KEY, String(t)); } catch {}
+      for (const m of Object.values(MODELS)) if (m && m.backend === 'endpoint' && m.genConfig) m.genConfig.temperature = t;
+      return t;
+    }
+    // Quick-fill presets for the endpoint settings. `temperature` is optional —
+    // presets without one leave the field as the user set it.
+    const ENDPOINT_PRESETS = [
+      { label: 'Ollama', base: 'http://localhost:11434/v1' },
+      { label: 'LM Studio', base: 'http://localhost:1234/v1' },
+      { label: 'llama.cpp', base: 'http://localhost:8080/v1' },
+      { label: 'Atomic Chat', base: 'http://localhost:1337/v1' },
+      { label: 'Ternary Bonsai 2 — fast (Mac, dflash serve)', base: 'http://127.0.0.1:8790/v1', temperature: 0 },
+    ];
+    // Chrome gates fetches from an https origin to loopback / private hosts
+    // behind a "Local Network Access" permission prompt. A missed prompt shows
+    // up as a plain network TypeError — name the cause so the user can fix it.
+    function isLocalNetworkHost(base) {
+      let host = '';
+      try { host = new URL(base).hostname.toLowerCase(); } catch { return false; }
+      if (host[0] === '[' && host[host.length - 1] === ']') host = host.slice(1, -1);
+      return host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')
+        || host === '::1' || host === '0.0.0.0' || /^127\./.test(host) || /^10\./.test(host)
+        || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^169\.254\./.test(host);
+    }
+    const LOCAL_NETWORK_HINT = 'Chrome may have blocked this request behind its "local network access" permission — click Allow when the prompt appears, or check this site\'s permissions (lock icon → Site settings → Local network access).';
+    function endpointErrorMessage(e, base) {
+      const msg = (e && e.message) || String(e);
+      return (e instanceof TypeError && isLocalNetworkHost(base)) ? msg + '. ' + LOCAL_NETWORK_HINT : msg;
     }
     function registerEndpointModel(base, model) {
       const id = 'endpoint:' + base + '::' + model;
@@ -10686,7 +10742,7 @@ self.addEventListener('message', async (e) => {
         id, label: model, size: 'endpoint', type: 'causal',
         backend: 'endpoint', endpointBase: base, endpointModel: model,
         agentCapable: true, multimodal: false, contextSize: 0,
-        genConfig: { temperature: 0.7, max_new_tokens: 2048, top_p: 1 },
+        genConfig: { temperature: getEndpointTemperature(), max_new_tokens: 2048, top_p: 1 },
       };
       if (!Array.from(modelSelect.options).some(o => o.value === id)) {
         const opt = document.createElement('option');
@@ -10954,6 +11010,27 @@ self.addEventListener('message', async (e) => {
     const endpointUrlInput = document.getElementById('endpointUrlInput');
     const endpointConnectBtn = document.getElementById('endpointConnectBtn');
     const endpointStatus = document.getElementById('endpointStatus');
+    const endpointTempInput = document.getElementById('endpointTempInput');
+    const endpointPresetSelect = document.getElementById('endpointPresetSelect');
+    if (endpointTempInput) {
+      endpointTempInput.value = String(getEndpointTemperature());
+      endpointTempInput.addEventListener('change', () => { endpointTempInput.value = String(setEndpointTemperature(endpointTempInput.value)); });
+    }
+    if (endpointPresetSelect) {
+      ENDPOINT_PRESETS.forEach((p, i) => {
+        const opt = document.createElement('option');
+        opt.value = String(i); opt.textContent = p.label;
+        endpointPresetSelect.appendChild(opt);
+      });
+      endpointPresetSelect.addEventListener('change', () => {
+        const p = ENDPOINT_PRESETS[Number(endpointPresetSelect.value)];
+        endpointPresetSelect.value = '';
+        if (!p) return;
+        endpointUrlInput.value = p.base;
+        if (typeof p.temperature === 'number' && endpointTempInput) endpointTempInput.value = String(setEndpointTemperature(p.temperature));
+        setEndpointStatus('Filled ' + p.label + ' — press Connect.', '');
+      });
+    }
     function setEndpointStatus(msg, cls) {
       if (!endpointStatus) return;
       endpointStatus.textContent = msg;
@@ -15895,7 +15972,7 @@ self.addEventListener('message', async (e) => {
         }
       } catch (e) {
         if (!(e && e.name === 'AbortError')) {
-          const msg = (e && e.message) || String(e);
+          const msg = endpointErrorMessage(e, ep.base);
           if (currentAssistantEl) {
             currentAssistantText += `\n\n*Error: ${msg}*`;
             updateAssistantBubble(currentAssistantEl.bubble, currentAssistantText);
