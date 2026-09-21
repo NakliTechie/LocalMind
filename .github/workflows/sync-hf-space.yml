@@ -16,6 +16,7 @@ on:
       - inference-worker.js
       - lfm2_5.js
       - ternary_bonsai_2_27b.js
+      - ternary_bonsai_2_dflash.js
       - .github/workflows/sync-hf-space.yml
   workflow_dispatch:
 
@@ -29,7 +30,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          RUNTIME_FILES="index.html inference-worker.js lfm2_5.js ternary_bonsai_2_27b.js"
+          RUNTIME_FILES="index.html inference-worker.js lfm2_5.js ternary_bonsai_2_27b.js ternary_bonsai_2_dflash.js"
           git clone https://NakliTechie:$HF_TOKEN@huggingface.co/spaces/naklitechie/LocalMind /tmp/hf-space
           cp $RUNTIME_FILES /tmp/hf-space/
           cd /tmp/hf-space

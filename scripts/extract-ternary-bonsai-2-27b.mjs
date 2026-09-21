@@ -15,6 +15,7 @@
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { applyDFlashPatches } from './bonsai2-dflash-patches.mjs';
 
 const root = new URL('../', import.meta.url);
 
@@ -87,6 +88,12 @@ export function extractTernaryBonsai2Engine(html) {
   if (engine.includes('PrismBootReady')) throw new Error('bonsai2 bundle: engine slice references PrismBootReady (UI leaked into the engine cut)');
   if (/^import\s/m.test(engine)) throw new Error('bonsai2 bundle: engine slice has a static import (expected a self-contained bundle)');
 
+  // 5. DFlash 2 speculative decoding (scripts/bonsai2-dflash-patches.mjs): internals
+  //    hook, the specDecodeRunner() seam, qwen35 verify mode, the small-M GEMM op and
+  //    the recurrence rewind. Every marker is guarded there; the runner itself lives in
+  //    ternary_bonsai_2_dflash.js and is attached by the worker.
+  engine = applyDFlashPatches(engine);
+
   return (
     '/* ternary_bonsai_2_27b.js — vendored engine, extracted near-verbatim from the\n' +
     '   webml-community/ternary-bonsai-2-webgpu-kernels HF Space (custom-WGSL Qwen3.8 /\n' +
@@ -94,10 +101,13 @@ export function extractTernaryBonsai2Engine(html) {
     '   Upstream ships NO explicit license; vendored consistent with LocalMind\'s other\n' +
     '   webml-community engines (lfm2_5.js).\n' +
     '   Boot scene + Space UI (token gate / chat panel) stripped; exports kept verbatim;\n' +
-    '   TWO patches: (1) system-prefix priming (#m) returns 0 instead of throwing when the\n' +
+    '   THREE patches: (1) system-prefix priming (#m) returns 0 instead of throwing when the\n' +
     '   chat template refuses a system-only render (Qwen3.8: "No user query found in\n' +
     '   messages."); (2) download byteBudget 96 MB -> 256 MB (~10 range streams in flight\n' +
-    '   instead of ~4; HF CDN throttles per connection).\n' +
+    '   instead of ~4; HF CDN throttles per connection); (3) DFlash 2 speculative decoding:\n' +
+    '   __dflashInternals hook, specDecodeRunner() seam, qwen35 verify mode, Lut2SmallMGemm\n' +
+    '   op, recurrence rewind (scripts/bonsai2-dflash-patches.mjs; runner in\n' +
+    '   ternary_bonsai_2_dflash.js).\n' +
     `   DEFAULT_MODEL_ID is upstream's own ungated ${UPSTREAM_MODEL_ID} (${UPSTREAM_GGUF_FILE}).\n` +
     '   Model weights are Apache-2.0 (prism-ml Ternary Bonsai 2, Qwen3.8-27B backbone).\n' +
     '   Regenerate with scripts/extract-ternary-bonsai-2-27b.mjs. */\n' +
