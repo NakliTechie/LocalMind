@@ -2752,8 +2752,13 @@
             <select id="imageModelSelect">
               <option value="prism-ml/bonsai-image-ternary-4B-mlx-2bit">Bonsai 4B &middot; ternary (~3.3&nbsp;GB)</option>
               <option value="prism-ml/bonsai-image-binary-4B-mlx-1bit">Bonsai 4B &middot; 1-bit (~2.9&nbsp;GB)</option>
+              <option value="local-server">Local server &middot; sd.cpp (Qwen-Image 2.1, FLUX, &hellip;)</option>
             </select>
           </label>
+          <label id="imageEndpointRow" style="display:none">Server
+            <input type="text" id="imageEndpointInput" placeholder="http://127.0.0.1:7860" style="width:180px" title="stable-diffusion.cpp sd-server base URL (no path). The server holds the weights; LocalMind sends the prompt and shows the image.">
+          </label>
+          <label id="imageCfgRow" style="display:none">CFG <input type="number" id="imageCfg" min="1" max="15" step="0.5" value="6" style="width:56px" title="Classifier-free guidance scale (Qwen-Image 2.1: ~6)"></label>
           <label>Size
             <select id="imageSize">
               <option value="512x512">512&times;512</option>
@@ -17804,6 +17809,68 @@ self.addEventListener('message', async (e) => {
     const imageGallery      = document.getElementById('imageGallery');
     const imageModelMeta    = document.getElementById('imageModelMeta');
     const imageReroll       = document.getElementById('imageReroll');
+    // Local image server (stable-diffusion.cpp `sd-server`): the same idea as the LLM
+    // local-endpoint backend — weights live on the machine, the browser is the front end.
+    // Picking "Local server" in the model menu shows the URL row; the URL persists like
+    // `lm_endpoint_url`. Generation goes to the A1111-shaped `/sdapi/v1/txt2img` because it
+    // takes steps / seed / cfg directly (the OpenAI route only takes prompt + size).
+    const imageEndpointRow   = document.getElementById('imageEndpointRow');
+    const imageEndpointInput = document.getElementById('imageEndpointInput');
+    const imageCfgRow        = document.getElementById('imageCfgRow');
+    const imageCfgInput      = document.getElementById('imageCfg');
+    const IMAGE_SERVER_DEFAULT_URL = 'http://127.0.0.1:7860';
+    const isImageServer = () => imageModelSelect.value === 'local-server';
+    function imageServerBase() {
+      const v = (imageEndpointInput.value || '').trim() || IMAGE_SERVER_DEFAULT_URL;
+      return v.replace(/\/+$/, '');
+    }
+    async function syncImageEngineUi() {
+      const server = isImageServer();
+      imageEndpointRow.style.display = server ? '' : 'none';
+      imageCfgRow.style.display = server ? '' : 'none';
+      // Bonsai is a 4-step turbo model; a server-side flow model wants ~20 steps.
+      imageStepsInput.max = server ? 50 : 20;
+      if (server && parseInt(imageStepsInput.value, 10) < 10) { imageStepsInput.value = 20; imageStepsVal.textContent = '20'; }
+      if (!server && parseInt(imageStepsInput.value, 10) > 20) { imageStepsInput.value = 4; imageStepsVal.textContent = '4'; }
+      if (!server) return;
+      try { localStorage.setItem('lm_image_endpoint_url', imageEndpointInput.value.trim()); } catch {}
+      imageProgressText.textContent = 'Checking the local image server…';
+      try {
+        const r = await fetch(imageServerBase() + '/v1/models', { signal: AbortSignal.timeout(4000) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        const names = (j.data || []).map((m) => m.id).filter(Boolean);
+        imageModelMeta.textContent = names.length ? names.join(', ') : 'server connected';
+        imageProgressText.textContent = names.length ? `Local server ready · ${names.join(', ')}. Type a prompt and Send.` : 'Local server ready. Type a prompt and Send.';
+      } catch (e) {
+        imageModelMeta.textContent = '';
+        imageProgressText.textContent = 'No image server at ' + imageServerBase() + ' — start sd-server (stable-diffusion.cpp) and pick a model there, then Send. (' + ((e && e.message) || e) + ')';
+      }
+    }
+    imageModelSelect.addEventListener('change', () => { syncImageEngineUi(); });
+    imageEndpointInput.addEventListener('change', () => { syncImageEngineUi(); });
+    try {
+      const savedImgEp = localStorage.getItem('lm_image_endpoint_url');
+      if (savedImgEp) imageEndpointInput.value = savedImgEp;
+    } catch {}
+    // POST the prompt to sd-server and hand back the same {bytes,width,height,seed} shape the
+    // in-tab worker returns, so the rendering path below is shared.
+    async function generateImageViaServer({ prompt, width, height, steps, seed, cfg }) {
+      const body = { prompt, width, height, steps, seed, cfg_scale: cfg, batch_size: 1 };
+      const r = await fetch(imageServerBase() + '/sdapi/v1/txt2img', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error('sd-server HTTP ' + r.status + ' — ' + (await r.text()).slice(0, 200));
+      const j = await r.json();
+      const b64 = j.images && j.images[0];
+      if (!b64) throw new Error('sd-server returned no image');
+      const bin = atob(b64.replace(/^data:[^,]*,/, ''));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      let usedSeed = seed;
+      try { const info = j.info ? JSON.parse(j.info) : null; if (info && typeof info.seed === 'number') usedSeed = info.seed; } catch {}
+      return { bytes, width, height, seed: usedSeed };
+    }
     let lastImagePrompt = '';   // remembered for the re-roll button
     let imageCount = 0;         // images generated this session
     let imageBusy = false;        // an image run is in flight (no mid-step interrupt)
@@ -17916,13 +17983,18 @@ self.addEventListener('message', async (e) => {
       modeHint.textContent =
         activeMode === 'batch' ? 'Each line runs as its own prompt, in sequence.' :
         activeMode === 'research' ? 'Searches the web, reads sources, writes a cited report.' :
-        activeMode === 'image' ? 'On-device diffusion — frees the chat model while active.' :
+        activeMode === 'image' ? (isImageServer() ? 'Local image server — the chat model stays loaded; nothing leaves this machine.' : 'On-device diffusion — frees the chat model while active.') :
         activeMode === 'diffuse' ? 'Masked-diffusion text — the answer fills in non-linearly. Frees the chat model.' :
         activeMode === 'ocr' ? 'Extracts text from images / PDFs on-device. Frees the chat model while active.' :
         activeMode === 'vision' ? 'Describes your camera or an image on-device — frees the chat model while active.' :
         activeMode === 'voice' ? 'Hands-free: talk, it answers and reads back. The chat model stays loaded (voice runs on WASM).' :
         activeMode === 'clone' ? 'Clones a voice from a short sample, then speaks your text in it — on-device. Frees the chat model while active.' :
         (activeMode === 'chat' && searchOn) ? 'This message will be web-enriched.' : '';
+      // The server image engine needs no in-tab model: the input must not stay locked behind
+      // a chat model that never loaded (a browser without WebGPU, or a failed download).
+      if (activeMode === 'image' && isImageServer() && !generating) {
+        chatInput.disabled = false; sendBtn.disabled = false;
+      }
     }
     function setExclusiveMode(mode) {
       const prev = activeMode;
@@ -17937,6 +18009,7 @@ self.addEventListener('message', async (e) => {
       if (activeMode === 'voice') onEnterVoiceMode();
       if (activeMode === 'vision') onEnterVisionMode();
       if (activeMode === 'clone') onEnterCloneMode();
+      if (activeMode === 'image' && isImageServer()) syncImageEngineUi(); // show the server row + probe it
       refreshModeUI();
     }
     function needsSearchOrConfigure(what) {
@@ -17990,12 +18063,14 @@ self.addEventListener('message', async (e) => {
     }
     // Image + Diffuse need WebGPU AND a desktop-class GPU + memory (3.3 / 1.4 GB models).
     // Disable the chips where WebGPU is unavailable, or on a phone (won't realistically run).
+    // Image mode has one engine that needs neither — the local sd-server — so without WebGPU
+    // the chip stays live, the in-tab Bonsai options are disabled, and "Local server" is preselected.
     (async () => {
       let ok = !!(navigator.gpu);
       if (ok) { try { ok = !!(await navigator.gpu.requestAdapter()); } catch (e) { ok = false; } }
       const mob = isMobileDevice();
       if (!ok || mob) {
-        for (const chip of [chipImage, chipDiffuse]) {
+        for (const chip of [chipDiffuse]) {
           chip.disabled = true;
           chip.style.opacity = '0.45';
           chip.style.cursor = 'not-allowed';
@@ -18003,6 +18078,10 @@ self.addEventListener('message', async (e) => {
             ? 'Needs a desktop GPU + memory (multi-GB model) — open LocalMind on a computer.'
             : 'Needs WebGPU — use Chrome or Edge (chrome://flags/#enable-unsafe-webgpu).';
         }
+        for (const opt of imageModelSelect.options) if (opt.value !== 'local-server') { opt.disabled = true; opt.title = 'Needs WebGPU'; }
+        imageModelSelect.value = 'local-server';
+        chipImage.title = 'Generate an image via a local sd-server (no WebGPU needed in this browser)';
+        if (activeMode === 'image') syncImageEngineUi();
       }
     })();
     chipSearch.addEventListener('click', () => { if (generating) return; if (!searchOn && !needsSearchOrConfigure('Web search')) return; searchOn = !searchOn; refreshModeUI(); });
@@ -18032,6 +18111,7 @@ self.addEventListener('message', async (e) => {
     // when the user leaves Image mode.
     async function ensureImageModel() {
       const modelId = imageModelSelect.value;
+      if (modelId === 'local-server') return; // nothing to load in-tab; the server holds the weights
       if (LocalMind.runtime._imageWorker && LocalMind.runtime._imageActiveModel === modelId) return;
       if (activeModelKey) lastChatModelKey = activeModelKey;
       try { LocalMind.runtime.unload(); } catch {}
@@ -18066,7 +18146,14 @@ self.addEventListener('message', async (e) => {
         const [w, h] = imageSizeSel.value.split('x').map(Number);
         const steps = parseInt(imageStepsInput.value, 10) || 4;
         const seed = imageSeedInput.value.trim() === '' ? Math.floor(Math.random() * 1e9) : (parseInt(imageSeedInput.value, 10) || 0);
-        const res = await LocalMind.runtime.generateImage({
+        let res;
+        if (isImageServer()) {
+          const cfg = parseFloat(imageCfgInput.value) || 6;
+          imageProgressFill.style.width = '15%';
+          imageProgressText.textContent = `Generating on the local server — ${w}×${h}, ${steps} steps, cfg ${cfg}…`;
+          ph.bubble.innerHTML = `<span class="gen-image-meta">Generating on the local server (${steps} steps)…</span>`;
+          res = await generateImageViaServer({ prompt, width: w, height: h, steps, seed, cfg });
+        } else res = await LocalMind.runtime.generateImage({
           prompt, width: w, height: h, steps, seed,
           onStep: (s, total) => {
             imageProgressFill.style.width = Math.round(100 * s / total) + '%';
