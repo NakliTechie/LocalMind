@@ -64,6 +64,12 @@ const makeFetch = (script) => {
     calls.push(from);
     const step = script.shift();
     if (step === 'hang') return never(init.signal);
+    if (step && step.closeAfter != null) {
+      // A body that ends cleanly (no error) before the file's full size.
+      const bytes = FILE.slice(from, from + step.closeAfter);
+      return new Response(new ReadableStream({ start(c) { c.enqueue(bytes); c.close(); } }),
+        { status: 206, headers: { 'content-range': `bytes ${from}-${FILE.length - 1}/${FILE.length}`, 'content-type': 'application/json' } });
+    }
     if (typeof step === 'number') return new Response('', { status: step });
     const partial = { 'content-range': `bytes ${from}-${FILE.length - 1}/${FILE.length}`, 'content-length': String(FILE.length - from), 'content-type': 'application/json' };
     const rest = FILE.subarray(from);
@@ -142,6 +148,19 @@ const run = async (from, script) => {
   const f = makeFetch([...Array(10)].map(() => 'hang'));
   const b = __stallGuardedBody('https://huggingface.co/x', 0, FILE.length, f.fetchImpl);
   await assert.rejects(b.open(), /no response headers/);
+}
+
+// A body that closes cleanly short of its known size is resumed, never passed on truncated
+// (2026-09-24: a tokenizer.json ended at 1,000,510 of 3,297,799 bytes and got cached that way).
+{
+  const { bytes, calls } = await run(0, [{ closeAfter: 400 }, { closeAfter: 350 }, undefined]);
+  assert.deepEqual(calls, [0, 400, 750]);
+  assert.deepEqual(bytes, FILE);
+}
+{
+  const f = makeFetch([...Array(10)].map(() => ({ closeAfter: 0 })));
+  const r = await __guardedGet('https://huggingface.co/x/resolve/main/tokenizer.json', f.fetchImpl);
+  await assert.rejects(r.arrayBuffer(), /download ended early/);
 }
 
 // 3. Small files and the other fallbacks: a whole-file GET through the same guard.

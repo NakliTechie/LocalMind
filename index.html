@@ -2184,7 +2184,7 @@
                 <li><strong>LFM2.5 1.2B</strong> (~760 MB) &mdash; text + agent (tool calling). Liquid AI's LFM2.5-1.2B-Instruct (Jan 2026) &mdash; same LFM2 hybrid arch as the 230M default, RL-tuned for instruction following + tool use. q4f16, 32K context.</li>
                 <li><strong>Gemini Nano</strong> (0 MB) &mdash; Google's on-device model built into Chrome, via the Prompt API. Zero download, no WebGPU. Chrome/Edge only; runs where your browser exposes <code>self.LanguageModel</code>. When Nano is already downloaded on desktop Chrome/Edge, LocalMind starts on it by default so you can chat with no model download.</li>
                 <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
-                <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only. About 3.6&times; the ONNX Gemma 4 E2B&rsquo;s decode speed on the same Mac (57 vs 16 tok/s, M4 Pro); text-only.</li>
+                <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only. About 4&times; the ONNX Gemma 4 E2B&rsquo;s decode speed on the same Mac (171 vs 42 tok/s, M4 Pro); text-only.</li>
                 <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
                 <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
                 <li><strong>MiniCPM5 2B &middot; GGUF</strong> (~1.6 GB) &mdash; text + agent (tool calling). OpenBMB&rsquo;s MiniCPM5-2B (Sept 2026, Apache-2.0) loaded from its first-party GGUF through wllama (llama.cpp &rarr; WebAssembly) &mdash; there is no ONNX export, so this is the only way to run it in the tab. WebGPU when your browser has it, CPU otherwise. Gets <strong>16K context</strong>, twice the other GGUF models, because its 2 KV heads make the cache unusually cheap; its native 131K is capped since wllama reserves the whole cache up front. Long-document retrieval is what it is best at. It emits tool calls in its own XML format rather than the <code>&lt;tool_call&gt;</code> JSON the other models use; LocalMind parses both. Short-horizon tool use is its strength &mdash; don&rsquo;t expect long multi-step agent runs to hold up.</li>
@@ -8455,8 +8455,8 @@ self.addEventListener('message', async (e) => {
         contextSize: 32768,
         // Google's Gemma 4 E2B QAT-mobile run on the hand-written WebGPU kernels
         // from the webml-community/gemma-4-webgpu-kernels Space. Quantization-aware
-        // int4 (smaller + higher fidelity than post-hoc q4); decodes ~3.6x the ONNX E2B (57 vs 16
-        // tok/s, M4 Pro, 2026-09-24 bench).
+        // int4 (smaller + higher fidelity than post-hoc q4); decodes ~4x the ONNX E2B (171 vs 42
+        // tok/s, M4 Pro, quiet machine, 2026-09-24 bench).
         // WebGPU-only (no CPU fallback). Text-only here (this engine is a decoder).
         genConfig: { max_new_tokens: 2048 },
       },
@@ -15487,7 +15487,11 @@ function __stallGuardedBody(url, from, total, fetchImpl, first) {
           timer = setTimeout(() => reject(new Error('download stalled: no bytes in ' + __STALL_MS + ' ms')), __STALL_MS);
         });
         const r = await Promise.race([reader.read(), stalled]);
-        if (!r.done) { offset += r.value.byteLength; retries = 0; }
+        // A body can also end cleanly before its known size (a reset stream, a proxy).
+        // Passing that on would hand transformers.js a truncated file, which it then
+        // caches for good; treat it as a drop and resume from the next byte instead.
+        if (r.done && Number.isFinite(total) && offset < total) throw new Error('download ended early at byte ' + offset + ' of ' + total);
+        if (!r.done && r.value.byteLength) { offset += r.value.byteLength; retries = 0; }
         return r;
       } catch (err) {
         drop();
