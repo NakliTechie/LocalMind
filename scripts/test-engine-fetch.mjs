@@ -1,6 +1,6 @@
 // Node proof of the shared engine-worker prelude (#engineWorkerPreludeSrc):
 //   1. inference-worker.js carries a byte-identical copy (the two cannot drift);
-//   2. both custom-WGSL workers hand `engineFetch` to their engine's load();
+//   2. all three custom-WGSL workers hand `engineFetch` to their engine's load();
 //   3. engineFetch's runtime contract against a mocked fetch — passthrough for
 //      non-range requests, retry on 5xx/429, mid-range body drop resumed at the
 //      exact next byte and spliced into one stream, Authorization: Bearer on
@@ -31,7 +31,10 @@ assert.ok(workerSource.includes(prelude.trimEnd()), 'inference-worker.js must ca
 assert.match(workerSource, /Lfm2Mobile\.load\([^]*?fetch: engineFetch,/);
 assert.doesNotMatch(workerSource, /accessToken:/);
 assert.match(block('ternaryBonsai2WebgpuWorkerSrc'), /TernaryBonsai2\.load\([^]*?fetch: engineFetch,/);
-assert.doesNotMatch(block('ternaryBonsai2WebgpuWorkerSrc'), /const engineFetch|self\.requestAnimationFrame =/);
+assert.match(block('gemma4WebgpuWorkerSrc'), /Gemma4Mobile\.load\([^]*?fetch: engineFetch,/);
+assert.doesNotMatch(block('gemma4WebgpuWorkerSrc'), /accessToken:/);
+assert.doesNotMatch(block('gemma4WebgpuWorkerSrc') + block('ternaryBonsai2WebgpuWorkerSrc'), /const engineFetch|self\.requestAnimationFrame =/);
+assert.match(indexSource, /code = engineWorkerPrelude\(\) \+ code\.replaceAll\('__GEMMA4_ENGINE_URL__'/);
 assert.match(indexSource, /code = engineWorkerPrelude\(\) \+ code\.replaceAll\('__TERNARY_BONSAI2_ENGINE_URL__'/);
 
 // 3. Runtime contract. Load the prelude as a module with a worker-shaped global.

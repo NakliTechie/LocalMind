@@ -13,13 +13,15 @@ The raw context window is 4K–65K tokens depending on model. The effective know
 
 ## Runtimes
 
-Three interchangeable backends behind one `LocalMind.runtime` adapter (a model's `backend` field routes `loadModel`; everything downstream — the agent loop, tools, RAG, `generateOnce` — is shared):
+Seven interchangeable backends behind one `LocalMind.runtime` adapter (a model's `backend` field routes `loadModel`; everything downstream — the agent loop, tools, RAG, `generateOnce` — is shared):
 
 1. **ONNX + WebGPU** (default) — Transformers.js runs ONNX models on the GPU, in-tab.
 2. **wllama (in-browser GGUF)** — llama.cpp compiled to WASM; loads a GGUF from a URL, WebGPU-accelerated or pure CPU. Its worker speaks the same postMessage protocol as the ONNX chat worker, so it reuses `attachWorkerHandlers` + `generateOnce`.
 3. **Local endpoint** — an OpenAI-compatible server (Ollama / LM Studio / llama.cpp) over `/v1/chat/completions`; no in-browser inference (no worker).
 4. **LFM2 WebGPU kernels** (`backend: 'lfm2-webgpu'`) — a from-scratch WebGPU inference engine (`lfm2_5.js`, exporting `Lfm2Mobile`) ported from the `webml-community/lfm2-webgpu-kernels` Space, where every kernel — RoPE, RMSNorm, Q4_0/Q8_0 dequant, the LFM2 short-conv depthwise+gating, GQA attention, the GEMVs — is hand-written WGSL reading a Q4_0 GGUF directly (no onnxruntime, no llama.cpp). The DOM-free module worker (`inference-worker.js`) dynamically imports the sibling engine, adapts the engine's cumulative-`{text}` stream into the shared per-token-delta protocol, and otherwise reuses `attachWorkerHandlers` + `generateOnce` like every other in-browser backend. The worker is also the versioned runtime boundary vendored by NakliOS. The engine runs its own ranged GGUF download + CacheStorage cache and needs only WebGPU (no SharedArrayBuffer / COOP-COEP). Backends (4) and (5) share one **engine-worker prelude** (`#engineWorkerPreludeSrc`, carried verbatim in `inference-worker.js` and spliced into the Bonsai 2 blob worker by its factory; `scripts/test-engine-fetch.mjs` pins the copies): a timer-backed `requestAnimationFrame` shim so a load does not stall when the tab is hidden, the optional Hugging Face token, and `engineFetch` — the streaming, resuming range-read wrapper each engine takes as `load(…, { fetch })` (retry on 429/5xx, resume a dropped body from the next byte, `Authorization: Bearer` on `huggingface.co` only).
-5. **Ternary Bonsai 2 27B WebGPU kernels** (`backend: 'bonsai2-webgpu'`) — the same pattern as (4) for PrismML's ternary **Bonsai 2 27B** (Qwen3.8-27B backbone, hybrid ~75% Gated-DeltaNet linear / ~25% full attention): a from-scratch WebGPU engine (`ternary_bonsai_2_27b.js`, exporting `TernaryBonsai2`) vendored from `webml-community/ternary-bonsai-2-webgpu-kernels`, with hand-written WGSL for the PRISM_PTQ1_0 (dense trits, 1.75 bits/weight, g128) on-the-fly dequant, the linear-attention recurrence, RoPE / RMSNorm / SwiGLU / GQA attention, reading the ternary GGUF directly (~5.9 GB) from the ungated Apache-2.0 `prism-ml/Ternary-Bonsai-2-27B-gguf` repo. The engine also reads the PQ2_0 packing (2-bit slots, 7.2 GB); LocalMind pins PTQ1_0. Its worker (`#ternaryBonsai2WebgpuWorkerSrc`) passes `{role, content}` straight through (Qwen3.8 has a real system role and templates internally), forwards the registry's `contextSize` as the engine's `maxLength`, and reuses the same shared protocol as (4). Text-only: the repo's optional mmproj vision tower is not loaded. Two marker-guarded extractor patches on the vendored engine: system-prefix priming fails soft when the Qwen3.8 template refuses a system-only render, and the download `byteBudget` is raised 96 → 256 MB (~10 range streams in flight instead of ~4 — Hugging Face's CDN throttles per connection). Vendored engine ships no upstream license (consistent with the other three); model weights are Apache-2.0. Replaced the 1-bit Bonsai 27B v1 (`bonsai_27b.js`, Q1_0, 3.8 GB) on 2026-09-18.
+5. **Gemma 4 WebGPU kernels** (`backend: 'gemma4-webgpu'`) — the same pattern as (4) for Google's Gemma 4 E2B (QAT mobile): a from-scratch WebGPU engine (`gemma-4-e2b.js`, exporting `Gemma4Mobile`) ported from `webml-community/gemma-4-webgpu-kernels`, with hand-written WGSL for QAT int4 matmul (gemm / split-K / sgmat variants), embed-gather-norm, RoPE, RMSNorm, and GQA + sliding-window attention, reading Google's QAT-mobile weights directly. Its worker (`#gemma4WebgpuWorkerSrc`) folds any `system` message into the first user turn (Gemma's template has no system role) and otherwise reuses the same shared protocol as (4).
+6. **Ternary Bonsai 2 27B WebGPU kernels** (`backend: 'bonsai2-webgpu'`) — the same pattern as (4)/(5) for PrismML's ternary **Bonsai 2 27B** (Qwen3.8-27B backbone, hybrid ~75% Gated-DeltaNet linear / ~25% full attention): a from-scratch WebGPU engine (`ternary_bonsai_2_27b.js`, exporting `TernaryBonsai2`) vendored from `webml-community/ternary-bonsai-2-webgpu-kernels`, with hand-written WGSL for the PRISM_PTQ1_0 (dense trits, 1.75 bits/weight, g128) on-the-fly dequant, the linear-attention recurrence, RoPE / RMSNorm / SwiGLU / GQA attention, reading the ternary GGUF directly (~5.9 GB) from the ungated Apache-2.0 `prism-ml/Ternary-Bonsai-2-27B-gguf` repo. The engine also reads the PQ2_0 packing (2-bit slots, 7.2 GB); LocalMind pins PTQ1_0. Its worker (`#ternaryBonsai2WebgpuWorkerSrc`) passes `{role, content}` straight through (Qwen3.8 has a real system role and templates internally), forwards the registry's `contextSize` as the engine's `maxLength`, and reuses the same shared protocol as (4). Text-only: the repo's optional mmproj vision tower is not loaded. Two marker-guarded extractor patches on the vendored engine: system-prefix priming fails soft when the Qwen3.8 template refuses a system-only render, and the download `byteBudget` is raised 96 → 256 MB (~10 range streams in flight instead of ~4 — Hugging Face's CDN throttles per connection). Vendored engine ships no upstream license (consistent with the other three); model weights are Apache-2.0. Replaced the 1-bit Bonsai 27B v1 (`bonsai_27b.js`, Q1_0, 3.8 GB) on 2026-09-18.
+7. **Chrome built-in AI** (`backend: 'chrome-ai'`) — Gemini Nano through Chrome's Prompt API (`self.LanguageModel`); Chrome ships the weights, so there is no download and no WebGPU requirement. Chat only, no tool calling.
 
 A WebGPU device error (OOM / lost device) on the ONNX path is detected, shown as a friendly message, and auto-recovered by reloading the model on a fresh device — capped at 2 retries.
 
@@ -55,6 +57,7 @@ Workers spin up on demand, each with its own lifecycle and memory. Only **one We
 | **Chat (ONNX)** | On model load | WebGPU | Main LLM via Transformers.js |
 | **wllama (GGUF)** | On loading a GGUF model | WebGPU / CPU | llama.cpp-wasm chat runtime |
 | **LFM2 WebGPU** | On loading the `lfm2-webgpu` model | WebGPU | Custom-WGSL `Lfm2Mobile` engine (`lfm2_5.js`) |
+| **Gemma 4 WebGPU** | On loading the `gemma4-webgpu` model | WebGPU | Custom-WGSL `Gemma4Mobile` engine (`gemma-4-e2b.js`) |
 | **Image** | On entering Image mode | WebGPU | FLUX.2-Klein text-to-image |
 | **Diffuse** | On entering Diffuse mode | WebGPU | kohra masked-diffusion text |
 | **Embedding** | Lazy on first RAG/memory call | WASM | MiniLM 384-dim vectors |
@@ -91,12 +94,13 @@ The test suite asserts the retired list never names a live registry entry.
 
 ## Build & deployment
 
-Zero build tooling. One HTML file (~15k lines, ~800 KB), the DOM-free
-`inference-worker.js`, plus two vendored sibling engine modules —
-`lfm2_5.js` (~650 KB) and `ternary_bonsai_2_27b.js` (~1.4 MB). Everything else loads
-from CDN with SRI where possible.
+Zero build tooling. One HTML file (~20k lines, ~1 MB), the DOM-free
+`inference-worker.js`, plus four vendored sibling engine modules —
+`lfm2_5.js` (~650 KB), `gemma-4-e2b.js` (~540 KB), `ternary_bonsai_2_27b.js`
+(~1.4 MB) and the DFlash 2 runner `ternary_bonsai_2_dflash.js` (~70 KB).
+Everything else loads from CDN with SRI where possible.
 
-Deploy by serving `index.html`, `inference-worker.js`, `lfm2_5.js`, and
-`ternary_bonsai_2_27b.js` together from any static host. GitHub Pages, Netlify, S3, or
+Deploy by serving `index.html`, `inference-worker.js` and the four engine
+modules together from any static host. GitHub Pages, Netlify, S3, or
 `python3 -m http.server` all work. They must be served over HTTP — `file://`
 won't work because ES module workers and WebGPU both require an HTTP origin.

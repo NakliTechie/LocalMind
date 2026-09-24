@@ -75,7 +75,19 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'));
   const keys = [...registry.slice(0, registry.indexOf('\n    };')).matchAll(/^      '([^']+)': \{/gm)].map((m) => m[1]);
   assert.deepEqual([...options].sort(), [...keys].sort(), 'picker options and MODELS registry keys must match');
-  assert.equal(options.length, 10);
+  assert.equal(options.length, 11);
+}
+// Gemma 4 E2B WebGPU kernels (restored 2026-09-24): engine file present and byte-identical to the
+// upstream webml-community Space build, wired to its factory, and NOT on the retired-cache sweep.
+{
+  const { createHash } = await import('node:crypto');
+  const engine = await readFile(new URL('../gemma-4-e2b.js', import.meta.url));
+  assert.equal(createHash('sha256').update(engine).digest('hex'), '0234c0e866bfaa9623e938a7cfa7f5740cca22532cc1112dd4e8915b97f78d62');
+  assert.match(indexSource, /'gemma4-e2b-webgpu': \{\s*id: 'google\/gemma-4-E2B-it-qat-mobile-transformers',[^]*?backend: 'gemma4-webgpu'/);
+  assert.match(indexSource, /: isGemma4Webgpu \? createGemma4WebgpuWorker\(\)/);
+  assert.match(indexSource, /new URL\('gemma-4-e2b\.js', document\.baseURI\)/);
+  const retired = indexSource.slice(indexSource.indexOf('const RETIRED_MODEL_REPOS = ['), indexSource.indexOf('];', indexSource.indexOf('const RETIRED_MODEL_REPOS = [')));
+  assert.doesNotMatch(retired, /gemma-4-E2B-it-qat-mobile-transformers/, 'a live model must not be swept as retired');
 }
 // Retired-repo list drives the boot cache sweep: it must never name a live registry model.
 {
@@ -88,7 +100,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   for (const repo of retired) assert.ok(!liveRepos.includes(repo), `retired repo still in the registry: ${repo}`);
   for (const repo of ['onnx-community/Ternary-Bonsai-1.7B-ONNX', 'onnx-community/Ternary-Bonsai-8B-ONNX', 'LiquidAI/LFM2.5-230M-ONNX',
     'onnx-community/LFM2-8B-A1B-ONNX', 'HuggingFaceTB/SmolLM3-3B-ONNX', 'onnx-community/gemma-3-1b-it-ONNX-GQA',
-    'google/gemma-4-E2B-it-qat-mobile-transformers', 'bartowski/SmolLM2-360M-Instruct-GGUF', 'Qwen/Qwen2.5-1.5B-Instruct-GGUF',
+    'bartowski/SmolLM2-360M-Instruct-GGUF', 'Qwen/Qwen2.5-1.5B-Instruct-GGUF',
     'lmstudio-community/Bonsai-27B-GGUF']) assert.ok(retired.includes(repo), `retired list lacks ${repo}`);
   assert.match(indexSource, /^\s+sweepRetiredModelCaches\(\);/m);
 }

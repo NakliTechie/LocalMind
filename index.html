@@ -2184,6 +2184,7 @@
                 <li><strong>LFM2.5 1.2B</strong> (~760 MB) &mdash; text + agent (tool calling). Liquid AI's LFM2.5-1.2B-Instruct (Jan 2026) &mdash; same LFM2 hybrid arch as the 230M default, RL-tuned for instruction following + tool use. q4f16, 32K context.</li>
                 <li><strong>Gemini Nano</strong> (0 MB) &mdash; Google's on-device model built into Chrome, via the Prompt API. Zero download, no WebGPU. Chrome/Edge only; runs where your browser exposes <code>self.LanguageModel</code>. When Nano is already downloaded on desktop Chrome/Edge, LocalMind starts on it by default so you can chat with no model download.</li>
                 <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
+                <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only. About 3.6&times; the ONNX Gemma 4 E2B&rsquo;s decode speed on the same Mac (57 vs 16 tok/s, M4 Pro); text-only.</li>
                 <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
                 <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
                 <li><strong>MiniCPM5 2B &middot; GGUF</strong> (~1.6 GB) &mdash; text + agent (tool calling). OpenBMB&rsquo;s MiniCPM5-2B (Sept 2026, Apache-2.0) loaded from its first-party GGUF through wllama (llama.cpp &rarr; WebAssembly) &mdash; there is no ONNX export, so this is the only way to run it in the tab. WebGPU when your browser has it, CPU otherwise. Gets <strong>16K context</strong>, twice the other GGUF models, because its 2 KV heads make the cache unusually cheap; its native 131K is capped since wllama reserves the whole cache up front. Long-document retrieval is what it is best at. It emits tool calls in its own XML format rather than the <code>&lt;tool_call&gt;</code> JSON the other models use; LocalMind parses both. Short-horizon tool use is its strength &mdash; don&rsquo;t expect long multi-step agent runs to hold up.</li>
@@ -2581,7 +2582,7 @@
           <input type="password" id="hfTokenInput" class="settings-input" placeholder="hf_… (read access is enough)" autocomplete="off" spellcheck="false">
           <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
             Sent only to huggingface.co, as <code>Authorization: Bearer</code>, when LocalMind downloads
-            weights for the WebGPU-kernel models (LFM2.5, Ternary Bonsai 2) or looks up a custom
+            weights for the WebGPU-kernel models (LFM2.5, Gemma 4, Ternary Bonsai 2) or looks up a custom
             model. Unlocks gated repos and lifts you from the anonymous per-IP rate limit to your
             account's. Stored on this device only &mdash; never synced to the data folder, never sent anywhere else.
             <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">Create a read token</a>.
@@ -2710,6 +2711,7 @@
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
           <option value="lfm2-230m-gguf">LFM2.5 230M &middot; GGUF (~170 MB)</option>
           <option value="lfm2-230m-webgpu" selected>LFM2.5 230M &middot; WebGPU kernels (~140 MB)</option>
+          <option value="gemma4-e2b-webgpu">Gemma 4 E2B &middot; WebGPU kernels (~2 GB)</option>
           <option value="minicpm5-2b-gguf">MiniCPM5 2B &middot; GGUF (~1.6 GB)</option>
         </select>
       </div>
@@ -7502,13 +7504,20 @@ self.onmessage = async (e) => {
 };
   </script>
 
+  <!-- Gemma 4 E2B (QAT mobile) custom-WGSL WebGPU engine worker (from
+       webml-community/gemma-4-webgpu-kernels). Sibling of the LFM2 engine above:
+       a from-scratch WebGPU engine (gemma-4-e2b.js, exporting `Gemma4Mobile`) whose
+       kernels — QAT int4 matmul (gemm / split-K / sgmat variants), embed-gather-norm,
+       RoPE, RMSNorm, GQA + sliding-window attention — are hand-written WGSL reading
+       Google's QAT-mobile weights (google/gemma-4-E2B-it-qat-mobile-transformers)
+       directly. Same Gemma4Mobile API as Lfm2Mobile; same shared chat protocol. -->
   <script type="text/worker" id="engineWorkerPreludeSrc">
 // ── Shared engine-worker prelude ──────────────────────────────────────────
-// Prepended verbatim to every custom-WGSL engine worker (LFM2.5 /
+// Prepended verbatim to every custom-WGSL engine worker (LFM2.5 / Gemma 4 /
 // Ternary Bonsai 2): the hidden-tab rAF shim, the optional Hugging Face token,
 // and `engineFetch`, the streaming + resuming range-read wrapper the engines
 // take as `load(…, { fetch })`. In index.html it lives in #engineWorkerPreludeSrc
-// and the Bonsai 2 blob-worker factory splices it in; inference-worker.js (the
+// and the blob-worker factories splice it in; inference-worker.js (the
 // standalone, NakliOS-vendored entry point) carries a byte-identical copy,
 // enforced by scripts/test-engine-fetch.mjs. Edit both or neither.
 // The engine yields between load stages with requestAnimationFrame whenever that
@@ -7600,6 +7609,129 @@ const engineFetch = async (url, init = {}) => {
   return new Response(body, { status: first.status, statusText: first.statusText, headers: first.headers });
 };
 // ── End shared engine-worker prelude ──────────────────────────────────────
+  </script>
+  <script type="text/worker" id="gemma4WebgpuWorkerSrc">
+// The factory replaces __GEMMA4_ENGINE_URL__ with the engine's absolute same-origin URL.
+const ENGINE_URL = '__GEMMA4_ENGINE_URL__';
+
+let Gemma4Mobile = null;
+let model = null;
+let abortController = null;
+let stopFlag = false;
+let lastHistoryLen = 0; // tracks conversation length to reset KV state on a fresh chat
+
+const WEIGHTS_LABEL = 'Gemma 4 E2B (QAT)';
+const post = (m) => self.postMessage(m);
+// The hidden-tab rAF shim, `hfToken` and `engineFetch` come from the shared
+// prelude (#engineWorkerPreludeSrc) that the factory prepends to this source.
+
+self.onmessage = async (e) => {
+  const d = e.data || {};
+  try {
+    if (d.type === 'load') {
+      if (!Gemma4Mobile) ({ Gemma4Mobile } = await import(ENGINE_URL));
+      hfToken = (typeof d.hfToken === 'string' && d.hfToken.trim()) || null;
+      post({ type: 'progress', data: { status: 'initiate', file: WEIGHTS_LABEL } });
+      // load(modelId, opts): a repo id resolves the QAT-mobile weight root;
+      // null falls back to the engine's DEFAULT_MODEL_ID (the same repo).
+      model = await Gemma4Mobile.load(d.modelId || null, {
+        fetch: engineFetch,
+        onProgress: (ev) => {
+          if (!ev) return;
+          if (ev.status === 'weights' && ev.kind === 'tensors') {
+            // Post-download phases: tensor upload to the GPU (counted in tensors,
+            // not bytes — must not drive the MB bar), then kernel warmup.
+            const loaded = typeof ev.loaded === 'number' ? ev.loaded : null;
+            const total = typeof ev.total === 'number' ? ev.total : null;
+            if (loaded != null && total != null && total > 0) {
+              // No '/' in the label: the host splits `file` on '/' to show a basename.
+              post({ type: 'progress', data: { status: 'loading', file: `weights to GPU (${loaded} of ${total} tensors)` } });
+            } else {
+              post({ type: 'warmup' });
+            }
+          } else if (ev.status === 'weights') {
+            const loaded = typeof ev.loaded === 'number' ? ev.loaded : null;
+            const total = typeof ev.total === 'number' ? ev.total : null;
+            if (loaded != null && total != null && total > 0) {
+              post({ type: 'progress', data: { status: 'progress_total', file: WEIGHTS_LABEL, loaded, total } });
+            } else if (typeof ev.fraction === 'number') {
+              post({ type: 'progress', data: { status: 'progress_total', file: WEIGHTS_LABEL, loaded: Math.round(ev.fraction * 1000), total: 1000 } });
+            }
+          } else if (ev.status === 'tokenizer') {
+            post({ type: 'progress', data: { status: 'loading', file: 'tokenizer' } });
+          } else if (ev.status === 'init') {
+            post({ type: 'progress', data: { status: 'initiate', file: 'WebGPU device' } });
+          }
+        },
+      });
+      lastHistoryLen = 0;
+      try { if (typeof model.warmup === 'function') await model.warmup(); } catch (_) {}
+      post({ type: 'ready', backend: 'webgpu' });
+    } else if (d.type === 'generate') {
+      if (!model) { post({ type: 'error', message: 'Gemma 4 WebGPU model not loaded' }); return; }
+      stopFlag = false;
+      const cfg = d.generationConfig || {};
+      // The engine applies Gemma's chat template internally; it expects
+      // {role, content} text. Strip multimodal blocks to text; Gemma's template
+      // has no 'system' role, so fold system content into the first user turn and
+      // coerce any other non-standard role to 'user'.
+      let systemText = '';
+      const raw = (d.messages || []).map((m) => {
+        const content = typeof m.content === 'string' ? m.content
+          : Array.isArray(m.content) ? m.content.filter((b) => b && b.type === 'text').map((b) => b.text).join('\n')
+          : String(m.content == null ? '' : m.content);
+        return { role: m.role, content };
+      });
+      const msgs = [];
+      for (const m of raw) {
+        if (m.role === 'system') { systemText += (systemText ? '\n\n' : '') + m.content; continue; }
+        let role = (m.role === 'assistant') ? 'assistant' : 'user';
+        let content = m.content;
+        if (systemText && role === 'user') { content = systemText + '\n\n' + content; systemText = ''; }
+        msgs.push({ role, content });
+      }
+      if (systemText) msgs.unshift({ role: 'user', content: systemText }); // system-only history
+      const turnCount = msgs.length;
+      if ((turnCount <= 1 || msgs.length < lastHistoryLen) && typeof model.reset === 'function') {
+        try { model.reset(); } catch (_) {}
+      }
+      lastHistoryLen = msgs.length;
+      abortController = new AbortController();
+      let prev = '';
+      try {
+        // generate() yields { text } CUMULATIVE; the shared protocol streams DELTAS.
+        const stream = model.generate(msgs, {
+          maxNewTokens: cfg.max_new_tokens || cfg.max_tokens || 1024,
+          signal: abortController.signal,
+        });
+        for await (const out of stream) {
+          if (stopFlag) break;
+          const full = out && typeof out.text === 'string' ? out.text : '';
+          if (full.length > prev.length) {
+            post({ type: 'token', token: full.slice(prev.length) });
+            prev = full;
+          }
+        }
+      } catch (err) {
+        const s = String((err && err.message) || err);
+        if (!(stopFlag || s.toLowerCase().includes('abort'))) throw err;
+      }
+      post({ type: 'complete' });
+    } else if (d.type === 'stop') {
+      stopFlag = true;
+      if (abortController) { try { abortController.abort(); } catch (_) {} }
+    } else if (d.type === 'unload') {
+      stopFlag = true;
+      if (abortController) { try { abortController.abort(); } catch (_) {} }
+      try { if (model && typeof model.reset === 'function') model.reset(); } catch (_) {}
+      try { if (model && typeof model.dispose === 'function') model.dispose(); } catch (_) {}
+      model = null;
+      lastHistoryLen = 0;
+    }
+  } catch (err) {
+    post({ type: 'error', message: (err && err.message) || String(err) });
+  }
+};
   </script>
   <script type="text/worker" id="ternaryBonsai2WebgpuWorkerSrc">
 // The factory replaces __TERNARY_BONSAI2_ENGINE_URL__ / __TERNARY_BONSAI2_DFLASH_URL__ with the
@@ -8153,7 +8285,6 @@ self.addEventListener('message', async (e) => {
       'onnx-community/Ternary-Bonsai-1.7B-ONNX', 'onnx-community/Ternary-Bonsai-8B-ONNX',
       'LiquidAI/LFM2.5-230M-ONNX', 'onnx-community/LFM2-8B-A1B-ONNX', 'HuggingFaceTB/SmolLM3-3B-ONNX',
       'onnx-community/gemma-3-1b-it-ONNX', 'onnx-community/gemma-3-1b-it-ONNX-GQA',
-      'google/gemma-4-E2B-it-qat-mobile-transformers', // Gemma 4 kernels engine (IndexedDB 'safetensors-cache-v1')
       'bartowski/SmolLM2-360M-Instruct-GGUF', 'Qwen/Qwen2.5-1.5B-Instruct-GGUF', 'bartowski/Llama-3.2-1B-Instruct-GGUF',
       'lmstudio-community/Bonsai-27B-GGUF', // 1-bit Bonsai 27B v1 (IndexedDB 'gguf-cache-v1'; 3.8 GB on the live origin)
       'onnx-community/Apertus-v1.1-4B-Instruct-ONNX', 'onnx-community/Qwen3-4B-ONNX',
@@ -8305,6 +8436,28 @@ self.addEventListener('message', async (e) => {
         // webml-community/lfm2-webgpu-kernels Space (Q4_0 GGUF, ~140 MB). The
         // engine resolves the repo id → LFM2.5-230M-Q4_0.gguf itself. WebGPU-only
         // (no CPU fallback like wllama), aimed at maximal decode throughput.
+        genConfig: { max_new_tokens: 2048 },
+      },
+      // backend:'gemma4-webgpu' → loaded by the custom-WGSL Gemma4Mobile engine
+      // (gemma-4-e2b.js), a from-scratch WebGPU engine for Gemma 4 E2B (QAT mobile):
+      // hand-written WGSL for QAT int4 matmul (gemm / split-K / sgmat), embed-gather-
+      // norm, RoPE, RMSNorm, GQA + sliding-window attention — reading Google's
+      // QAT-mobile weights directly. Engine resolves the repo id itself and applies
+      // Gemma's chat template internally, so genConfig only carries max_new_tokens.
+      'gemma4-e2b-webgpu': {
+        id: 'google/gemma-4-E2B-it-qat-mobile-transformers',
+        label: 'Gemma 4 E2B · WebGPU kernels',
+        backend: 'gemma4-webgpu',
+        size: '~2 GB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 32768,
+        // Google's Gemma 4 E2B QAT-mobile run on the hand-written WebGPU kernels
+        // from the webml-community/gemma-4-webgpu-kernels Space. Quantization-aware
+        // int4 (smaller + higher fidelity than post-hoc q4); decodes ~3.6x the ONNX E2B (57 vs 16
+        // tok/s, M4 Pro, 2026-09-24 bench).
+        // WebGPU-only (no CPU fallback). Text-only here (this engine is a decoder).
         genConfig: { max_new_tokens: 2048 },
       },
       // backend:'bonsai2-webgpu' → loaded by the custom-WGSL TernaryBonsai2 engine
@@ -13772,8 +13925,10 @@ ${JSON.stringify({ name, result })}
         // generateOnce() — is shared.
         const isWllama = options.backend === 'wllama';
         const isLfm2Webgpu = options.backend === 'lfm2-webgpu';
+        const isGemma4Webgpu = options.backend === 'gemma4-webgpu';
         const isBonsai2Webgpu = options.backend === 'bonsai2-webgpu';
         const w = isLfm2Webgpu ? createLfm2WebgpuWorker()
+          : isGemma4Webgpu ? createGemma4WebgpuWorker()
           : isBonsai2Webgpu ? createTernaryBonsai2WebgpuWorker()
           : isWllama ? createWllamaWorker()
           : createWorker();
@@ -13810,8 +13965,8 @@ ${JSON.stringify({ name, result })}
             cleanup();
             reject(new Error(ev.message || 'Worker startup failed'));
           });
-          if (isWllama || isLfm2Webgpu || isBonsai2Webgpu) {
-            // The LFM2 engine ignores contextSize (it reads it from the
+          if (isWllama || isLfm2Webgpu || isGemma4Webgpu || isBonsai2Webgpu) {
+            // The LFM2/Gemma engines ignore contextSize (they read it from the
             // model metadata); the Bonsai 2 worker passes it to the engine as
             // maxLength. The shared load message shape is harmless either way.
             // hfToken (Settings → Models) rides along for the three custom-WGSL
@@ -14706,13 +14861,33 @@ self.addEventListener('message', async (e) => {
       return w;
     }
 
-    // Shared prelude for the blob-built engine worker (rAF shim, HF token,
+    // Shared prelude for the blob-built engine workers (rAF shim, HF token,
     // streaming/resuming range wrapper). inference-worker.js carries its own copy.
     function engineWorkerPrelude() {
       const src = document.getElementById('engineWorkerPreludeSrc');
       const code = src ? src.textContent : '';
       if (!code) throw new Error('engine worker prelude missing');
       return code;
+    }
+
+    // ── Gemma 4 WebGPU-kernels worker factory (custom-WGSL Gemma4Mobile engine) ──
+    // Twin of createLfm2WebgpuWorker(): prepends the shared prelude, reads
+    // #gemma4WebgpuWorkerSrc, injects the vendored gemma-4-e2b.js engine's
+    // absolute same-origin URL, and builds a blob
+    // module worker that speaks the shared chat protocol.
+    function createGemma4WebgpuWorker() {
+      const src = document.getElementById('gemma4WebgpuWorkerSrc');
+      let code = src ? src.textContent : '';
+      if (!code) throw new Error('Gemma 4 WebGPU worker source missing');
+      const engineUrl = new URL('gemma-4-e2b.js', document.baseURI).href;
+      code = engineWorkerPrelude() + code.replaceAll('__GEMMA4_ENGINE_URL__', engineUrl);
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url, { type: 'module' });
+      w.addEventListener('error', (e) => {
+        console.error('Gemma 4 WebGPU worker error:', e.message);
+      });
+      return w;
     }
 
     // ── Ternary Bonsai 2 27B WebGPU-kernels worker factory (custom-WGSL TernaryBonsai2 engine) ──

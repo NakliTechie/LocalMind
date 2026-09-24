@@ -29,11 +29,11 @@ let lastHistoryLen = 0;
 let activeRequestId = null;
 
 // ── Shared engine-worker prelude ──────────────────────────────────────────
-// Prepended verbatim to every custom-WGSL engine worker (LFM2.5 /
+// Prepended verbatim to every custom-WGSL engine worker (LFM2.5 / Gemma 4 /
 // Ternary Bonsai 2): the hidden-tab rAF shim, the optional Hugging Face token,
 // and `engineFetch`, the streaming + resuming range-read wrapper the engines
 // take as `load(…, { fetch })`. In index.html it lives in #engineWorkerPreludeSrc
-// and the Bonsai 2 blob-worker factory splices it in; inference-worker.js (the
+// and the blob-worker factories splice it in; inference-worker.js (the
 // standalone, NakliOS-vendored entry point) carries a byte-identical copy,
 // enforced by scripts/test-engine-fetch.mjs. Edit both or neither.
 // The engine yields between load stages with requestAnimationFrame whenever that
