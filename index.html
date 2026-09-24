@@ -15242,6 +15242,89 @@ function __shouldIntercept(url) {
   return typeof url === 'string' && url.indexOf('https://huggingface.co/') === 0;
 }
 
+// STALL-GUARD-START
+// A wedged Hugging Face connection stops delivering bytes without erroring, so a
+// plain reader.read() waits forever and the progress bar freezes (five times in
+// one Qwen3.5 4B cold load on 2026-09-24; only a page reload recovered). Here
+// every open and every body read is bounded: no response headers, or no bytes,
+// for __STALL_MS aborts that connection and the body reopens with
+// Range: bytes=<next undelivered byte>- . Bytes arriving reset the retry budget,
+// so a slow link that keeps delivering is never cut off; a link that delivers
+// nothing through __STALL_RETRIES reopens fails the load with an error instead
+// of a silent freeze (the 5 MB chunks already saved resume on the next load).
+const __STALL_MS = 30000;
+const __STALL_RETRIES = 5;
+
+async function __openRange(url, from, fetchImpl) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(new Error('no response headers in ' + __STALL_MS + ' ms')), __STALL_MS);
+  try {
+    const resp = await fetchImpl(url, { headers: { Range: 'bytes=' + from + '-' }, signal: ctl.signal });
+    return { resp, ctl };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Bytes [from, total) of url as { open, read, cancel }. open() makes the first
+// connection eagerly so a caller can still fall back if it fails outright.
+function __stallGuardedBody(url, from, total, fetchImpl) {
+  let offset = from;
+  let ctl = null;
+  let reader = null;
+  let retries = 0;
+  const drop = () => {
+    try { if (ctl) ctl.abort(); } catch {}
+    try { if (reader) reader.cancel().catch(() => {}); } catch {}
+    ctl = null;
+    reader = null;
+  };
+  const backoff = () => new Promise((res) => setTimeout(res, Math.min(1000 * retries, 5000)));
+  const open = async () => {
+    for (;;) {
+      let err;
+      try {
+        const next = await __openRange(url, offset, fetchImpl);
+        const status = next.resp.status;
+        if (next.resp.body && (status === 206 || (status === 200 && offset === 0))) {
+          ctl = next.ctl;
+          reader = next.resp.body.getReader();
+          return;
+        }
+        try { next.ctl.abort(); } catch {}
+        err = new Error('HTTP ' + status + ' reopening ' + url + ' at byte ' + offset);
+      } catch (e) {
+        err = e;
+      }
+      if (++retries > __STALL_RETRIES) throw err;
+      await backoff();
+    }
+  };
+  const read = async () => {
+    for (;;) {
+      if (offset >= total) { drop(); return { done: true, value: undefined }; }
+      if (!reader) await open();
+      let timer;
+      try {
+        const stalled = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('download stalled: no bytes in ' + __STALL_MS + ' ms')), __STALL_MS);
+        });
+        const r = await Promise.race([reader.read(), stalled]);
+        if (!r.done) { offset += r.value.byteLength; retries = 0; }
+        return r;
+      } catch (err) {
+        drop();
+        if (++retries > __STALL_RETRIES) throw err;
+        await backoff();
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  };
+  return { open, read, cancel: drop };
+}
+// STALL-GUARD-END
+
 const __origFetch = self.fetch.bind(self);
 
 self.fetch = async function(input, init) {
@@ -15302,8 +15385,9 @@ self.fetch = async function(input, init) {
     }
 
     const startByte = firstMissing * __RDB_CHUNK;
-    const rangeResp = await __origFetch(urlStr, { headers: { Range: 'bytes=' + startByte + '-' } });
-    if (!rangeResp.ok) { closeDb(); return __origFetch(input, init); }
+    const body = __stallGuardedBody(urlStr, startByte, totalSize, __origFetch);
+    try { await body.open(); }
+    catch { closeDb(); return __origFetch(input, init); }
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -15312,7 +15396,7 @@ self.fetch = async function(input, init) {
             const buf = await existing[i].arrayBuffer();
             controller.enqueue(new Uint8Array(buf));
           }
-          const reader = rangeResp.body.getReader();
+          const reader = body;
           let accum = new Uint8Array(__RDB_CHUNK);
           let accumLen = 0;
           let chunkIdx = firstMissing;
@@ -15347,7 +15431,7 @@ self.fetch = async function(input, init) {
           closeDb();
         }
       },
-      cancel() { closeDb(); },
+      cancel() { body.cancel(); closeDb(); },
     });
 
     return new Response(stream, {
