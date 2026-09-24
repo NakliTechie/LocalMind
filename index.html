@@ -15268,10 +15268,12 @@ async function __openRange(url, from, fetchImpl) {
 
 // Bytes [from, total) of url as { open, read, cancel }. open() makes the first
 // connection eagerly so a caller can still fall back if it fails outright.
-function __stallGuardedBody(url, from, total, fetchImpl) {
+// 'first' is an optional already-open { resp, ctl } (a 200/206 with a body) to
+// read before any reopen; 'total' may be Infinity when the size is unknown.
+function __stallGuardedBody(url, from, total, fetchImpl, first) {
   let offset = from;
-  let ctl = null;
-  let reader = null;
+  let ctl = first ? first.ctl : null;
+  let reader = first ? first.resp.body.getReader() : null;
   let retries = 0;
   const drop = () => {
     try { if (ctl) ctl.abort(); } catch {}
@@ -15323,6 +15325,70 @@ function __stallGuardedBody(url, from, total, fetchImpl) {
   };
   return { open, read, cancel: drop };
 }
+
+// Headers-only bound for requests whose bodies are tiny or not ours to rewrite:
+// the HEAD size probe and transformers.js's own 'Range: bytes=0-0' existence
+// probe. No headers in __STALL_MS aborts and retries; the caller's signal wins.
+async function __boundedFetch(input, init, fetchImpl) {
+  const caller = init && init.signal;
+  let lastErr;
+  for (let attempt = 0; attempt <= __STALL_RETRIES; attempt++) {
+    if (caller && caller.aborted) throw caller.reason;
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(new Error('no response headers in ' + __STALL_MS + ' ms')), __STALL_MS);
+    const signal = caller ? AbortSignal.any([caller, ctl.signal]) : ctl.signal;
+    try {
+      return await fetchImpl(input, Object.assign({}, init, { signal }));
+    } catch (e) {
+      lastErr = e;
+      if (caller && caller.aborted) throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+    await new Promise((res) => setTimeout(res, Math.min(1000 * (attempt + 1), 5000)));
+  }
+  throw lastErr;
+}
+
+// A whole-file GET with the same stall guard as the resumable path, for files
+// that path does not take (under 5 MB, resumable downloads off, or its own
+// fallbacks). A non-2xx answer (a 404 for an optional file) is returned as is.
+async function __guardedGet(url, fetchImpl) {
+  let first = null;
+  let lastErr;
+  for (let attempt = 0; attempt <= __STALL_RETRIES && !first; attempt++) {
+    try {
+      const opened = await __openRange(url, 0, fetchImpl);
+      const status = opened.resp.status;
+      if ((status === 200 || status === 206) && opened.resp.body) first = opened;
+      else if (status === 408 || status === 429 || status >= 500) lastErr = new Error('HTTP ' + status + ' on ' + url);
+      else return opened.resp;
+    } catch (e) {
+      lastErr = e;
+    }
+    if (!first) await new Promise((res) => setTimeout(res, Math.min(1000 * (attempt + 1), 5000)));
+  }
+  if (!first) throw lastErr;
+  const len = Number(first.resp.headers.get('content-length'));
+  const total = first.resp.status === 206 || !len ? (Number((first.resp.headers.get('content-range') || '').split('/')[1]) || Infinity) : len;
+  const body = __stallGuardedBody(url, 0, total, fetchImpl, first);
+  const headers = new Headers({ 'content-type': first.resp.headers.get('content-type') || 'application/octet-stream' });
+  if (Number.isFinite(total)) headers.set('content-length', String(total));
+  const etag = first.resp.headers.get('etag');
+  if (etag) headers.set('etag', etag);
+  return new Response(new ReadableStream({
+    async pull(controller) {
+      try {
+        const r = await body.read();
+        if (r.done) controller.close();
+        else controller.enqueue(r.value);
+      } catch (e) {
+        controller.error(e);
+      }
+    },
+    cancel() { body.cancel(); },
+  }), { status: 200, headers });
+}
 // STALL-GUARD-END
 
 const __origFetch = self.fetch.bind(self);
@@ -15330,19 +15396,22 @@ const __origFetch = self.fetch.bind(self);
 self.fetch = async function(input, init) {
   const urlStr = typeof input === 'string' ? input : (input && input.url);
   const method = (init && init.method) || (input && input.method) || 'GET';
-  if (!__resumableEnabled || method !== 'GET' || !__shouldIntercept(urlStr)) {
+  if ((method !== 'GET' && method !== 'HEAD') || !__shouldIntercept(urlStr)) {
     return __origFetch(input, init);
   }
+  const callerRange = init && init.headers ? new Headers(init.headers).get('range') : null;
+  if (method === 'HEAD' || callerRange) return __boundedFetch(input, init, __origFetch);
+  if (!__resumableEnabled) return __guardedGet(urlStr, __origFetch);
 
   let db;
   try { db = await __openRDB(); }
-  catch { return __origFetch(input, init); }
+  catch { return __guardedGet(urlStr, __origFetch); }
 
   const closeDb = () => { try { db.close(); } catch {} };
 
   try {
-    const headResp = await __origFetch(urlStr, { method: 'HEAD' });
-    if (!headResp.ok) { closeDb(); return __origFetch(input, init); }
+    const headResp = await __boundedFetch(urlStr, { method: 'HEAD' }, __origFetch);
+    if (!headResp.ok) { closeDb(); return __guardedGet(urlStr, __origFetch); }
 
     const totalSize = parseInt(headResp.headers.get('content-length'), 10);
     const etag = headResp.headers.get('etag') || headResp.headers.get('last-modified') || '';
@@ -15350,7 +15419,7 @@ self.fetch = async function(input, init) {
 
     if (!totalSize || totalSize < __RDB_CHUNK) {
       closeDb();
-      return __origFetch(input, init);
+      return __guardedGet(urlStr, __origFetch);
     }
 
     let meta = await __rdbGet(db, 'meta', urlStr);
@@ -15387,7 +15456,7 @@ self.fetch = async function(input, init) {
     const startByte = firstMissing * __RDB_CHUNK;
     const body = __stallGuardedBody(urlStr, startByte, totalSize, __origFetch);
     try { await body.open(); }
-    catch { closeDb(); return __origFetch(input, init); }
+    catch { closeDb(); return __guardedGet(urlStr, __origFetch); }
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -15443,7 +15512,7 @@ self.fetch = async function(input, init) {
     });
   } catch {
     closeDb();
-    return __origFetch(input, init);
+    return __guardedGet(urlStr, __origFetch);
   }
 };
 
