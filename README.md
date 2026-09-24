@@ -48,7 +48,7 @@ Two GGUF models ship in the picker: LFM2.5 230M (the CPU fallback when there is 
 
 ### Custom WebGPU engine (the default)
 
-The default model, **LFM2.5 230M**, runs on a **from-scratch WebGPU inference engine** — every kernel (matmul, attention, RoPE, RMSNorm, the int4 dequant) is hand-written WGSL, reading the quantized weights directly with **no ONNX runtime and no llama.cpp**. At ~140 MB it downloads in seconds and decodes at ~670 tokens/sec on an M4 Pro — about 8× the same model on ONNX — so you're chatting almost immediately. **Gemma 4 E2B** runs on the same approach at ~57 tok/s, 3.6× its ONNX build, and it scales all the way up to **Ternary Bonsai 2 27B**, a 27B-parameter model (ternary, ~5.9 GB) running entirely in the tab. All are WebGPU-only.
+The default model, **LFM2.5 230M**, runs on a **from-scratch WebGPU inference engine** — every kernel (matmul, attention, RoPE, RMSNorm, the int4 dequant) is hand-written WGSL, reading the quantized weights directly with **no ONNX runtime and no llama.cpp**. At ~140 MB it downloads in seconds and decodes at ~1,060 tokens/sec on an M4 Pro — 3.6× the same model on ONNX — so you're chatting almost immediately. **Gemma 4 E2B** runs on the same approach at ~170 tok/s, 4× its ONNX build, and it scales all the way up to **Ternary Bonsai 2 27B**, a 27B-parameter model (ternary, ~5.9 GB) running entirely in the tab. All are WebGPU-only.
 
 These engines are ported, largely verbatim, from the open-source [`webml-community`](https://huggingface.co/webml-community) Spaces on Hugging Face — [`lfm2-webgpu-kernels`](https://huggingface.co/spaces/webml-community/lfm2-webgpu-kernels), [`gemma-4-webgpu-kernels`](https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels), and [`ternary-bonsai-2-webgpu-kernels`](https://huggingface.co/spaces/webml-community/ternary-bonsai-2-webgpu-kernels) (the 27B). `webml-community` is the home of [**Transformers.js**](https://github.com/huggingface/transformers.js), the in-browser ML library by **[Xenova](https://github.com/xenova) (Joshua Lochner)** at Hugging Face — the foundation this entire project is built on, and where these WebGPU-kernel engines come from. LocalMind's contribution is the integration: adapting each engine's stream into the shared chat protocol and slotting it in next to the other backends. The Gemma engine also has a standalone home at [tylerstraub/gemma4-webgpu](https://github.com/tylerstraub/gemma4-webgpu). **Full credit for Transformers.js and the WGSL kernels goes upstream.**
 
@@ -98,6 +98,7 @@ Works in **Chrome / Edge 113+** and **Firefox 130+** — in-browser models need 
 - 📖 **[Full feature guide](./FEATURES.md)** — models, agent tools, memory, web search, batch, sharing, MCP, custom models, and more
 - 🛠️ **[How it works](./ARCHITECTURE.md)** — architecture, the runtimes, workers, and tech stack
 - 🧑‍💻 **[Developer API](./API.md)** — drive the model from your own page (`window.localmind`)
+- ⏱️ **Benchmark the engines yourself** — `node scripts/bench-engines.mjs` drives Chrome through that API and prints decode tok/s per engine (same model, same prompt, exact token counts)
 - 🗺️ **[Roadmap](./ROADMAP.md)** — what's shipped and what's next
 
 ## Acknowledgments

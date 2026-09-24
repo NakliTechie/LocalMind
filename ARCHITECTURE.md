@@ -101,6 +101,13 @@ Zero build tooling. One HTML file (~20k lines, ~1 MB), the DOM-free
 Everything else loads from CDN with SRI where possible.
 
 Deploy by serving `index.html`, `inference-worker.js` and the four engine
-modules together from any static host. GitHub Pages, Netlify, S3, or
+modules together from any static host.
+
+`scripts/bench-engines.mjs` measures the engines against each other: it launches Chrome over the
+DevTools protocol, drives the page through `window.localmind` (no tools, greedy, 256 tokens, 3 runs,
+run 1 as warm-up) and counts output tokens in the page with each model's own `tokenizer.json`.
+`--suite engines` compares the hand-written WGSL engines with Transformers.js and wllama on the same
+model; `--suite dflash` measures Ternary Bonsai 2 27B plain against DFlash 2 on code and prose, and checks
+the two outputs are byte-identical. GitHub Pages, Netlify, S3, or
 `python3 -m http.server` all work. They must be served over HTTP — `file://`
 won't work because ES module workers and WebGPU both require an HTTP origin.
