@@ -110,4 +110,26 @@ assert.match(imageSource, /type: 'progress'/);
 assert.match(imageSource, /type: 'image'/);
 assert.match(protocol, /Image protocol/);
 
+// Image Steps is per engine: the in-tab turbo models want ~4, a server flow model ~20.
+// The outgoing value must be read BEFORE `max` is lowered — a range input clamps its
+// value the moment max shrinks, so reading after would remember the clamp, not the choice.
+assert.match(indexSource, /const imageStepsByEngine = \{ tab: 4, server: 20 \};/);
+const stepsSync = indexSource.slice(indexSource.indexOf('async function syncImageEngineUi'));
+const leavingAt = stepsSync.indexOf('const leaving = parseInt(imageStepsInput.value');
+const maxAt = stepsSync.indexOf('imageStepsInput.max = server ? 50 : 20;');
+assert.ok(leavingAt > -1 && maxAt > -1, 'syncImageEngineUi must keep per-engine step counts');
+assert.ok(leavingAt < maxAt, 'the outgoing Steps value must be read before imageStepsInput.max is lowered');
+
+// The DFlash drafter is downloaded on purpose but is not a picker entry, so the
+// model-cache list needs an explicit label for it. Pin the key to DRAFTER_URL:
+// the row is grouped by the repo `repoOfUrl` extracts, so the two must agree.
+const drafterUrl = indexSource.match(/const DRAFTER_URL = '([^']+)'/);
+assert.ok(drafterUrl, 'DRAFTER_URL must be declared in the Bonsai 2 worker');
+const drafterRepo = drafterUrl[1].match(/huggingface\.co\/([^/]+\/[^/]+)/)[1];
+assert.match(
+  indexSource,
+  new RegExp(`COMPONENT_CACHE_LABELS = \\{\\s*'${drafterRepo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}':`),
+  'COMPONENT_CACHE_LABELS must name the repo DRAFTER_URL points at',
+);
+
 console.log('LocalMind inference workers and host catalog: ok');

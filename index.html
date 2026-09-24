@@ -9763,13 +9763,19 @@ self.addEventListener('message', async (e) => {
     }
     // Every picker entry backed by this repo (the 230M GGUF and WebGPU-kernels
     // entries share one), joined for the row label; null when none is.
+    // Weights the app downloads on purpose that are not picker entries, so the
+    // model-cache list names them instead of falling through to "not in the picker".
+    const COMPONENT_CACHE_LABELS = {
+      'naklitechie/Qwen3.8-27B-DFlash2-ternary-bonsai2': 'DFlash 2 drafter \u00b7 Ternary Bonsai 2',
+    };
     function registryLabelForRepo(repo) {
       const labels = [];
       for (const m of Object.values(MODELS)) {
         const id = String(m.id || '');
         if (id === repo || (id.startsWith('http') && repoOfUrl(id) === repo)) labels.push(m.label);
       }
-      return labels.length ? labels.join(' / ') : null;
+      if (labels.length) return labels.join(' / ');
+      return COMPONENT_CACHE_LABELS[repo] || null;
     }
     const fmtBytes = (n) => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : Math.round(n / 1048576) + ' MB';
     const idbReq = (req) => new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
@@ -17803,6 +17809,9 @@ self.addEventListener('message', async (e) => {
     const imageSizeSel      = document.getElementById('imageSize');
     const imageStepsInput   = document.getElementById('imageSteps');
     const imageStepsVal     = document.getElementById('imageStepsVal');
+    // Per-engine step counts: the in-tab turbo models want ~4, a server flow model ~20.
+    const imageStepsByEngine = { tab: 4, server: 20 };
+    let imageStepsWasServer = false;
     const imageSeedInput    = document.getElementById('imageSeed');
     const imageProgressFill = document.getElementById('imageProgressFill');
     const imageProgressText = document.getElementById('imageProgressText');
@@ -17829,9 +17838,19 @@ self.addEventListener('message', async (e) => {
       imageEndpointRow.style.display = server ? '' : 'none';
       imageCfgRow.style.display = server ? '' : 'none';
       // Bonsai is a 4-step turbo model; a server-side flow model wants ~20 steps.
+      // Each engine keeps its own step count, so switching back does not leave the
+      // turbo model grinding through the server's 20 (5x slower, no better).
+      // Read the outgoing value BEFORE touching max: lowering a range input's max
+      // clamps its value on the spot, which would remember the clamp, not the choice.
+      const leaving = parseInt(imageStepsInput.value, 10) || (imageStepsWasServer ? 20 : 4);
       imageStepsInput.max = server ? 50 : 20;
-      if (server && parseInt(imageStepsInput.value, 10) < 10) { imageStepsInput.value = 20; imageStepsVal.textContent = '20'; }
-      if (!server && parseInt(imageStepsInput.value, 10) > 20) { imageStepsInput.value = 4; imageStepsVal.textContent = '4'; }
+      if (server !== imageStepsWasServer) {
+        imageStepsByEngine[imageStepsWasServer ? 'server' : 'tab'] = leaving;
+        const want = imageStepsByEngine[server ? 'server' : 'tab'];
+        imageStepsInput.value = String(want);
+        imageStepsVal.textContent = String(want);
+        imageStepsWasServer = server;
+      }
       if (!server) return;
       try { localStorage.setItem('lm_image_endpoint_url', imageEndpointInput.value.trim()); } catch {}
       imageProgressText.textContent = 'Checking the local image server…';
