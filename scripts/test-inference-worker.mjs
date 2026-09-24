@@ -34,6 +34,14 @@ const bonsai2Engine = await readFile(new URL('../ternary_bonsai_2_27b.js', impor
 assert.match(bonsai2Engine, /export\{[^}]*zl as TernaryBonsai2[^}]*\}/);
 assert.match(bonsai2Engine, /var Ri="prism-ml\/Ternary-Bonsai-2-27B-gguf",Cl="Ternary-Bonsai-2-27B-PTQ1_0\.gguf"/);
 assert.match(indexSource, /id="ternaryBonsai2WebgpuWorkerSrc"/);
+// Image mode: its caption must not read like the Diffuse mode's ("On-device diffusion"), and both
+// server-engine failure sites name Chrome's local-network permission as a possible cause.
+assert.doesNotMatch(indexSource, /activeMode === 'image' \? \([^\n]*On-device diffusion/);
+assert.match(indexSource, /No image server at ' \+ imageServerBase\(\) \+ [^\n]*endpointErrorMessage\(e, imageServerBase\(\)\)/);
+assert.match(indexSource, /const emsg = isImageServer\(\) \? endpointErrorMessage\(e, imageServerBase\(\)\)/);
+assert.match(indexSource, /async function syncImageEngineUi\(\) \{[^]*?if \(activeMode === 'image'\) refreshModeUI\(\);\s*if \(!server\) return;/);
+// ...and leaving the server engine clears its readiness line (it kept saying "No image server").
+assert.match(indexSource, /const leaving = [^\n]*\n[^]*?if \(!server && imageStepsWasServer\) \{\s*imageProgressFill\.style\.width = '0%';\s*imageProgressText\.textContent = imageIdleText\(\);/);
 assert.match(indexSource, /new URL\('ternary_bonsai_2_27b\.js', document\.baseURI\)/);
 assert.match(indexSource, /\(\{ TernaryBonsai2 \} = await import\(ENGINE_URL\)\)/);
 assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',\s*label: 'Ternary Bonsai 2 27B',\s*backend: 'bonsai2-webgpu'/);

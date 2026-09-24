@@ -18065,6 +18065,12 @@ self.addEventListener('message', async (e) => {
       // Read the outgoing value BEFORE touching max: lowering a range input's max
       // clamps its value on the spot, which would remember the clamp, not the choice.
       const leaving = parseInt(imageStepsInput.value, 10) || (imageStepsWasServer ? 20 : 4);
+      // Leaving the server engine: its readiness line ("Local server ready" / "No image
+      // server at …") no longer describes anything, so show the in-tab idle line.
+      if (!server && imageStepsWasServer) {
+        imageProgressFill.style.width = '0%';
+        imageProgressText.textContent = imageIdleText();
+      }
       imageStepsInput.max = server ? 50 : 20;
       if (server !== imageStepsWasServer) {
         imageStepsByEngine[imageStepsWasServer ? 'server' : 'tab'] = leaving;
@@ -18073,6 +18079,9 @@ self.addEventListener('message', async (e) => {
         imageStepsVal.textContent = String(want);
         imageStepsWasServer = server;
       }
+      // The Image caption and the input lock depend on the engine; switching engines
+      // inside Image mode must refresh them, not only a mode change.
+      if (activeMode === 'image') refreshModeUI();
       if (!server) return;
       try { localStorage.setItem('lm_image_endpoint_url', imageEndpointInput.value.trim()); } catch {}
       imageProgressText.textContent = 'Checking the local image server…';
@@ -18085,7 +18094,7 @@ self.addEventListener('message', async (e) => {
         imageProgressText.textContent = names.length ? `Local server ready · ${names.join(', ')}. Type a prompt and Send.` : 'Local server ready. Type a prompt and Send.';
       } catch (e) {
         imageModelMeta.textContent = '';
-        imageProgressText.textContent = 'No image server at ' + imageServerBase() + ' — start sd-server (stable-diffusion.cpp) and pick a model there, then Send. (' + ((e && e.message) || e) + ')';
+        imageProgressText.textContent = 'No image server at ' + imageServerBase() + ' — start sd-server (stable-diffusion.cpp) and pick a model there, then Send. (' + endpointErrorMessage(e, imageServerBase()) + ')';
       }
     }
     imageModelSelect.addEventListener('change', () => { syncImageEngineUi(); });
@@ -18224,7 +18233,7 @@ self.addEventListener('message', async (e) => {
       modeHint.textContent =
         activeMode === 'batch' ? 'Each line runs as its own prompt, in sequence.' :
         activeMode === 'research' ? 'Searches the web, reads sources, writes a cited report.' :
-        activeMode === 'image' ? (isImageServer() ? 'Local image server — the chat model stays loaded; nothing leaves this machine.' : 'On-device diffusion — frees the chat model while active.') :
+        activeMode === 'image' ? (isImageServer() ? 'Local image server — the chat model stays loaded; nothing leaves this machine.' : 'Generates images on-device — frees the chat model while active.') :
         activeMode === 'diffuse' ? 'Masked-diffusion text — the answer fills in non-linearly. Frees the chat model.' :
         activeMode === 'ocr' ? 'Extracts text from images / PDFs on-device. Frees the chat model while active.' :
         activeMode === 'vision' ? 'Describes your camera or an image on-device — frees the chat model while active.' :
@@ -18422,7 +18431,8 @@ self.addEventListener('message', async (e) => {
         chatArea.scrollTop = chatArea.scrollHeight;
         imageProgressText.textContent = `Done in ${(ms / 1000).toFixed(1)}s. Adjust controls and Send again, or re-roll for a new seed.`;
       } catch (e) {
-        const emsg = (e && e.message) || String(e);
+        // A server-engine network failure may be Chrome's local-network permission, not a dead server.
+        const emsg = isImageServer() ? endpointErrorMessage(e, imageServerBase()) : ((e && e.message) || String(e));
         ph.bubble.innerHTML = '';
         const er = document.createElement('div');
         er.className = 'gen-image-meta';
@@ -18436,10 +18446,13 @@ self.addEventListener('message', async (e) => {
       }
     }
 
+    function imageIdleText() {
+      return 'Type a prompt below and Send. First run downloads the model (~3\u00a0GB, cached after). Best on Chrome/Edge.';
+    }
     function onLeaveImageMode() {
       try { LocalMind.runtime.unloadImage(); } catch {}
       imageProgressFill.style.width = '0%';
-      imageProgressText.textContent = 'Type a prompt below and Send. First run downloads the model (~3GB, cached after). Best on Chrome/Edge.';
+      imageProgressText.textContent = imageIdleText();
       maybeRestoreChat();
     }
 
