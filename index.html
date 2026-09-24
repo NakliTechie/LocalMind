@@ -8982,11 +8982,80 @@ self.addEventListener('message', async (e) => {
         }));
     }
 
-    // ── Agent: Context Budget Helper ────────────────────────────
-    function approxTokens(text) {
-      if (!text) return 0;
-      return Math.ceil(String(text).length / 3.5);
+    // ── Agent: token counting ───────────────────────────────────
+    // TOKEN-COUNT-START (extracted by scripts/test-token-count.mjs — keep the markers)
+    // A single chars/N constant cannot be right. The same character costs
+    // 0.20 tokens in Latin and 2.98 tokens in Gurmukhi on LFM2.5, and the ratio
+    // differs per tokenizer as well as per script: Gemma 4 spends 0.28 tokens on
+    // a Devanagari character where LFM2.5 spends 1.50. The old chars/3.5 guess
+    // assumed 0.286 everywhere, so it undercounted Kannada on LFM2.5 by ~10x —
+    // the budget passed and the window overflowed anyway.
+    //
+    // Weights are TOKENS PER CHARACTER, fitted by coordinate descent against each
+    // model's own tokenizer over a 42-sample corpus (20 scripts, prose, chat, code,
+    // JSON and mixed). Worst case on that corpus is -17% under / +20% over, against
+    // up to -90% before. The corpus and the fitted numbers are pinned in
+    // scripts/test-token-count.mjs; regenerate both together or not at all.
+    const TOKEN_CLASSES = ['latin', 'sym', 'deva', 'beng', 'guru', 'gujr', 'orya', 'taml', 'telu', 'knda', 'mlym', 'arab', 'cyrl', 'cjk', 'other'];
+    const TOKEN_WEIGHTS = {
+      qwen:     [0.196, 0.549, 0.473, 0.515, 0.933, 0.717, 1.011, 0.488, 0.644, 0.612, 0.615, 0.291, 0.236, 0.371, 2.845],
+      bonsai4b: [0.203, 0.476, 1.114, 1.251, 1.796, 1.749, 2.372, 1.276, 1.703, 1.6, 1.539, 0.378, 0.329, 0.634, 0.593],
+      lfm2:     [0.206, 0.582, 1.5, 2.36, 2.978, 2.973, 2.98, 2.502, 2.972, 2.96, 2.987, 0.492, 0.364, 0.441, 5.918],
+      gemma:    [0.199, 0.618, 0.28, 0.237, 0.659, 0.424, 0.908, 0.25, 0.361, 0.34, 0.331, 0.352, 0.233, 0.412, 2.692],
+      minicpm5: [0.217, 0.43, 0.908, 1.852, 3.188, 3.199, 3.133, 1.994, 2.134, 1.459, 2.393, 1.062, 0.284, 0.643, 0.01],
+      unknown:  [0.25, 0.711, 1.725, 2.713, 3.666, 3.679, 3.603, 2.878, 3.418, 3.404, 3.435, 1.221, 0.419, 0.739, 6.806],
+    };
+    // 'unknown' is every tokenizer we have not measured — Gemini Nano, a remote
+    // endpoint's model, a user-supplied GGUF. It takes the densest weight seen in
+    // any measured family plus 15%, because for a budget an overcount costs a
+    // little history and an undercount costs a truncated conversation.
+    const TOKEN_PROFILE_BY_MODEL = {
+      'qwen35-4b': 'qwen',
+      'ternary-bonsai-2-27b-webgpu': 'qwen',
+      'bonsai-ternary-4b': 'bonsai4b',
+      'lfm2-1.2b': 'lfm2',
+      'lfm2-230m-gguf': 'lfm2',
+      'lfm2-230m-webgpu': 'lfm2',
+      'gemma4-e2b': 'gemma',
+      'gemma4-e4b': 'gemma',
+      'minicpm5-2b-gguf': 'minicpm5',
+    };
+    function tokenClassIndex(cp) {
+      if (cp < 0x80) return ((cp >= 65 && cp <= 90) || (cp >= 97 && cp <= 122) || cp === 32) ? 0 : 1;
+      if (cp <= 0x24F) return 0;                                   // Latin-1 + Latin Extended
+      if (cp >= 0x0400 && cp <= 0x052F) return 12;                 // Cyrillic
+      if (cp >= 0x0600 && cp <= 0x06FF) return 11;                 // Arabic
+      if (cp >= 0x0900 && cp <= 0x097F) return 2;                  // Devanagari
+      if (cp >= 0x0980 && cp <= 0x09FF) return 3;                  // Bengali
+      if (cp >= 0x0A00 && cp <= 0x0A7F) return 4;                  // Gurmukhi
+      if (cp >= 0x0A80 && cp <= 0x0AFF) return 5;                  // Gujarati
+      if (cp >= 0x0B00 && cp <= 0x0B7F) return 6;                  // Odia
+      if (cp >= 0x0B80 && cp <= 0x0BFF) return 7;                  // Tamil
+      if (cp >= 0x0C00 && cp <= 0x0C7F) return 8;                  // Telugu
+      if (cp >= 0x0C80 && cp <= 0x0CFF) return 9;                  // Kannada
+      if (cp >= 0x0D00 && cp <= 0x0D7F) return 10;                 // Malayalam
+      if ((cp >= 0x3040 && cp <= 0x30FF) || (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xAC00 && cp <= 0xD7AF)) return 13;
+      return 14;
     }
+    function tokenProfileFor(modelKey) {
+      return TOKEN_WEIGHTS[TOKEN_PROFILE_BY_MODEL[modelKey] || 'unknown'];
+    }
+    // Estimated tokens in `text` for the tokenizer `modelKey` uses. Synchronous and
+    // allocation-free: the context builder runs it over the whole history on every
+    // turn, and the real tokenizer lives in the worker where the host cannot reach it.
+    function countTokens(text, modelKey) {
+      if (!text) return 0;
+      const s = typeof text === 'string' ? text : String(text);
+      const w = tokenProfileFor(modelKey);
+      let total = 0;
+      for (let i = 0; i < s.length; i++) {
+        let cp = s.codePointAt(i);
+        if (cp > 0xFFFF) i++;                                      // surrogate pair: one character
+        total += w[tokenClassIndex(cp)];
+      }
+      return Math.ceil(total);
+    }
+    // TOKEN-COUNT-END
 
     // ── Agent: Sliding Window Conversation Builder ────────────
     let conversationSummary = '';
@@ -9059,12 +9128,12 @@ self.addEventListener('message', async (e) => {
       if (effectiveSystem) out.push({ role: 'system', content: effectiveSystem });
 
       // Calculate system prompt cost
-      let used = approxTokens(effectiveSystem);
+      let used = countTokens(effectiveSystem, modelKey);
 
       // Always include all messages if they fit
       let historyTokens = 0;
       for (const msg of allMessages) {
-        historyTokens += approxTokens(typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content));
+        historyTokens += countTokens(typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content), modelKey);
       }
 
       if (used + historyTokens <= budgetForHistory) {
@@ -10311,12 +10380,12 @@ self.addEventListener('message', async (e) => {
         reject(e.message);
       }
 
-      // Approximate token counts: prompt by char/4 heuristic, completion by
-      // tokenizer streaming events isn't surfaced to main thread, so use the
-      // same heuristic. Marked as approximate in the README.
-      const promptChars = chatMessages.reduce((s, m) => s + m.content.length, 0);
-      const promptTokensApprox = Math.max(1, Math.round(promptChars / 4));
-      const completionTokensApprox = Math.max(1, Math.round((responseText || '').length / 4));
+      // Token counts are estimates: the worker does not surface the tokenizer's
+      // own counts to the main thread. countTokens() is script- and model-aware
+      // (see TOKEN-COUNT-START), which is the difference between a usable number
+      // and one that is ~10x out on Indic text.
+      const promptTokensApprox = Math.max(1, chatMessages.reduce((n, m) => n + countTokens(m.content, activeModelKey), 0));
+      const completionTokensApprox = Math.max(1, countTokens(responseText || '', activeModelKey));
 
       const id = 'lmcc-' + Math.random().toString(36).slice(2, 12);
       const created = Math.floor(Date.now() / 1000);
@@ -14046,14 +14115,14 @@ ${JSON.stringify({ name, result })}
 
         const iter = makeAsyncIterator();
         let completionTokens = 0;
-        // Approximate prompt tokens from the raw input — exact count
-        // would require tokenising on the worker, which we don't
-        // surface to the main thread.
+        // Estimated prompt tokens: the exact count lives with the tokenizer in the
+        // worker, which we don't surface to the main thread. countTokens() weights
+        // each character by script and by this model's tokenizer.
         const promptTokens = messages.reduce((s, x) => {
           let txt = '';
           if (typeof x.content === 'string') txt = x.content;
           else if (Array.isArray(x.content)) txt = x.content.filter(c => c && c.type === 'text').map(c => c.text || '').join(' ');
-          return s + Math.max(1, Math.round(txt.length / 4));
+          return s + Math.max(1, countTokens(txt, activeModelKey));
         }, 0);
 
         // Wire up cancellation: an aborted signal posts {type:'stop'}

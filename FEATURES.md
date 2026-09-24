@@ -111,6 +111,7 @@ Every search result and fetched page is cached in the RAG index, so accessible k
 
 - **New Chat** archives the current conversation (summarized + embedded into RAG so it can be recalled) and starts fresh; **Clear** discards without saving.
 - **History** — a persistent left rail on desktop (a slide-over on mobile) of past conversations by date; click to resume, or delete entries.
+- **The context budget counts by script, per model.** How many tokens a character costs is not a constant: on LFM2.5 a Latin character costs 0.21 tokens and a Gurmukhi one costs 2.98 — fourteen times more — and the same Devanagari character costs 1.50 on LFM2.5 but 0.28 on Gemma 4. LocalMind weights every character by its Unicode block and by the loaded model's own tokenizer, so a conversation in Hindi, Bengali, Gujarati, Tamil, Telugu, Kannada, Malayalam, Punjabi, Odia, Arabic, Russian or Chinese is budgeted at what it actually costs and the sliding window engages when it should. An unmeasured tokenizer (Gemini Nano, a remote endpoint, your own GGUF) gets the densest profile plus 15 %, because overcounting costs a little history and undercounting costs a truncated conversation. Weights are fitted against each model's real tokenizer and pinned by `scripts/test-token-count.mjs` (38 samples across 20 scripts × 5 tokenizers; worst case −16 % / +23 %).
 
 ## Web search (bring your own key)
 
