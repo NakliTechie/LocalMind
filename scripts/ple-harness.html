@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PLE harness</title>
+<!-- Host page for scripts/ple-harness-worker.js; driven over CDP by scripts/test-ple-opfs.mjs.
+     window.harness.call(op, args) posts one message to the worker and resolves its answer. -->
+<pre id="out">starting</pre>
+<script type="module">
+  const w = new Worker(new URL('./ple-harness-worker.js', import.meta.url), { type: 'module' });
+  const pend = new Map();
+  let seq = 0;
+  w.addEventListener('error', (e) => { document.getElementById('out').textContent = 'worker error: ' + e.message; });
+  w.onmessage = (e) => {
+    const { id, ok, result, error } = e.data;
+    if (id === 0) { document.getElementById('out').textContent = 'ready'; window.harness.ready = true; return; }
+    const p = pend.get(id);
+    if (!p) return;
+    pend.delete(id);
+    ok ? p.res(result) : p.rej(new Error(error));
+  };
+  window.harness = {
+    ready: false,
+    call(op, args = {}) {
+      const id = ++seq;
+      return new Promise((res, rej) => { pend.set(id, { res, rej }); w.postMessage({ id, op, ...args }); });
+    },
+  };
+</script>
