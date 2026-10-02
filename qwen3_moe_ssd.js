@@ -1053,13 +1053,15 @@ export class Qwen3MoeSsd {
       if (signal && signal.aborted) break;
       if (stops.has(next)) break;
       outIds.push(next);
-      yield { text: this.tokenizer.decode(outIds), tokens: outIds.length };
+      yield { text: this.tokenizer.decode(outIds), token: next, tokens: outIds.length };
       if (this.position >= this.maxCtx) break;
       next = await this.step(next, 'argmax');
     }
-    // Keep the cache aligned with what the next turn's prompt will contain: the answer plus
-    // <|im_end|>, so a follow-up turn re-prefills only its new suffix.
   }
+
+  // Raw ids of the reasoning delimiters, for hosts that re-mark the thought block.
+  get thinkOpenTokenId() { return this.tokenizer.ids.get('<think>') ?? null; }
+  get thinkCloseTokenId() { return this.tokenizer.ids.get('</think>') ?? null; }
 
   stats() {
     const s = this.xs.stats, c = this.counters, n = Math.max(1, c.tokens);

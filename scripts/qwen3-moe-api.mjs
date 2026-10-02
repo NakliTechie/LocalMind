@@ -53,6 +53,23 @@ export function makeApi(log = () => {}) {
       }
       return { label: ref.label, matched: rows.filter((r) => r.match).length, of: rows.length, rows, stats: m.stats() };
     },
+    // Decode benchmark: prefill `ids`, then `n` greedy tokens (GPU argmax, 4-byte readback).
+    // Prefill and decode are counted separately; `clearPool` empties the expert pool first
+    // (the OS page cache is outside the tab's control — the caller records its state).
+    async bench(ids, n = 64, { clearPool = true, prefetch } = {}) {
+      if (prefetch !== undefined) m.prefetch = !!prefetch;
+      if (clearPool) m.xs.clear();
+      m.reset(); m.resetCounters();
+      const t0 = performance.now();
+      let next = await m.prefill(ids, 'argmax');
+      const prefill = { ...m.stats(), secs: (performance.now() - t0) / 1000 };
+      m.resetCounters();
+      const out = [next];
+      const t1 = performance.now();
+      for (let i = 1; i < n; i++) { next = await m.step(next, 'argmax'); out.push(next); }
+      const decode = { ...m.stats(), secs: (performance.now() - t1) / 1000 };
+      return { prefetch: m.prefetch, poolSlots: m.poolSlots, promptTokens: ids.length, ids: out, text: m.tokenizer.decode(out), prefill, decode };
+    },
     setPrefetch(on) { m.prefetch = !!on; return m.prefetch; },
     clearPool() { m.xs.clear(); m.resetCounters(); return true; },
     stats() { return m.stats(); },
