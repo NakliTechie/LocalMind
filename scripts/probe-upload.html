@@ -1,0 +1,117 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>OPFS → writeBuffer upload probe</title>
+<pre id="out">loading…</pre>
+<script type="module">
+// Measures the GPU upload half of the SSD-streaming path for one MoE expert record
+// (Qwen3-30B-A3B Q8_0: 5,013,504 B). window.probe.* runs each measurement and returns JSON.
+//   writeMain({n})      queue.writeBuffer on the page thread, random slots of a pool buffer
+//   writeWorker({n})    the same inside a dedicated worker (where LocalMind engines run)
+//   makeFile({gb})      writes probe.bin into OPFS for the read pipeline
+//   pipeline({n,workers}) OPFS sync reads in reader workers → transfer → writeBuffer
+const REC = 5013504;
+const out = document.getElementById('out');
+const log = (o) => { out.textContent += '\n' + JSON.stringify(o); return o; };
+
+const workerSrc = `
+const REC = ${REC};
+let device, pool;
+async function init(poolBytes) {
+  const a = await navigator.gpu.requestAdapter();
+  device = await a.requestDevice({ requiredLimits: { maxBufferSize: a.limits.maxBufferSize, maxStorageBufferBindingSize: a.limits.maxStorageBufferBindingSize } });
+  pool = device.createBuffer({ size: poolBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  return { maxBufferSize: a.limits.maxBufferSize, maxStorageBufferBindingSize: a.limits.maxStorageBufferBindingSize };
+}
+async function write(n) {
+  const slots = Math.floor(pool.size / REC);
+  const src = new Uint8Array(REC); for (let i = 0; i < REC; i += 4096) src[i] = i & 255;
+  await device.queue.onSubmittedWorkDone();
+  let js = 0; const t0 = performance.now();
+  for (let i = 0; i < n; i++) { const a = performance.now(); device.queue.writeBuffer(pool, ((i * 7919) % slots) * REC, src); js += performance.now() - a; }
+  await device.queue.onSubmittedWorkDone();
+  const secs = (performance.now() - t0) / 1000;
+  return { n, bytes: n * REC, secs, GBps: n * REC / secs / 1e9, jsMsPerCall: js / n };
+}
+onmessage = async (e) => { const m = e.data; try {
+  if (m.op === 'init') postMessage(await init(m.poolBytes));
+  else if (m.op === 'write') postMessage(await write(m.n));
+} catch (err) { postMessage({ error: String(err) }); } };
+`;
+
+const readerSrc = `
+let h;
+onmessage = async (e) => { const m = e.data;
+  if (m.op === 'open') { const root = await navigator.storage.getDirectory();
+    h = await (await root.getFileHandle(m.name)).createSyncAccessHandle({ mode: 'read-only' }); postMessage({ size: h.getSize() }); return; }
+  if (m.op === 'read') { const buf = new Uint8Array(m.buf); const a = performance.now(); const got = h.read(buf, { at: m.at });
+    postMessage({ id: m.id, buf: m.buf, got, ms: performance.now() - a }, [m.buf]); return; }
+  if (m.op === 'write') { const root = await navigator.storage.getDirectory();
+    const w = await (await root.getFileHandle(m.name, { create: true })).createSyncAccessHandle();
+    const c = new Uint8Array(64 << 20); for (let i = 0; i < c.length; i += 4096) c[i] = (i >> 12) & 255;
+    const total = m.gb * 2 ** 30; const t0 = performance.now();
+    for (let off = 0; off < total; off += c.length) w.write(c, { at: off }); w.flush(); w.close();
+    postMessage({ GBps: total / ((performance.now() - t0) / 1000) / 1e9 }); return; }
+  if (m.op === 'close') { h && h.close(); h = null; postMessage({ closed: true }); }
+};`;
+const blobUrl = (s) => URL.createObjectURL(new Blob([s], { type: 'text/javascript' }));
+const call = (w, msg, transfer = []) => new Promise((res) => { w.onmessage = (e) => res(e.data); w.postMessage(msg, transfer); });
+
+let device = null, pool = null;
+async function mainDevice(poolBytes) {
+  if (device) return;
+  const a = await navigator.gpu.requestAdapter();
+  device = await a.requestDevice({ requiredLimits: { maxBufferSize: a.limits.maxBufferSize, maxStorageBufferBindingSize: a.limits.maxStorageBufferBindingSize } });
+  pool = device.createBuffer({ size: poolBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+}
+
+window.probe = {
+  async limits() { const a = await navigator.gpu.requestAdapter(); const info = a.info || {};
+    return log({ vendor: info.vendor, arch: info.architecture, maxBufferSize: a.limits.maxBufferSize, maxStorageBufferBindingSize: a.limits.maxStorageBufferBindingSize, maxStorageBuffersPerShaderStage: a.limits.maxStorageBuffersPerShaderStage, ua: navigator.userAgent, quota: await navigator.storage.estimate(), persisted: await navigator.storage.persisted() }); },
+  async writeMain({ n = 200, poolBytes = 2 ** 31 } = {}) {
+    await mainDevice(poolBytes);
+    const slots = Math.floor(pool.size / REC);
+    const src = new Uint8Array(REC); for (let i = 0; i < REC; i += 4096) src[i] = i & 255;
+    await device.queue.onSubmittedWorkDone();
+    let js = 0; const t0 = performance.now();
+    for (let i = 0; i < n; i++) { const a = performance.now(); device.queue.writeBuffer(pool, ((i * 7919) % slots) * REC, src); js += performance.now() - a; }
+    await device.queue.onSubmittedWorkDone();
+    const secs = (performance.now() - t0) / 1000;
+    return log({ where: 'main', n, secs, GBps: n * REC / secs / 1e9, jsMsPerCall: js / n });
+  },
+  async writeWorker({ n = 200, poolBytes = 2 ** 31 } = {}) {
+    const w = new Worker(blobUrl(workerSrc));
+    const lim = await call(w, { op: 'init', poolBytes });
+    const r = await call(w, { op: 'write', n }); w.terminate();
+    return log({ where: 'worker', ...lim, ...r });
+  },
+  async makeFile({ gb = 8, name = 'probe.bin' } = {}) {
+    const w = new Worker(blobUrl(readerSrc)); const r = await call(w, { op: 'write', name, gb }); w.terminate();
+    return log({ made: name, gb, ...r });
+  },
+  // n expert-sized reads at random record offsets across `workers` reader workers, each
+  // followed by writeBuffer into the pool. Reports the pipeline rate and the split.
+  async pipeline({ n = 400, workers = 4, name = 'probe.bin', poolBytes = 2 ** 31, inflight = 2 } = {}) {
+    await mainDevice(poolBytes);
+    const ws = [];
+    let size = 0;
+    for (let i = 0; i < workers; i++) { const w = new Worker(blobUrl(readerSrc)); size = (await call(w, { op: 'open', name })).size; ws.push(w); }
+    const recs = Math.floor(size / REC), slots = Math.floor(pool.size / REC);
+    let next = 0, done = 0, readMs = 0, wbMs = 0; const t0 = performance.now();
+    await new Promise((resolve) => {
+      const issue = (w, buf) => { if (next >= n) return; const id = next++; w.postMessage({ op: 'read', id, at: ((id * 104729) % recs) * REC, buf }, [buf]); };
+      for (const w of ws) {
+        w.onmessage = (e) => { const m = e.data; readMs += m.ms;
+          const a = performance.now(); device.queue.writeBuffer(pool, (m.id % slots) * REC, new Uint8Array(m.buf)); wbMs += performance.now() - a;
+          if (++done === n) resolve(); else issue(w, m.buf); };
+        for (let k = 0; k < inflight; k++) issue(w, new ArrayBuffer(REC));
+      }
+    });
+    await device.queue.onSubmittedWorkDone();
+    const secs = (performance.now() - t0) / 1000;
+    for (const w of ws) { await call(w, { op: 'close' }); w.terminate(); }
+    return log({ pipeline: { n, workers, inflight, secs, GBps: n * REC / secs / 1e9, readMsAvg: readMs / n, writeBufferJsMsAvg: wbMs / n } });
+  },
+  async remove(name = 'probe.bin') { const root = await navigator.storage.getDirectory(); await root.removeEntry(name); return log({ removed: name }); },
+};
+out.textContent = 'ready: window.probe';
+</script>
