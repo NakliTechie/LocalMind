@@ -209,6 +209,7 @@ export async function ingestGguf({ url, key, fetch: fetchFn = fetch, onProgress 
   const persisted = navigator.storage && navigator.storage.persist ? await navigator.storage.persist().catch(() => false) : false;
   const needed = layout.experts.bytes + layout.dense.bytes;
   onProgress({ status: 'ingest-plan', needed, quota: est.quota, usage: est.usage, persisted });
+  const quotaLog = [{ written: 0, quota: est.quota, usage: est.usage }];
   await writeOpfsText(`${dir}/manifest.json`, JSON.stringify({ format: FORMAT, complete: false }));
   // Header bytes, for the tokenizer and metadata at every later load.
   const hw = await OpfsWriter.open(`${dir}/header.bin`, { truncate: true });
@@ -220,8 +221,9 @@ export async function ingestGguf({ url, key, fetch: fetchFn = fetch, onProgress 
     dense: await OpfsWriter.open(`${dir}/dense.bin`, { truncate: true }),
     experts: await OpfsWriter.open(`${dir}/experts.bin`, { truncate: true }),
   };
-  await writers.dense.truncate(layout.dense.bytes);
-  await writers.experts.truncate(layout.experts.bytes);
+  // No up-front truncate to full size: a fresh origin's quota is ~10 GiB and grows with what is
+  // actually written (measured 2026-10-02), so a single 30.8 GB extension would be refused. The
+  // writes below grow each file by at most one layer's records (~642 MB) at a time.
 
   // Stream the data section in order. Units are filled from the response chunks, transformed,
   // and written while the next bytes arrive (at most `maxWrites` writes in flight).
@@ -273,6 +275,10 @@ export async function ingestGguf({ url, key, fetch: fetchFn = fetch, onProgress 
       }
       done = pos - first;
       onProgress({ status: 'ingest', loaded: done, total: last - first, written, secs: (performance.now() - t0) / 1000 });
+      if (written - quotaLog[quotaLog.length - 1].written > 4 * 2 ** 30 && navigator.storage.estimate) {
+        const e = await navigator.storage.estimate();
+        quotaLog.push({ written, quota: e.quota, usage: e.usage });
+      }
     }
   }
   if (ui !== units.length) throw new Error(`ingest ended early: ${ui} of ${units.length} units`);
@@ -282,7 +288,7 @@ export async function ingestGguf({ url, key, fetch: fetchFn = fetch, onProgress 
   const manifest = {
     format: FORMAT, complete: true, ingestedAt: new Date().toISOString(),
     source: { url, ...source, dataStart: gguf.dataStart, headerBytes: gguf.headerBytes },
-    ingestSecs: (performance.now() - t0) / 1000, quotaBefore: est.quota, persisted,
+    ingestSecs: (performance.now() - t0) / 1000, quotaBefore: est.quota, persisted, quotaLog,
     ...layout,
   };
   await writeOpfsText(`${dir}/manifest.json`, JSON.stringify(manifest));

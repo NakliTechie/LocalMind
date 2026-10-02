@@ -4,90 +4,26 @@
 <style>body{font:13px ui-monospace,monospace;margin:16px;background:#111;color:#ddd}pre{white-space:pre-wrap}</style>
 <pre id="out">loading…</pre>
 <script type="module">
-// Drives qwen3_moe_ssd.js for the rung-2a gates: window.h.* returns JSON-able results so a
-// DevTools-protocol client (chrome-devtools MCP, scripts/*.mjs) can run the comparisons.
-//   await h.load({ url, key, poolGB, readers, prefetch })
-//   await h.greedy(ids, n)           → { ids, tops, stats }
-//   await h.bench(ids, n, { prefetch })
-//   await h.opfs()                   → OPFS usage + the localmind-ssd entries
-import { Qwen3MoeSsd, removeIngest } from '../qwen3_moe_ssd.js';
+// ?worker=1 runs the engine in a dedicated module worker (LocalMind's real context); otherwise
+// on this page's thread. Either way window.h.* has the same methods (scripts/qwen3-moe-api.mjs).
+import { makeApi } from './qwen3-moe-api.mjs';
 const out = document.getElementById('out');
 const log = (o) => { out.textContent += '\n' + (typeof o === 'string' ? o : JSON.stringify(o)); return o; };
-let m = null;
-window.h = {
-  async load({ url, key, poolGB = 4, readers = 4, prefetch = false, maxCtx = 4096, reingest = false } = {}) {
-    if (m) { await m.dispose(); m = null; }
-    const t0 = performance.now();
-    let last = 0;
-    m = await Qwen3MoeSsd.load(null, {
-      url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest,
-      onProgress: (e) => {
-        if (e.status === 'weights' && e.kind !== 'tensors' && performance.now() - last > 2000) { last = performance.now(); log({ ingest: e.loaded, total: e.total, secs: e.secs }); }
-        else if (e.status === 'ingest-plan') log(e);
-      },
-    });
-    window.engine = m;
-    return log({ loaded: key, secs: (performance.now() - t0) / 1000, ingestSecs: m.manifest.ingestSecs, denseUploadSecs: m.denseUploadSecs, poolSlots: m.poolSlots, gpuBytes: m.gpuBytes, cfg: m.cfg });
-  },
-  async greedy(ids, n = 16, { top = 5, resetStats = true } = {}) {
-    if (resetStats) m.resetCounters();
-    const r = await m.greedy(ids, n, { top });
-    return { ids: r.ids, tops: r.tops.map((t) => t.map((x) => [x.id, +x.logit.toFixed(4)])), stats: m.stats() };
-  },
-  // Greedy-match gate against a llama-ref.mjs JSON: same prompt ids, same number of tokens.
-  // At the first divergence, both sides' top-2 log-prob margins tell a near-tie from a bug.
-  async compare(refUrl, { limit = Infinity } = {}) {
-    const ref = await (await fetch(refUrl, { cache: 'no-store' })).json();
-    const rows = [];
-    for (const r of ref.results.slice(0, limit)) {
-      const t0 = performance.now();
-      const g = await m.greedy(r.ids, r.gen.length, { top: 5 });
-      let div = -1;
-      for (let i = 0; i < r.gen.length; i++) if (g.ids[i] !== r.gen[i]) { div = i; break; }
-      const row = { name: r.name, promptTokens: r.ids.length, n: r.gen.length, match: div < 0, firstDivergence: div, secs: (performance.now() - t0) / 1000 };
-      // max |Δ logprob| over positions before divergence, for tokens in both top-5 lists
-      let maxd = 0;
-      for (let i = 0; i < (div < 0 ? r.gen.length : div); i++) {
-        const ours = new Map(g.tops[i].map((x) => [x.id, x.logprob]));
-        for (const [id, lp] of r.top[i]) if (ours.has(id)) maxd = Math.max(maxd, Math.abs(ours.get(id) - lp));
-      }
-      row.maxAbsLogprobDiff = +maxd.toFixed(5);
-      if (div >= 0) {
-        const rt = r.top[div], ot = g.tops[div];
-        row.ref = { top: rt.slice(0, 3), margin: +(rt[0][1] - rt[1][1]).toFixed(5) };
-        row.ours = { top: ot.slice(0, 3).map((x) => [x.id, +x.logprob.toFixed(5)]), margin: +(ot[0].logprob - ot[1].logprob).toFixed(5) };
-      }
-      rows.push(row);
-      log(row);
-    }
-    return { label: ref.label, matched: rows.filter((r) => r.match).length, of: rows.length, rows, stats: m.stats() };
-  },
-  setPrefetch(on) { m.prefetch = !!on; return m.prefetch; },
-  clearPool() { m.xs.clear(); m.resetCounters(); return true; },
-  stats() { return m.stats(); },
-  encode(text) { return m.tokenizer.encode(text); },
-  decode(ids) { return m.tokenizer.decode(ids); },
-  async generate(messages, maxNewTokens = 64) {
-    m.resetCounters();
-    let text = '';
-    for await (const o of m.generate(messages, { maxNewTokens })) text = o.text;
-    return { text, stats: m.stats() };
-  },
-  async opfs() {
-    const est = await navigator.storage.estimate();
-    const root = await navigator.storage.getDirectory();
-    const list = [];
-    try {
-      const d = await root.getDirectoryHandle('localmind-ssd');
-      for await (const [name, h] of d.entries()) {
-        const files = [];
-        if (h.kind === 'directory') for await (const [fn, fh] of h.entries()) if (fh.kind === 'file') files.push([fn, (await fh.getFile()).size]);
-        list.push({ name, files });
-      }
-    } catch (_) {}
-    return { quota: est.quota, usage: est.usage, persisted: await navigator.storage.persisted(), list };
-  },
-  async remove(key) { if (m) { await m.dispose(); m = null; } await removeIngest(key); return this.opfs(); },
-};
-out.textContent = 'ready: window.h';
+const inWorker = new URLSearchParams(location.search).get('worker') === '1';
+if (inWorker) {
+  const w = new Worker(new URL('./qwen3-moe-worker.mjs', import.meta.url), { type: 'module' });
+  const pending = new Map(); let next = 1;
+  w.onmessage = (e) => {
+    const m = e.data;
+    if (m.log !== undefined) { log(m.log); return; }
+    const p = pending.get(m.id); pending.delete(m.id);
+    if (m.error) p.reject(new Error(m.error)); else p.resolve(m.result);
+  };
+  window.h = new Proxy({}, { get: (_, method) => (...args) => new Promise((resolve, reject) => {
+    const id = next++; pending.set(id, { resolve, reject }); w.postMessage({ id, method, args });
+  }) });
+} else {
+  window.h = makeApi(log);
+}
+out.textContent = `ready: window.h (${inWorker ? 'worker' : 'page thread'})`;
 </script>
