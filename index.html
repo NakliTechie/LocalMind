@@ -15580,6 +15580,36 @@ async function __guardedGet(url, fetchImpl) {
 }
 // STALL-GUARD-END
 
+// CACHE-HEAL-START
+// A file that reached Cache Storage short (before 057e395 a clean early close was
+// trusted) fails every later load of its model the same way until the user finds
+// Settings, Delete. transformers.js stores content-length from the bytes it read, so a
+// cached entry cannot vouch for itself. After a failed load, each cached file of the
+// repo is compared with its size on Hugging Face (HEAD); the short ones are dropped
+// and the caller loads once more. Returns the URLs it dropped.
+async function __evictTruncatedCache(repo, cacheStorage, fetchImpl) {
+  if (!cacheStorage || typeof repo !== 'string' || repo.indexOf('/') < 1) return [];
+  const prefix = 'https://huggingface.co/' + repo + '/';
+  const cache = await cacheStorage.open('transformers-cache');
+  const reqs = (await cache.keys()).filter((r) => r.url.indexOf(prefix) === 0);
+  const dropped = await Promise.all(reqs.map(async (req) => {
+    try {
+      const hit = await cache.match(req);
+      if (!hit) return null;
+      const have = (await hit.blob()).size;
+      const head = await fetchImpl(req.url, { method: 'HEAD', signal: AbortSignal.timeout(15000) });
+      const want = head.ok ? Number(head.headers.get('content-length')) : 0;
+      if (!want || have >= want) return null;
+      await cache.delete(req);
+      return req.url;
+    } catch {
+      return null;
+    }
+  }));
+  return dropped.filter(Boolean);
+}
+// CACHE-HEAL-END
+
 const __origFetch = self.fetch.bind(self);
 
 self.fetch = async function(input, init) {
@@ -15954,11 +15984,18 @@ self.addEventListener('message', async (e) => {
 
   if (type === 'load') {
     if (resumable === false) __resumableEnabled = false;
+    const load = () => modelType === 'multimodal'
+      ? loadMultimodal(modelId, dtype, modelClass || 'gemma4')
+      : loadCausal(modelId, dtype);
     try {
-      if (modelType === 'multimodal') {
-        await loadMultimodal(modelId, dtype, modelClass || 'gemma4');
-      } else {
-        await loadCausal(modelId, dtype);
+      try {
+        await load();
+      } catch (err) {
+        // Retry once, and only when a cached file of this model turned out short.
+        const dropped = await __evictTruncatedCache(modelId, self.caches, __origFetch).catch(() => []);
+        if (!dropped.length) throw err;
+        console.warn('[LocalMind] dropped truncated cached files, loading again:', dropped);
+        await load();
       }
     } catch (err) {
       self.postMessage({ type: 'error', message: 'Failed to load model: ' + (err.message || String(err)) });

@@ -9,7 +9,9 @@
 //   3. every other Hugging Face request is bounded too: whole-file GETs the
 //      resumable path skips (under 5 MB, resumable off, its fallbacks) stream
 //      through the same guard, a 404 comes back as a 404, and the HEAD / 1-byte
-//      existence probes get a headers timeout that honours the caller's abort.
+//      existence probes get a headers timeout that honours the caller's abort;
+//   4. a failed load drops this repo's cached files that are shorter than Hugging
+//      Face reports (CACHE-HEAL block) and loads once more; nothing short, no retry.
 // Run: node scripts/test-download-stall.mjs
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdtemp } from 'node:fs/promises';
@@ -206,5 +208,65 @@ const run = async (from, script) => {
   await assert.rejects(p, /user cancelled/);
   assert.equal(calls, 1);
   assert.ok(Date.now() - t0 < 500, 'a cancelled load stops at once, without a retry backoff');
+}
+
+// 4. Self-heal for a file cached short before the guard: a failed load drops this repo's
+// cached files that are smaller than Hugging Face says, and loads once more.
+assert.match(workerSource, /const dropped = await __evictTruncatedCache\(modelId, self\.caches, __origFetch\)\.catch\(\(\) => \[\]\);\s*if \(!dropped\.length\) throw err;[\s\S]{0,120}await load\(\);/);
+assert.equal(workerSource.match(/await load\(\);/g).length, 2, 'one load, at most one retry');
+{
+  const heal = /\/\/ CACHE-HEAL-START([\s\S]*?)\/\/ CACHE-HEAL-END/.exec(workerSource);
+  assert.ok(heal, 'CACHE-HEAL block missing');
+  const healPath = join(dir, 'heal.mjs');
+  await writeFile(healPath, heal[1] + '\nexport { __evictTruncatedCache };\n');
+  const { __evictTruncatedCache } = await import(pathToFileURL(healPath).href);
+
+  const HF = 'https://huggingface.co/';
+  const sizes = { // what a HEAD on Hugging Face reports
+    [HF + 'org/model/resolve/main/tokenizer.json']: 3297799,
+    [HF + 'org/model/resolve/main/config.json']: 900,
+    [HF + 'org/model/resolve/main/onnx/model.onnx']: 5000,
+    [HF + 'org/model/resolve/main/onnx/model.onnx_data']: 8000,
+    [HF + 'org/model-other/resolve/main/tokenizer.json']: 1000,
+  };
+  const seed = { // what Cache Storage holds: url -> bytes cached
+    [HF + 'org/model/resolve/main/tokenizer.json']: 1000510, // short: the 2026-09-24 file
+    [HF + 'org/model/resolve/main/config.json']: 900,        // whole
+    [HF + 'org/model/resolve/main/onnx/model.onnx']: 4000,   // short, but its HEAD fails
+    [HF + 'org/model/resolve/main/onnx/model.onnx_data']: 8000,
+    [HF + 'org/model-other/resolve/main/tokenizer.json']: 10, // short, another repo
+  };
+  const store = new Map(Object.entries(seed).map(([u, n]) => [u, new Response(new Uint8Array(n), { headers: { 'content-length': String(n) } })]));
+  const opened = [];
+  const cacheStorage = { async open(name) {
+    opened.push(name);
+    return {
+      async keys() { return [...store.keys()].map((u) => new Request(u)); },
+      async match(req) { const r = store.get(req.url); return r && r.clone(); },
+      async delete(req) { return store.delete(req.url); },
+    };
+  } };
+  const heads = [];
+  const fetchImpl = async (url, init) => {
+    heads.push(init.method);
+    assert.ok(init.signal, 'every HEAD is time-bounded');
+    if (url.endsWith('/model.onnx')) throw new TypeError('Failed to fetch');
+    return new Response(null, { status: 200, headers: { 'content-length': String(sizes[url]) } });
+  };
+  const dropped = await __evictTruncatedCache('org/model', cacheStorage, fetchImpl);
+  assert.deepEqual(dropped, [HF + 'org/model/resolve/main/tokenizer.json']);
+  assert.deepEqual(opened, ['transformers-cache']);
+  assert.deepEqual(heads, ['HEAD', 'HEAD', 'HEAD', 'HEAD'], 'only this repo is checked; org/model-other is a different repo');
+  assert.ok(store.has(HF + 'org/model/resolve/main/onnx/model.onnx'), 'an unverifiable file is kept');
+  assert.ok(store.has(HF + 'org/model-other/resolve/main/tokenizer.json'), 'another repo is never touched');
+  assert.equal(store.size, 4);
+  // Nothing short (or an id that is not a repo) means nothing dropped, so the caller does not retry.
+  assert.deepEqual(await __evictTruncatedCache('org/model', cacheStorage, fetchImpl), []);
+  assert.deepEqual(await __evictTruncatedCache('/models/local', cacheStorage, fetchImpl), []);
+  assert.deepEqual(await __evictTruncatedCache('org/model', null, fetchImpl), []);
+  // A 404 on the HEAD (file gone upstream) keeps the cached copy.
+  store.set(HF + 'org/model/resolve/main/tokenizer.json', new Response(new Uint8Array(5)));
+  const gone = async () => new Response(null, { status: 404 });
+  assert.deepEqual(await __evictTruncatedCache('org/model', cacheStorage, gone), []);
 }
 console.log('download stall guard: all checks pass');
