@@ -33,6 +33,10 @@ assert.doesNotMatch(indexSource, /transformers@4\/\+esm/);
 const bonsai2Engine = await readFile(new URL('../ternary_bonsai_2_27b.js', import.meta.url), 'utf8');
 assert.match(bonsai2Engine, /export\{[^}]*zl as TernaryBonsai2[^}]*\}/);
 assert.match(bonsai2Engine, /var Ri="prism-ml\/Ternary-Bonsai-2-27B-gguf",Cl="Ternary-Bonsai-2-27B-PTQ1_0\.gguf"/);
+// System-prefix priming survives Qwen3.8's "No user query found" template: on a refused system-only
+// render the prefix is the token prefix two renders with different user turns share.
+assert.match(bonsai2Engine, /let n;try\{n=this\.tokenizer\.encode\(this\.#h\(s,!1,t\),\{add_special_tokens:!1\}\)\.ids\}catch\{try\{let x=this\.tokenizer\.encode\(this\.#h\(\[\.\.\.s,\{role:"user",content:"hello"\}\],!1,t\)/);
+assert.match(bonsai2Engine, /for\(;k<x\.length&&k<y\.length&&x\[k\]===y\[k\];\)\+\+k;n=x\.slice\(0,k\)\}catch\{return 0\}\}if\(n\.length===0\|\|n\.length>=r\.length\)return 0;for\(let o=0;o<n\.length;\+\+o\)if\(n\[o\]!==r\[o\]\)return 0;/);
 assert.match(indexSource, /id="ternaryBonsai2WebgpuWorkerSrc"/);
 // Image mode: its caption must not read like the Diffuse mode's ("On-device diffusion"), and both
 // server-engine failure sites name Chrome's local-network permission as a possible cause.
@@ -55,6 +59,12 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   assert.match(bonsai2Engine, /class \$RewindSession\{/);
   assert.match(bonsai2Engine, /function lh\(e,t,r,\$v\)\{/);
   const dflashModule = await readFile(new URL('../ternary_bonsai_2_dflash.js', import.meta.url), 'utf8');
+  // Every engine internal the runner reaches for (I.x) is exported by the hook. A stale engine
+  // once lacked r2, so release() threw inside its try and leaked the checkpoint slot's buffers.
+  const internals = new Set([...(/zl\.__dflashInternals=\{([\s\S]*?)\};/.exec(bonsai2Engine)[1]).matchAll(/get ([\w$]+)\(\)/g)].map((m) => m[1]));
+  const reached = new Set([...dflashModule.matchAll(/\bI\.([\w$]+)/g)].map((m) => m[1]));
+  assert.ok(reached.has('r2') && reached.size >= 10, 'runner internals scan found ' + [...reached]);
+  for (const name of reached) assert.ok(internals.has(name), `runner uses I.${name}, the engine's __dflashInternals does not export it`);
   assert.match(dflashModule, /^export \{ DFlashRunner, Drafter, CFG \};$/m);
   assert.match(dflashModule, /async \*generate\(tokenIds, cache, generationArgs, beginDecode, eosTokenId\)/);
   assert.match(dflashModule, /release\(cache\)/);
@@ -151,5 +161,11 @@ assert.match(
   new RegExp(`COMPONENT_CACHE_LABELS = \\{\\s*'${drafterRepo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}':`),
   'COMPONENT_CACHE_LABELS must name the repo DRAFTER_URL points at',
 );
+
+// Bonsai 2's prefix snapshot (~390 MB in IndexedDB, the engine's own store name) is listed in the Bonsai 2 row,
+// and its Delete clears the stores: deleteDatabase never settles while the engine holds a connection.
+assert.match(bonsai2Engine, /var Uy="webgpu-prefix-snapshots",qm="prefix-snapshot-slot"/);
+assert.match(indexSource, /if \(dbNames\.includes\('webgpu-prefix-snapshots'\)\) \{[^]*?get\('prefix-snapshot-slot'\)[^]*?add\('prism-ml\/Ternary-Bonsai-2-27B-gguf', 'prefix snapshot', bytes, async \(\) => \{\s*for \(const s of stores\) await idbReq\(db\.transaction\(s, 'readwrite'\)\.objectStore\(s\)\.clear\(\)\);/);
+assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',/);
 
 console.log('LocalMind inference workers and host catalog: ok');

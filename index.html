@@ -9979,6 +9979,7 @@ self.addEventListener('message', async (e) => {
     //   Ternary Bonsai 2 kernels   → IndexedDB 'gguf-cache-v1' (meta + chunk stores keyed by GGUF URL)
     //   wllama (GGUF)              → OPFS 'cache/' (data file + '__metadata__' twin holding originalURL)
     //   resumable ONNX downloads   → IndexedDB 'localmind-downloads' (meta keyed by URL, chunks 'url|n')
+    //   Bonsai 2 prefix snapshot   → IndexedDB 'webgpu-prefix-snapshots' (one slot, listed under the Bonsai 2 repo)
     // Retired engines left more behind: the Gemma 4 kernels engine used IndexedDB
     // 'safetensors-cache-v1' + Cache Storage 'bonsai-pipeline-v1'. inventoryModelCaches() walks all of it and groups by
     // Hugging Face repo (or URL origin for custom GGUF URLs), so Settings shows one row
@@ -10088,6 +10089,22 @@ self.addEventListener('message', async (e) => {
             });
           }
         } catch (e) { console.warn('cache inventory (localmind-downloads):', e); }
+      }
+      // Ternary Bonsai 2's prefix snapshot: one IndexedDB slot (~390 MB with the agent prompt) holding the KV and
+      // recurrent state after the system prompt, so a fresh chat skips that prefill. Listed in the model's row. The
+      // stores are cleared rather than the database deleted: the engine keeps its connection open.
+      if (dbNames.includes('webgpu-prefix-snapshots')) {
+        try {
+          const db = await idbOpenExisting('webgpu-prefix-snapshots');
+          const stores = [...db.objectStoreNames];
+          const slot = stores.includes('meta') ? await idbReq(db.transaction('meta', 'readonly').objectStore('meta').get('prefix-snapshot-slot')) : null;
+          if (slot) {
+            const bytes = Array.isArray(slot.sizes) ? slot.sizes.reduce((n, s) => n + s, 0) : 0;
+            add('prism-ml/Ternary-Bonsai-2-27B-gguf', 'prefix snapshot', bytes, async () => {
+              for (const s of stores) await idbReq(db.transaction(s, 'readwrite').objectStore(s).clear());
+            });
+          }
+        } catch (e) { console.warn('cache inventory (webgpu-prefix-snapshots):', e); }
       }
       // 3. OPFS (wllama)
       try {

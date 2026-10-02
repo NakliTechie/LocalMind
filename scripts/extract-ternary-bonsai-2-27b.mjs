@@ -47,22 +47,32 @@ export function extractTernaryBonsai2Engine(html) {
   const cut = mod.indexOf(EXPORT_LINE) + EXPORT_LINE.length;
   let engine = mod.slice(0, cut);
 
-  // 2b. System-prefix priming must not take the whole turn down. On a fresh
+  // 2b. System-prefix priming that works with Qwen3.8's template. On a fresh
   //     cache the engine renders the LEADING system messages ALONE (no user
-  //     turn, add_generation_prompt=false) to snapshot the KV state after the
-  //     system prompt. Qwen3.8's chat template refuses that render outright
-  //     (`raise_exception('No user query found in messages.')`), so every first
-  //     turn that carries a system prompt threw — LocalMind always sends one; the
-  //     upstream Space never does, which is why it never hit this. The snapshot is
-  //     an optimisation only: on a template error, skip priming (return 0) and
-  //     let generate() prefill the full prompt as usual.
+  //     turn, add_generation_prompt=false), prefills them, captures a rewind
+  //     point and saves the KV + recurrent state to its IndexedDB prefix
+  //     snapshot, so the next fresh chat with the same system prompt imports it
+  //     instead of prefilling ~2K tokens again (16–25 s on Bonsai 2). Qwen3.8's
+  //     chat template refuses a system-only render
+  //     (`raise_exception('No user query found in messages.')`); the upstream
+  //     Space never sends a system prompt, LocalMind always does. When that
+  //     render throws, render the system turns followed by two different user
+  //     turns and keep the token prefix the two share (the system turns plus the
+  //     user-turn header): any real conversation that opens with these system
+  //     turns and a user message starts with exactly those tokens. The engine
+  //     still checks the prefix against the real prompt and skips priming on a
+  //     mismatch, and any other template error still skips priming (return 0)
+  //     rather than failing the turn.
   const primeMarker = 'let s=Dh(e);if(s.length===0)return 0;let i=this.#h(s,!1,t),n=this.tokenizer.encode(i,{add_special_tokens:!1}).ids;';
   if (engine.split(primeMarker).length !== 2) {
     throw new Error('bonsai2 bundle: system-prefix priming marker (#m: Dh/#h render) not found exactly once; re-locate before patching');
   }
   engine = engine.replace(
     primeMarker,
-    'let s=Dh(e);if(s.length===0)return 0;let i;try{i=this.#h(s,!1,t)}catch{return 0}let n=this.tokenizer.encode(i,{add_special_tokens:!1}).ids;',
+    'let s=Dh(e);if(s.length===0)return 0;let n;try{n=this.tokenizer.encode(this.#h(s,!1,t),{add_special_tokens:!1}).ids}catch{try{' +
+      'let x=this.tokenizer.encode(this.#h([...s,{role:"user",content:"hello"}],!1,t),{add_special_tokens:!1}).ids,' +
+      'y=this.tokenizer.encode(this.#h([...s,{role:"user",content:"world"}],!1,t),{add_special_tokens:!1}).ids,k=0;' +
+      'for(;k<x.length&&k<y.length&&x[k]===y[k];)++k;n=x.slice(0,k)}catch{return 0}}',
   );
 
   // 2c. More range streams in flight. The engine's parallel download is bounded
@@ -101,9 +111,10 @@ export function extractTernaryBonsai2Engine(html) {
     '   Upstream ships NO explicit license; vendored consistent with LocalMind\'s other\n' +
     '   webml-community engines (lfm2_5.js).\n' +
     '   Boot scene + Space UI (token gate / chat panel) stripped; exports kept verbatim;\n' +
-    '   THREE patches: (1) system-prefix priming (#m) returns 0 instead of throwing when the\n' +
-    '   chat template refuses a system-only render (Qwen3.8: "No user query found in\n' +
-    '   messages."); (2) download byteBudget 96 MB -> 256 MB (~10 range streams in flight\n' +
+    '   THREE patches: (1) system-prefix priming (#m): when the chat template refuses a\n' +
+    '   system-only render (Qwen3.8: "No user query found in messages."), the prefix is the\n' +
+    '   token prefix shared by two renders with different user turns; any other template\n' +
+    '   error skips priming; (2) download byteBudget 96 MB -> 256 MB (~10 range streams in flight\n' +
     '   instead of ~4; HF CDN throttles per connection); (3) DFlash 2 speculative decoding:\n' +
     '   __dflashInternals hook, specDecodeRunner() seam, qwen35 verify mode, Lut2SmallMGemm\n' +
     '   op, recurrence rewind (scripts/bonsai2-dflash-patches.mjs; runner in\n' +
