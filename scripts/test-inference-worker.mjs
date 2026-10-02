@@ -113,6 +113,24 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
     'bartowski/SmolLM2-360M-Instruct-GGUF', 'Qwen/Qwen2.5-1.5B-Instruct-GGUF',
     'lmstudio-community/Bonsai-27B-GGUF']) assert.ok(retired.includes(repo), `retired list lacks ${repo}`);
   assert.match(indexSource, /^\s+sweepRetiredModelCaches\(\);/m);
+  // A retired repo the user re-adds as a custom model is live again: its cache is neither swept at
+  // boot nor tagged "retired" (2026-10-02, LFM2.5-230M-ONNX lost 404 MB on every reload). Run the
+  // registry helpers against a fake MODELS, then pin that the inventory uses them and that the
+  // boot sweep runs after custom models are restored from storage.
+  const helpersSrc = indexSource.slice(indexSource.indexOf('    function repoOfUrl(url) {'), indexSource.indexOf('    const fmtBytes = '));
+  const helpers = (models) => new Function('MODELS', 'RETIRED_MODEL_REPOS', helpersSrc + '\nreturn { isRetiredRepo };')(models, retired);
+  const lfm = 'LiquidAI/LFM2.5-230M-ONNX', smol = 'bartowski/SmolLM2-360M-Instruct-GGUF';
+  assert.equal(helpers({}).isRetiredRepo(lfm), true);
+  assert.equal(helpers({ [lfm]: { id: lfm, label: 'LFM2.5-230M-ONNX (custom)', custom: true } }).isRetiredRepo(lfm), false, 're-added custom ONNX repo swept as retired');
+  const ggufUrl = `https://huggingface.co/${smol}/resolve/main/SmolLM2-360M-Instruct-Q8_0.gguf`;
+  assert.equal(helpers({ [ggufUrl]: { id: ggufUrl, label: 'SmolLM2 · GGUF (custom)', backend: 'wllama', custom: true } }).isRetiredRepo(smol), false, 're-added custom GGUF URL swept as retired');
+  assert.equal(helpers({ [lfm]: { id: lfm, custom: true } }).isRetiredRepo(smol), true);
+  assert.equal(helpers({}).isRetiredRepo('prism-ml/Ternary-Bonsai-2-27B-gguf'), false);
+  assert.match(indexSource, /retired: isRetiredRepo\(repo\),/);
+  assert.match(indexSource, /const retired = \[\.\.\.groups\.values\(\)\]\.filter\(g => g\.retired\);/);
+  const restoreAt = indexSource.indexOf('for (const m of loadCustomModelsFromStorage()) {');
+  const sweepAt = indexSource.search(/^\s+sweepRetiredModelCaches\(\);/m);
+  assert.ok(restoreAt > -1 && sweepAt > restoreAt, 'the boot sweep must run after custom models are restored');
 }
 assert.equal(catalog.defaultKey, 'lfm2-230m-webgpu');
 assert.deepEqual(

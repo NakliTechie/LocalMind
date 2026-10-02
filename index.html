@@ -8287,8 +8287,9 @@ self.addEventListener('message', async (e) => {
     }
 
     // ── Model registry ──────────────────────────────────────────
-    // Repos LocalMind once shipped in the picker and no longer does. No code path can
-    // read their caches again, so sweepRetiredModelCaches() removes them at boot.
+    // Repos LocalMind once shipped in the picker and no longer does. Unless the user re-adds
+    // one as a custom model, no code path reads its cache again, so
+    // sweepRetiredModelCaches() removes it at boot.
     // Append here whenever a MODELS entry is retired; scripts/test-inference-worker.mjs
     // checks the list never overlaps the live registry.
     const RETIRED_MODEL_REPOS = [
@@ -9984,7 +9985,7 @@ self.addEventListener('message', async (e) => {
     // 'safetensors-cache-v1' + Cache Storage 'bonsai-pipeline-v1'. inventoryModelCaches() walks all of it and groups by
     // Hugging Face repo (or URL origin for custom GGUF URLs), so Settings shows one row
     // per model with its own Delete, and sweepRetiredModelCaches() removes at boot only
-    // the groups whose repo is in RETIRED_MODEL_REPOS. Everything else is the user's call.
+    // the groups isRetiredRepo() names. Everything else is the user's call.
     const cacheInfo = document.getElementById('cacheInfo');
 
     function repoOfUrl(url) {
@@ -10001,14 +10002,18 @@ self.addEventListener('message', async (e) => {
     const COMPONENT_CACHE_LABELS = {
       'naklitechie/Qwen3.8-27B-DFlash2-ternary-bonsai2': 'DFlash 2 drafter \u00b7 Ternary Bonsai 2',
     };
+    // A MODELS entry reads `repo` when its id is that HF repo, or a file URL inside it.
+    const modelUsesRepo = (m, repo) => { const id = String(m.id || ''); return id === repo || (id.startsWith('http') && repoOfUrl(id) === repo); };
     function registryLabelForRepo(repo) {
       const labels = [];
-      for (const m of Object.values(MODELS)) {
-        const id = String(m.id || '');
-        if (id === repo || (id.startsWith('http') && repoOfUrl(id) === repo)) labels.push(m.label);
-      }
+      for (const m of Object.values(MODELS)) if (modelUsesRepo(m, repo)) labels.push(m.label);
       if (labels.length) return labels.join(' / ');
       return COMPONENT_CACHE_LABELS[repo] || null;
+    }
+    // A listed repo stops being retired while any MODELS entry reads it: a user who re-adds one as a
+    // custom model (restored from storage before the boot sweep runs) keeps its cache across reloads.
+    function isRetiredRepo(repo) {
+      return RETIRED_MODEL_REPOS.includes(repo) && !Object.values(MODELS).some(m => modelUsesRepo(m, repo));
     }
     const fmtBytes = (n) => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : Math.round(n / 1048576) + ' MB';
     const idbReq = (req) => new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
@@ -10025,7 +10030,7 @@ self.addEventListener('message', async (e) => {
       const add = (repo, store, bytes, deleter) => {
         let g = groups.get(repo);
         if (!g) {
-          g = { repo, label: registryLabelForRepo(repo), retired: RETIRED_MODEL_REPOS.includes(repo), bytes: 0, stores: new Set(), deleters: [] };
+          g = { repo, label: registryLabelForRepo(repo), retired: isRetiredRepo(repo), bytes: 0, stores: new Set(), deleters: [] };
           g.remove = async () => { for (const d of g.deleters) { try { await d(); } catch (e) { console.warn('cache delete failed:', repo, e); } } };
           groups.set(repo, g);
         }
@@ -10160,8 +10165,9 @@ self.addEventListener('message', async (e) => {
       }
     }
 
-    // Boot sweep: drop caches only for repos in RETIRED_MODEL_REPOS. Sized via
-    // storage.estimate() before/after so the boot path never reads blobs.
+    // Boot sweep: drop caches only for repos isRetiredRepo() names (in RETIRED_MODEL_REPOS
+    // and not re-added as a custom model). Sized via storage.estimate() before/after so
+    // the boot path never reads blobs.
     async function sweepRetiredModelCaches() {
       try {
         const groups = await inventoryModelCaches({ measure: false });
