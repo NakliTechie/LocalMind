@@ -202,6 +202,27 @@ assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',/);
   assert.match(indexSource, /\.mode-chip\.moved:not\(\.active\) \{ display: none; \}/);
 }
 
+// Empty state + load failure (Chunk L layer 4): every path that marks a load failed also shows
+// the cause with Retry / Choose another model; the welcome has no mascot and no stale "Pick a
+// … model" copy; Things to Try moved out of About into the empty chat.
+{
+  const failures = indexSource.split("statusBadge.className = 'status-badge error';").length - 1;
+  const handled = indexSource.split('showLoadError(').length - 1 - 1; // minus the definition
+  assert.ok(failures >= 3, 'load-failure paths: ' + failures);
+  for (const marker of ["statusText.textContent = 'Worker error';", "statusText.textContent = 'Error';", "statusText.textContent = 'Gemini Nano unavailable';"]) {
+    const at = indexSource.indexOf(marker);
+    assert.ok(at > 0, marker);
+    assert.match(indexSource.slice(at, at + 400), /showLoadError\(/, `no showLoadError after ${marker}`);
+  }
+  assert.ok(handled >= 3);
+  assert.match(indexSource, /try \{ hideLoadError\(\); \} catch \{\}/);
+  const welcome = /<div class="welcome" id="welcomeMsg">([\s\S]*?)<p class="mobile-tip"/.exec(indexSource)[1];
+  assert.doesNotMatch(welcome, /&#129504;|Pick a Ternary Bonsai/);
+  assert.match(welcome, /id="welcomeStatus" role="status"/);
+  assert.ok((welcome.match(/class="try-prompt"/g) || []).length >= 4);
+  assert.doesNotMatch(indexSource, /data-tab="try"/);
+}
+
 // Settings + models (Chunk L layer 3): sections are reached by deep link, never a blocking
 // confirm(); the tab row leads the panel; the model descriptions live once, in Settings →
 // Models, and name every model in the picker.

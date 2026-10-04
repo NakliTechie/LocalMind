@@ -229,6 +229,16 @@
       margin-top: 8px;
     }
 
+    /* Empty state (Chunk L layer 4) */
+    .welcome-status { font-size: 0.8rem; color: var(--gray-700); margin-bottom: 14px; font-variant-numeric: tabular-nums; }
+    .welcome-status.ready { color: var(--success-text); }
+    .welcome-status.error { color: var(--error-text); }
+    .welcome-prompts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 14px auto 0; max-width: 560px; }
+    .welcome-prompts .try-prompt { display: inline-block; margin: 0; font: inherit; font-size: 0.78rem; font-style: normal; }
+    .welcome-prompts .try-prompt:focus-visible { outline: 2px solid var(--indigo-500); outline-offset: 1px; }
+    .load-error { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 16px; background: var(--error-bg); border-top: 1px solid var(--error-border); color: var(--error-text); font-size: 0.78rem; }
+    .load-error[hidden] { display: none; }
+    .load-error-text { flex: 1 1 260px; overflow-wrap: anywhere; }
     .try-prompt {
       display: block;
       background: var(--gray-50);
@@ -323,11 +333,6 @@
       font-size: 0.88rem;
       margin: auto 0;
       padding: 40px 20px;
-    }
-
-    .welcome-icon {
-      font-size: 2.5rem;
-      margin-bottom: 12px;
     }
 
     .welcome h2 {
@@ -2231,7 +2236,6 @@
               <button class="help-tab" data-tab="models">Tools</button>
               <button class="help-tab" data-tab="features">Features</button>
               <button class="help-tab" data-tab="api">JS API</button>
-              <button class="help-tab" data-tab="try">Things to Try</button>
             </div>
             <div class="help-tab-content active" data-tab="about">
               <p>A private AI workspace running open models (<strong>Bonsai, Qwen3.5, LFM2, Gemma, MiniCPM5</strong>) entirely in your browser via WebGPU &mdash; chat, a model council, deep research, skills, memory, and tool calling, all on-device.</p>
@@ -2362,68 +2366,6 @@
               <p>Open <code>demo.html</code> in the same folder. It iframes LocalMind, auto-flips the toggle, waits for the model, and runs both a non-streaming and a streaming completion against <code>iframe.contentWindow.localmind</code>.</p>
               <div class="help-note">Experimental &mdash; the shape may change before a stable v1.1.</div>
             </div>
-            <div class="help-tab-content" data-tab="try">
-              <h4>Math &amp; Conversions</h4>
-              <span class="try-prompt" data-prompt="What is 15% of 2450?">What is 15% of 2450?</span>
-              <span class="try-prompt" data-prompt="Convert 72 Fahrenheit to Celsius">Convert 72 Fahrenheit to Celsius</span>
-              <span class="try-prompt" data-prompt="If I invest $10,000 at 7% annual return, how much after 5 years with compound interest?">Compound interest: $10K at 7% for 5 years?</span>
-              <h4>Time &amp; Reminders</h4>
-              <span class="try-prompt" data-prompt="What time is it in Tokyo?">What time is it in Tokyo?</span>
-              <span class="try-prompt" data-prompt="Remind me in 5 minutes to check the oven">Remind me in 5 minutes to check the oven</span>
-              <h4>Memory</h4>
-              <span class="try-prompt" data-prompt="Remember that I'm a software engineer working on a React project called Dashboard Pro">Remember: I'm a software engineer on Dashboard Pro</span>
-              <span class="try-prompt" data-prompt="What do you know about me and my projects?">What do you know about me?</span>
-              <span class="try-prompt" data-prompt="Forget everything about my preferences">Forget my preferences</span>
-              <h4>Translation</h4>
-              <span class="try-prompt" data-prompt="Translate 'Good morning, how are you?' to Japanese, French, and Hindi">Translate "Good morning" to Japanese, French, Hindi</span>
-              <span class="try-prompt" data-prompt="How do you say 'Where is the nearest train station?' in Spanish and German?">Train station directions in Spanish &amp; German</span>
-              <h4>Writing &amp; Analysis</h4>
-              <span class="try-prompt" data-prompt="Write a professional email declining a meeting invitation politely">Write a polite meeting decline email</span>
-              <span class="try-prompt" data-prompt="Summarize the pros and cons of microservices vs monolithic architecture">Microservices vs monolith: pros and cons</span>
-              <span class="try-prompt" data-prompt="Explain the concept of WebGPU to a non-technical person in 3 sentences">Explain WebGPU in 3 simple sentences</span>
-              <h4>Documents (attach a PDF, DOCX, or text file)</h4>
-              <span class="try-prompt" data-prompt="Summarize the key points from the document I just uploaded">Summarize the uploaded document</span>
-              <span class="try-prompt" data-prompt="What are the main conclusions or recommendations in my document?">Main conclusions from my document</span>
-              <h4>Multimodal (attach an image first)</h4>
-              <span class="try-prompt" data-prompt="Describe this image in detail">Describe this image in detail</span>
-              <span class="try-prompt" data-prompt="What text can you see in this image? Transcribe it.">Transcribe text from this image</span>
-              <h4>Web Research (requires API key)</h4>
-              <span class="try-prompt" data-prompt="What are the top tech news stories today?">Top tech news today</span>
-              <span class="try-prompt" data-prompt="Search for the latest WebGPU browser support status and summarize">Latest WebGPU browser support status</span>
-              <span class="try-prompt" data-prompt="Find recent articles about AI running locally in the browser and give me a summary with sources">AI in the browser: recent articles with sources</span>
-              <h4>Coding</h4>
-              <span class="try-prompt" data-prompt="Write a Python function that finds all prime numbers up to n using the Sieve of Eratosthenes">Sieve of Eratosthenes in Python</span>
-              <span class="try-prompt" data-prompt="Explain the difference between async/await and Promises in JavaScript with examples">async/await vs Promises explained</span>
-              <h4>Math &amp; Diagrams</h4>
-              <span class="try-prompt" data-prompt="Derive the quadratic formula step by step, using inline and display LaTeX math.">Derive the quadratic formula with LaTeX</span>
-              <span class="try-prompt" data-prompt="Show the Pythagorean identity sin^2 x + cos^2 x = 1 and sketch a short proof using LaTeX display math.">Pythagorean identity with display math</span>
-              <span class="try-prompt" data-prompt="Draw a Mermaid flowchart for a login flow: user submits credentials, server validates, issues a JWT, client stores it, requests authorized resources.">Mermaid: login + JWT flow</span>
-              <span class="try-prompt" data-prompt="Draw a Mermaid sequence diagram for the classic producer-consumer pattern with a bounded buffer.">Mermaid: producer-consumer sequence</span>
-              <h4>Live HTML / SVG Artifacts</h4>
-              <span class="try-prompt" data-prompt="Output only a full standalone HTML document in a ```html block: a click counter with +, -, and reset buttons. Style it nicely.">Interactive counter (HTML artifact)</span>
-              <span class="try-prompt" data-prompt="Output only a complete HTML document in a ```html block: a Pomodoro timer with 25-minute countdown, start, pause, reset.">Pomodoro timer (HTML artifact)</span>
-              <span class="try-prompt" data-prompt="Output only an SVG in a ```svg block: a sunrise scene with gradient sky, sun, and three mountain silhouettes.">Sunrise scene (SVG artifact)</span>
-              <h4>Python (Gemma 4, run_python tool)</h4>
-              <span class="try-prompt" data-prompt="Use run_python to compute the first 20 Fibonacci numbers and print them as a comma-separated list.">First 20 Fibonacci via Python</span>
-              <span class="try-prompt" data-prompt="Use run_python with pandas to generate a synthetic dataframe of 1000 rows with columns age (18-80), income (30k-200k, roughly log-normal), and compute the correlation.">Pandas synthetic data + correlation</span>
-              <span class="try-prompt" data-prompt="Use run_python to solve this system of equations with numpy: 2x + 3y - z = 5, x - y + 2z = 3, 3x + y + z = 10">Solve a 3x3 linear system</span>
-              <h4>Multi-step planning (Gemma 4, Settings toggle)</h4>
-              <span class="try-prompt" data-prompt="Compare cold brew, pour-over, and French press coffee: typical brew time, caffeine content, flavor profile, and equipment cost. Give a recommendation for someone new to specialty coffee.">Compare 3 coffee brewing methods</span>
-              <span class="try-prompt" data-prompt="Research the history of the Silk Road in 3 phases (ancient origins, medieval peak, modern revival), then summarize the key goods traded at each phase.">Silk Road in 3 phases</span>
-              <h4>MCP tools (after adding a server in Settings)</h4>
-              <span class="try-prompt" data-prompt="List every MCP tool you have available and what each one does.">List all MCP tools I have</span>
-              <span class="try-prompt" data-prompt="Use mcp_fetch_url (or whatever fetch-like MCP tool is available) to grab https://example.com and summarise the response.">Use an MCP fetch tool</span>
-              <h4>Voice to text (no prompt needed)</h4>
-              <p style="font-size:0.78rem;color:var(--gray-500);margin:4px 0 8px">Click the 🗣 button to the left of the input, speak a sentence, click again to stop. Whisper runs on-device. Try saying: <em>&ldquo;Write a short summary of the Great Pyramid of Giza in three sentences.&rdquo;</em></p>
-              <div class="help-note">
-                <strong>Tips.</strong>
-                <ul style="margin:4px 0 0 16px;padding:0;font-size:0.72rem;line-height:1.5">
-                  <li>For artifact and Mermaid prompts, start with <em>&ldquo;Output only this&hellip;&rdquo;</em> or <em>&ldquo;Copy this exactly&hellip;&rdquo;</em> &mdash; smaller models tend to wrap code blocks in prose otherwise.</li>
-                  <li>If a <code>```mermaid</code> block renders as plain code, the model stripped the language label. Re-send with <em>&ldquo;Preserve the language tag after the backticks&rdquo;</em>.</li>
-                  <li>Click any prompt above to paste it. Web search needs a provider in Settings. Multimodal needs a Gemma 4 model + an attached image. Artifact, math, and Mermaid rendering work on any model; <code>run_python</code>, MCP tools, and multi-step planning require an agent-capable (Gemma 4) model.</li>
-                </ul>
-              </div>
-            </div>
           </div>
         </div>
         <div class="status-badge loading" id="statusBadge">
@@ -2441,12 +2383,24 @@
       <!-- Chat messages -->
       <div class="chat-area" id="chatArea">
         <div class="welcome" id="welcomeMsg">
-          <div class="welcome-icon">&#129504;</div>
-          <h2>Private AI, right in your browser</h2>
-          <p>Models run entirely on your device via WebGPU. Nothing is sent to any server.</p>
-          <p style="font-size:0.78rem;color:var(--gray-400);margin-top:4px">Pick a Ternary Bonsai or Qwen3.5 model for tool calling and memory; Qwen3.5 accepts images, while Gemma 4 accepts images and audio.<br>Web search requires an API key (Tavily, Brave) or a self-hosted SearXNG instance.</p>
+          <p class="welcome-status" id="welcomeStatus" role="status">Starting&hellip;</p>
+          <h2>Private AI on this device</h2>
+          <p>Models run in this browser. What you type is not sent to any server; web search runs only when you turn it on.</p>
+          <div class="welcome-prompts" id="welcomePrompts" aria-label="Example prompts">
+            <button type="button" class="try-prompt" data-prompt="What is 15% of 2450?">What is 15% of 2450?</button>
+            <button type="button" class="try-prompt" data-prompt="What time is it in Tokyo?">What time is it in Tokyo?</button>
+            <button type="button" class="try-prompt" data-prompt="Remember that I prefer metric units">Remember that I prefer metric units</button>
+            <button type="button" class="try-prompt" data-prompt="Translate 'Good morning, how are you?' to Japanese, French, and Hindi">Translate &ldquo;Good morning&rdquo; into Japanese, French and Hindi</button>
+          </div>
           <p class="mobile-tip" style="font-size:0.8rem;color:var(--indigo-600);margin:10px auto 0;max-width:340px;padding:9px 12px;background:var(--indigo-100);border-radius:8px;line-height:1.5">&#128241; On a phone, big models won&rsquo;t fit. Point LocalMind at your computer&rsquo;s <strong>Ollama / LM&nbsp;Studio</strong> (Settings &rarr; Models &rarr; Local endpoint) and use any model over your network.</p>
         </div>
+      </div>
+
+      <!-- Load failure (Chunk L layer 4, UX review H2): cause + a way out, instead of a bare "Error" badge -->
+      <div class="load-error" id="loadError" role="alert" hidden>
+        <span class="load-error-text" id="loadErrorText"></span>
+        <button type="button" class="btn-icon" id="loadErrorRetry">Retry</button>
+        <button type="button" class="btn-icon" id="loadErrorPick">Choose another model</button>
       </div>
 
       <!-- Progress bar (model loading) -->
@@ -16175,6 +16129,7 @@ self.addEventListener('message', async (e) => {
         progressSection.classList.remove('visible');
         progressText.textContent = e.message || 'Worker failed to start';
         modelSelect.disabled = false;
+        showLoadError(e.message || 'the worker failed to start');
       });
 
       w.addEventListener('message', (e) => {
@@ -16295,6 +16250,7 @@ self.addEventListener('message', async (e) => {
             statusText.textContent = 'Error';
             progressSection.classList.remove('visible');
             modelSelect.disabled = false;
+            showLoadError(data.message);
           }
           console.error('Worker error:', data.message);
           if (generating && currentAssistantEl) {
@@ -16315,6 +16271,61 @@ self.addEventListener('message', async (e) => {
       });
     }
 
+    // ── Load failure + empty-state status (Chunk L layer 4) ───
+    // A failed load used to leave a bare red "Error" badge and an input stuck on "Loading…"
+    // (UX review H2). Every load-failure path now calls showLoadError(): the model's name, the
+    // cause, and two ways on — Retry (same model) and Choose another model (the picker).
+    const loadError = document.getElementById('loadError');
+    const loadErrorText = document.getElementById('loadErrorText');
+    let loadErrorKey = null;
+    function showLoadError(message, key) {
+      loadErrorKey = key || activeModelKey;
+      const m = MODELS[loadErrorKey];
+      const name = m ? m.label : 'The model';
+      const cause = String(message || 'unknown error').replace(/^Failed to load model:\s*/i, '');
+      loadErrorText.textContent = `${name} didn't load: ${cause.length > 220 ? cause.slice(0, 220) + '…' : cause}`;
+      loadErrorText.title = cause;
+      statusText.textContent = 'Load failed';
+      chatInput.placeholder = `${name} didn't load — retry, or choose another model`;
+      loadError.hidden = false;
+    }
+    function hideLoadError() { loadError.hidden = true; }
+    document.getElementById('loadErrorRetry').addEventListener('click', () => {
+      hideLoadError();
+      if (loadErrorKey && MODELS[loadErrorKey]) loadModel(loadErrorKey);
+    });
+    document.getElementById('loadErrorPick').addEventListener('click', () => {
+      document.getElementById('modelPickerBtn').click();
+    });
+
+    // The empty chat states what is actually loaded, loading, or failed (M1), following the
+    // status badge; the example prompts fill the input (moved from About → Things to Try, L1).
+    const welcomeStatus = document.getElementById('welcomeStatus');
+    function updateWelcomeStatus() {
+      const m = MODELS[activeModelKey];
+      let text = statusText.textContent, state = '';
+      if (!loadError.hidden) {   // not the badge's error class: "WebGPU off" uses it too
+        text = `${m ? m.label : 'The model'} didn't load — see the message below.`; state = 'error';
+      } else if (modelReady && m) {
+        text = `${m.label} is ready · ` + (m.backend === 'chrome-ai' ? 'built into Chrome' : m.backend === 'endpoint' ? 'on your local server' : 'runs on this device');
+        state = 'ready';
+      } else if (m) {
+        const size = String(m.size || '').replace(/\s*\(.*$/, '');
+        const fetched = size && m.backend !== 'chrome-ai' && m.backend !== 'endpoint';
+        text = `Loading ${m.label}` + (fetched ? ` · ${size}, downloaded once, then loaded from this browser` : '') + '…';
+      }
+      welcomeStatus.textContent = text;
+      welcomeStatus.className = 'welcome-status' + (state ? ' ' + state : '');
+    }
+    new MutationObserver(updateWelcomeStatus).observe(statusBadge, { attributes: true, childList: true, subtree: true, characterData: true });
+    document.getElementById('welcomePrompts').addEventListener('click', (e) => {
+      const b = e.target.closest('.try-prompt');
+      if (!b) return;
+      chatInput.value = b.dataset.prompt;
+      chatInput.dispatchEvent(new Event('input'));
+      chatInput.focus();
+    });
+
     // ── Load model ──────────────────────────────────────────────
     // Thin shell over LocalMind.runtime.loadModel that drives the
     // existing UI state machine. The runtime owns worker lifecycle;
@@ -16326,6 +16337,7 @@ self.addEventListener('message', async (e) => {
       const m = MODELS[key];
       if (!m) return;
       try { refreshModelPickerLabel(); } catch {}   // boot and API loads set the select without a change event
+      try { hideLoadError(); } catch {}
 
       if (m.backend === 'chrome-ai') { loadChromeAIModel(key, m); return; }
       if (m.backend === 'endpoint') { loadEndpointModel(key, m); return; }
@@ -16677,6 +16689,7 @@ self.addEventListener('message', async (e) => {
         statusText.textContent = 'Gemini Nano unavailable';
         chatInput.disabled = true;
         chatInput.placeholder = msg;
+        showLoadError(msg, key);
         sendBtn.disabled = true; if (searchSendBtn) searchSendBtn.disabled = true;
         modelSelect.disabled = false;
         showToast(msg);
