@@ -1842,6 +1842,21 @@
     .header-menu-btn:focus-visible { outline: 2px solid var(--indigo-500); }
     .header > h1 { margin-right: auto; }
     .nav-mobile-only, .app-nav .nav-mobile-only { display: none; }
+    /* Command palette (Chunk L layer 5) */
+    .cmdk { width: min(560px, calc(100vw - 24px)); max-height: min(70vh, 520px); margin: 12vh auto auto; padding: 0; border: 1px solid var(--gray-200); border-radius: 12px; background: var(--white); color: var(--gray-800); box-shadow: 0 16px 48px rgba(26, 20, 8, 0.18); overflow: hidden; }
+    .cmdk[open] { display: flex; flex-direction: column; }
+    .cmdk::backdrop { background: rgba(26, 20, 8, 0.28); }
+    .cmdk input { border: none; border-bottom: 1px solid var(--gray-200); padding: 14px 16px; font: inherit; font-size: 0.95rem; background: transparent; color: var(--gray-900); outline: none; }
+    #cmdkList { overflow: auto; padding: 6px; flex: 1; }
+    .cmdk-group { font-size: 0.66rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--gray-600); padding: 8px 10px 4px; }
+    .cmdk-item { display: flex; justify-content: space-between; gap: 12px; padding: 7px 10px; border-radius: 6px; font-size: 0.85rem; cursor: pointer; }
+    .cmdk-item.focused { background: var(--gray-50); box-shadow: inset 2px 0 0 var(--indigo-500); }
+    .cmdk-item[aria-disabled="true"] { color: var(--gray-600); cursor: default; }
+    .cmdk-meta { font-size: 0.72rem; color: var(--gray-600); white-space: nowrap; }
+    .cmdk-empty { padding: 14px 10px; font-size: 0.82rem; color: var(--gray-600); }
+    .cmdk-hint { font-size: 0.7rem; color: var(--gray-600); padding: 6px 16px 8px; border-top: 1px solid var(--gray-200); margin: 0; }
+    .nav-kbd { float: right; font: inherit; font-size: 0.7rem; color: var(--gray-600); }
+
     /* Sidebar navigation (Chunk L layer 1) */
     .app-nav { display: flex; flex-direction: column; gap: 1px; padding: 8px; border-bottom: 1px solid var(--gray-200); flex-shrink: 0; }
     .app-nav button, .nav-more summary, .sidebar-foot button {
@@ -2986,6 +3001,7 @@
       <!-- App navigation (Chunk L layer 1). Each item drives an existing chip or button
            (data-click), so every mode keeps one code path; data-mode mirrors the active chip. -->
       <nav class="app-nav" id="appNav" aria-label="Main">
+        <button type="button" data-palette>Commands <kbd class="nav-kbd" id="paletteKbd">&#8984;K</kbd></button>
         <button type="button" data-click="newChatBtn">New chat</button>
         <button type="button" data-mode="chat">Chat</button>
         <button type="button" data-click="chipImage" data-mode="image">Image</button>
@@ -3088,6 +3104,15 @@
 
   <!-- Hidden file input -->
   <input type="file" id="fileInput" style="display:none" multiple accept="image/*,audio/*,video/mp4,.txt,.md,.json,.csv,.pdf,.docx">
+
+  <!-- Command palette (Chunk L layer 5): ⌘K / Ctrl+K. Lists COMMANDS, the one manifest the sidebar,
+       this palette and window.localmind.commands all read. -->
+  <dialog class="cmdk" id="cmdk" aria-label="Command palette">
+    <input type="text" id="cmdkInput" placeholder="Type a command or a model name&hellip;" autocomplete="off" spellcheck="false"
+           role="combobox" aria-expanded="true" aria-controls="cmdkList" aria-autocomplete="list">
+    <div id="cmdkList" role="listbox" aria-label="Commands"></div>
+    <p class="cmdk-hint">&uarr;&darr; to move &middot; Enter to run &middot; Esc to close</p>
+  </dialog>
 
   <!-- Footer -->
   <div class="footer-nav">
@@ -10758,6 +10783,23 @@ self.addEventListener('message', async (e) => {
         completions: Object.freeze({
           create: chatCompletionsCreate,
         }),
+      }),
+      // The UI's command manifest (hard rule 6). list() is everything the ⌘K palette shows;
+      // run(id) refuses agent:false commands (destructive, or needing a user gesture).
+      commands: Object.freeze({
+        list() {
+          return commandList().map(c => ({ id: c.id, title: c.title, group: c.group, enabled: commandEnabled(c), agent: c.agent !== false }));
+        },
+        run(id) {
+          const start = Date.now();
+          try {
+            runCommand(String(id), { fromAgent: true });
+            logApiCall({ method: 'commands.run', outcome: 'ok', durationMs: Date.now() - start });
+          } catch (err) {
+            logApiCall({ method: 'commands.run', outcome: 'err', error: err.message, durationMs: Date.now() - start });
+            throw err;
+          }
+        },
       }),
       ocr: ocrApi,
       tts: Object.freeze({
@@ -18870,8 +18912,13 @@ self.addEventListener('message', async (e) => {
       navNewChat.disabled = newChatBtn.disabled;
     }
     historySidebar.addEventListener('click', (e) => {
-      const b = e.target.closest('button[data-click], button[data-mode], button[data-models]');
+      const b = e.target.closest('button[data-click], button[data-mode], button[data-models], button[data-palette]');
       if (!b) return;
+      if ('palette' in b.dataset) {
+        if (!sidebarDocked.matches) closeHistorySidebar();
+        openCommandPalette();
+        return;
+      }
       if (b.dataset.mode === 'chat' && !b.dataset.click) {
         if (!generating && activeMode !== 'chat') setExclusiveMode(activeMode);
       } else if ('models' in b.dataset) {
@@ -18890,6 +18937,121 @@ self.addEventListener('message', async (e) => {
       const v = (document.querySelector('.help-note')?.textContent.match(/v\d+\.\d+\.\d+/) || [])[0];
       if (v) document.getElementById('appVersion').textContent = v;
     }
+
+    // ── Command manifest + palette (Chunk L layer 5) ──────────
+    // COMMANDS is the one list of UI commands (hard rule 6: two doors, one core). The ⌘K palette
+    // lists it, window.localmind.commands exposes it to page scripts, and a test keeps every
+    // sidebar item backed by an entry that drives the same element. agent:false marks commands a
+    // script may not run: destructive (clear) or needing a real user gesture (share, folder).
+    const modeCommand = (mode, title, chip) => ({
+      id: 'mode.' + mode, title, group: 'Modes',
+      run: () => { if (activeMode !== mode) document.getElementById(chip).click(); },
+      enabled: () => !generating,
+    });
+    const STATIC_COMMANDS = [
+      { id: 'chat.new', title: 'New chat', group: 'Chat', run: () => newChatBtn.click(), enabled: () => !newChatBtn.disabled },
+      { id: 'chat.clear', title: 'Clear this chat', group: 'Chat', run: () => clearBtn.click(), enabled: () => !clearBtn.disabled, agent: false },
+      { id: 'chat.share', title: 'Share this chat (encrypted link)', group: 'Chat', run: () => shareBtn.click(), agent: false },
+      { id: 'mode.chat', title: 'Chat', group: 'Modes', run: () => { if (!generating && activeMode !== 'chat') setExclusiveMode(activeMode); } },
+      modeCommand('image', 'Image: generate an image', 'chipImage'),
+      modeCommand('voice', 'Voice: hands-free conversation', 'chipVoice'),
+      modeCommand('compare', 'Compare models on one prompt', 'chipCompare'),
+      modeCommand('batch', 'Batch: one prompt per line', 'chipBatch'),
+      modeCommand('diffuse', 'Diffuse: diffusion text generation', 'chipDiffuse'),
+      modeCommand('ocr', 'OCR: text from an image or PDF', 'chipOCR'),
+      modeCommand('vision', 'Vision: describe the camera or an image', 'chipVision'),
+      modeCommand('clone', 'Clone a voice', 'chipClone'),
+      { id: 'mode.research', title: 'Deep research (needs web search)', group: 'Modes', run: () => { if (activeMode !== 'research') chipResearch.click(); }, enabled: () => !generating },
+      { id: 'search.toggle', title: 'Web search for the next message: on / off', group: 'Modes', run: () => chipSearch.click(), enabled: () => !generating },
+      { id: 'memory.open', title: 'Memory', group: 'Data', run: () => memoryBtn.click() },
+      { id: 'folder.ingest', title: 'Add a folder to memory', group: 'Data', run: () => folderBtn.click(), agent: false },
+      { id: 'models.pick', title: 'Choose a model', group: 'Models', run: () => document.getElementById('modelPickerBtn').click() },
+      { id: 'settings.models', title: 'Settings: Models', group: 'Settings', run: () => openSettings('models') },
+      { id: 'settings.general', title: 'Settings: General', group: 'Settings', run: () => openSettings('general') },
+      { id: 'settings.tools', title: 'Settings: Tools (web search, custom tools, MCP)', group: 'Settings', run: () => openSettings('tools') },
+      { id: 'settings.data', title: 'Settings: Data (folder sync, backups)', group: 'Settings', run: () => openSettings('data') },
+      { id: 'help.about', title: 'About LocalMind', group: 'Help', run: () => helpBtn.click() },
+    ];
+    // One "Switch model" command per picker option, built at call time so custom and
+    // endpoint models appear as soon as they are added.
+    function commandList() {
+      const models = [...modelSelect.options].filter(o => MODELS[o.value]).map(o => ({
+        id: 'model.load:' + o.value, title: 'Switch model: ' + optionName(o), group: 'Models',
+        run: () => pickModel(o.value), enabled: () => !o.disabled && !generating,
+      }));
+      return STATIC_COMMANDS.concat(models);
+    }
+    const commandEnabled = (c) => !c.enabled || !!c.enabled();
+    function runCommand(id, { fromAgent = false } = {}) {
+      const c = commandList().find(x => x.id === id);
+      if (!c) throw new Error('Unknown command: ' + id);
+      if (fromAgent && c.agent === false) throw new Error(`Command ${id} can only be run from the page itself`);
+      if (!commandEnabled(c)) throw new Error(`Command ${id} is not available right now`);
+      c.run();
+    }
+
+    const cmdk = document.getElementById('cmdk');
+    const cmdkInput = document.getElementById('cmdkInput');
+    const cmdkList = document.getElementById('cmdkList');
+    if (!/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) document.getElementById('paletteKbd').textContent = 'Ctrl K';
+    function renderCommandPalette() {
+      const words = cmdkInput.value.toLowerCase().split(/\s+/).filter(Boolean);
+      const hits = commandList().filter(c => {
+        const hay = (c.title + ' ' + c.group + ' ' + c.id).toLowerCase();
+        return words.every(w => hay.includes(w));
+      });
+      cmdkList.innerHTML = '';
+      if (!hits.length) { cmdkList.innerHTML = '<div class="cmdk-empty">No matching command.</div>'; return; }
+      let group = null;
+      hits.forEach((c, i) => {
+        if (c.group !== group) {
+          group = c.group;
+          const g = document.createElement('div'); g.className = 'cmdk-group'; g.textContent = group; cmdkList.appendChild(g);
+        }
+        const row = document.createElement('div');
+        row.className = 'cmdk-item'; row.id = 'cmdk-' + i; row.setAttribute('role', 'option'); row.dataset.id = c.id;
+        if (!commandEnabled(c)) row.setAttribute('aria-disabled', 'true');
+        row.innerHTML = `<span>${escapeHtml(c.title)}</span>` + (c.id.startsWith('model.load:') && isCurrentModelCommand(c.id) ? '<span class="cmdk-meta">current</span>' : '');
+        cmdkList.appendChild(row);
+      });
+      focusCommand(cmdkList.querySelector('.cmdk-item:not([aria-disabled="true"])'));
+    }
+    const isCurrentModelCommand = (id) => id === 'model.load:' + modelSelect.value;
+    function focusCommand(row) {
+      cmdkList.querySelectorAll('.cmdk-item.focused').forEach(r => r.classList.remove('focused'));
+      if (!row) { cmdkInput.removeAttribute('aria-activedescendant'); return; }
+      row.classList.add('focused');
+      cmdkInput.setAttribute('aria-activedescendant', row.id);
+      row.scrollIntoView({ block: 'nearest' });
+    }
+    function openCommandPalette() {
+      if (cmdk.open) return;
+      cmdkInput.value = '';
+      renderCommandPalette();
+      cmdk.showModal();
+      cmdkInput.focus();
+    }
+    function runFocusedCommand(row) {
+      if (!row || row.getAttribute('aria-disabled') === 'true') return;
+      cmdk.close();
+      try { runCommand(row.dataset.id); } catch (err) { showToast(err.message); }
+    }
+    cmdkInput.addEventListener('input', renderCommandPalette);
+    cmdkInput.addEventListener('keydown', (e) => {
+      const rows = [...cmdkList.querySelectorAll('.cmdk-item:not([aria-disabled="true"])')];
+      const i = rows.indexOf(cmdkList.querySelector('.cmdk-item.focused'));
+      if (e.key === 'ArrowDown') { e.preventDefault(); focusCommand(rows[Math.min(rows.length - 1, i + 1)]); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); focusCommand(rows[Math.max(0, i - 1)]); }
+      else if (e.key === 'Enter') { e.preventDefault(); runFocusedCommand(rows[i]); }
+    });
+    cmdkList.addEventListener('click', (e) => runFocusedCommand(e.target.closest('.cmdk-item')));
+    cmdk.addEventListener('click', (e) => { if (e.target === cmdk) cmdk.close(); });   // backdrop
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (cmdk.open) cmdk.close(); else openCommandPalette();
+      }
+    });
     // Push-to-talk: hold the mic (pointer) or hold V (when not typing). Release = send.
     if (voiceMicBtn) {
       const down = (e) => { if (activeMode !== 'voice') return; e.preventDefault(); voiceStartRecording(); };

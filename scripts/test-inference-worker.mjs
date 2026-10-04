@@ -210,6 +210,26 @@ assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',/);
   assert.match(indexSource, /\.mode-chip\.moved:not\(\.active\) \{ display: none; \}/);
 }
 
+// Command manifest (Chunk L layer 5, hard rule 6): every sidebar item is backed by a COMMANDS
+// entry that drives the same element, the palette and window.localmind.commands read the same
+// list, and agent:false guards the destructive / gesture-only commands.
+{
+  const manifest = /const STATIC_COMMANDS = \[([\s\S]*?)\n    \];/.exec(indexSource);
+  assert.ok(manifest, 'STATIC_COMMANDS missing');
+  const nav = /<nav class="app-nav" id="appNav" aria-label="Main">([\s\S]*?)<\/nav>/.exec(indexSource)[1];
+  for (const id of [...nav.matchAll(/data-click="(\w+)"/g)].map((m) => m[1])) {
+    const drives = manifest[1].includes(`${id}.click()`) || manifest[1].includes(`'${id}')`);
+    assert.ok(drives, `sidebar item #${id} has no COMMANDS entry`);
+  }
+  assert.match(manifest[1], /id: 'settings\.models'/, 'the sidebar Models item has no command');
+  for (const id of ['chat.clear', 'chat.share', 'folder.ingest']) {
+    assert.match(manifest[1], new RegExp(`id: '${id.replace('.', '\\.')}'[^\\n]*agent: false`), `${id} must be agent:false`);
+  }
+  assert.match(indexSource, /commands: Object\.freeze\(\{\s*list\(\) \{\s*return commandList\(\)/);
+  assert.match(indexSource, /runCommand\(String\(id\), \{ fromAgent: true \}\)/);
+  assert.match(indexSource, /const hits = commandList\(\)\.filter/);
+}
+
 // Empty state + load failure (Chunk L layer 4): every path that marks a load failed also shows
 // the cause with Retry / Choose another model; the welcome has no mascot and no stale "Pick a
 // … model" copy; Things to Try moved out of About into the empty chat.
