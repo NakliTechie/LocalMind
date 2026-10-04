@@ -8904,7 +8904,9 @@ self.addEventListener('message', async (e) => {
         agentCapable: false,
         thinking: true,   // Qwen3.6 reasoning model — shows the "Show reasoning" toggle
         contextSize: 4096,
-        genConfig: { max_new_tokens: 1024 },
+        // 2048, not 1024: with Show reasoning on, Qwen3.6 can spend 1,000+ tokens thinking before it answers
+        // (2026-10-05: "Is 91 a prime number?" ran out mid-thought at 1024). Generation also stops at the 4K context.
+        genConfig: { max_new_tokens: 2048 },
       },
       // backend:'gemma4moe-ssd' → the custom-WGSL Gemma4MoeSsd engine (gemma4_moe_ssd.js, on the same base
       // as Qwen3.6's): Gemma 4 26B-A4B from Google's QAT Q4_0 GGUF (14.4 GB, not gated). Attention, the dense
