@@ -87,6 +87,8 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   assert.deepEqual([...options].sort(), [...keys].sort(), 'picker options and MODELS registry keys must match');
   assert.equal(options.length, 14);
 }
+// window.localmind.load() sets the select before loading, so the composer's picker names the loaded model.
+assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ modelSelect\.value = key; \} catch \{\}\s*loadModel\(key\);/);
 // SSD-streamed MoE engines (rungs 2b, 2c): one worker source (#moeSsdWorkerSrc) serves both; the factory
 // injects the engine file, its export and its display name. The source must parse once filled in.
 {

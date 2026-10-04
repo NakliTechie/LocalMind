@@ -10820,6 +10820,9 @@ self.addEventListener('message', async (e) => {
       // Already loaded — fast path, no worker churn
       if (key === activeModelKey && modelReady) return Promise.resolve();
       return new Promise((resolve, reject) => {
+        // The composer's picker follows the select, as on boot; without this an API load left it naming the
+        // previous model (2026-10-04).
+        try { modelSelect.value = key; } catch {}
         loadModel(key);
         loadResolvers = { resolve, reject };
       });
