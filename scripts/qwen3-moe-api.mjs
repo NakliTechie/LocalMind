@@ -25,7 +25,7 @@ export function makeApi(log = () => {}) {
     async greedy(ids, n = 16, { top = 5, resetStats = true } = {}) {
       if (resetStats) m.resetCounters();
       const r = await m.greedy(ids, n, { top });
-      return { ids: r.ids, tops: r.tops.map((t) => t.map((x) => [x.id, +x.logit.toFixed(4)])), stats: m.stats() };
+      return { ids: r.ids, tops: r.tops.map((t) => t.map((x) => [x.id, +x.logit.toFixed(4), +x.logprob.toFixed(5)])), stats: m.stats() };
     },
     // Greedy-match gate against a llama-ref.mjs JSON: same prompt ids, same number of tokens.
     // At the first divergence, both sides' top-2 log-prob margins tell a near-tie from a bug.
