@@ -113,6 +113,24 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
     'bartowski/SmolLM2-360M-Instruct-GGUF', 'Qwen/Qwen2.5-1.5B-Instruct-GGUF',
     'lmstudio-community/Bonsai-27B-GGUF']) assert.ok(retired.includes(repo), `retired list lacks ${repo}`);
   assert.match(indexSource, /^\s+sweepRetiredModelCaches\(\);/m);
+  // A retired repo the user re-adds as a custom model is live again: its cache is neither swept at
+  // boot nor tagged "retired" (2026-10-02, LFM2.5-230M-ONNX lost 404 MB on every reload). Run the
+  // registry helpers against a fake MODELS, then pin that the inventory uses them and that the
+  // boot sweep runs after custom models are restored from storage.
+  const helpersSrc = indexSource.slice(indexSource.indexOf('    function repoOfUrl(url) {'), indexSource.indexOf('    const fmtBytes = '));
+  const helpers = (models) => new Function('MODELS', 'RETIRED_MODEL_REPOS', helpersSrc + '\nreturn { isRetiredRepo };')(models, retired);
+  const lfm = 'LiquidAI/LFM2.5-230M-ONNX', smol = 'bartowski/SmolLM2-360M-Instruct-GGUF';
+  assert.equal(helpers({}).isRetiredRepo(lfm), true);
+  assert.equal(helpers({ [lfm]: { id: lfm, label: 'LFM2.5-230M-ONNX (custom)', custom: true } }).isRetiredRepo(lfm), false, 're-added custom ONNX repo swept as retired');
+  const ggufUrl = `https://huggingface.co/${smol}/resolve/main/SmolLM2-360M-Instruct-Q8_0.gguf`;
+  assert.equal(helpers({ [ggufUrl]: { id: ggufUrl, label: 'SmolLM2 · GGUF (custom)', backend: 'wllama', custom: true } }).isRetiredRepo(smol), false, 're-added custom GGUF URL swept as retired');
+  assert.equal(helpers({ [lfm]: { id: lfm, custom: true } }).isRetiredRepo(smol), true);
+  assert.equal(helpers({}).isRetiredRepo('prism-ml/Ternary-Bonsai-2-27B-gguf'), false);
+  assert.match(indexSource, /retired: isRetiredRepo\(repo\),/);
+  assert.match(indexSource, /const retired = \[\.\.\.groups\.values\(\)\]\.filter\(g => g\.retired\);/);
+  const restoreAt = indexSource.indexOf('for (const m of loadCustomModelsFromStorage()) {');
+  const sweepAt = indexSource.search(/^\s+sweepRetiredModelCaches\(\);/m);
+  assert.ok(restoreAt > -1 && sweepAt > restoreAt, 'the boot sweep must run after custom models are restored');
 }
 assert.equal(catalog.defaultKey, 'lfm2-230m-webgpu');
 assert.deepEqual(
@@ -167,5 +185,74 @@ assert.match(
 assert.match(bonsai2Engine, /var Uy="webgpu-prefix-snapshots",qm="prefix-snapshot-slot"/);
 assert.match(indexSource, /if \(dbNames\.includes\('webgpu-prefix-snapshots'\)\) \{[^]*?get\('prefix-snapshot-slot'\)[^]*?add\('prism-ml\/Ternary-Bonsai-2-27B-gguf', 'prefix snapshot', bytes, async \(\) => \{\s*for \(const s of stores\) await idbReq\(db\.transaction\(s, 'readwrite'\)\.objectStore\(s\)\.clear\(\)\);/);
 assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',/);
+
+// Sidebar navigation (Chunk L layer 1): every item drives an element that exists, the modes it
+// lists have a matching chip, and the shell exposes nav + main landmarks.
+{
+  const nav = /<nav class="app-nav" id="appNav" aria-label="Main">([\s\S]*?)<\/nav>/.exec(indexSource);
+  assert.ok(nav, 'sidebar nav missing');
+  const targets = [...indexSource.matchAll(/data-click="([\w]+)"/g)].map((m) => m[1]);
+  assert.ok(targets.length >= 12, 'nav targets: ' + targets);
+  for (const id of targets) assert.match(indexSource, new RegExp(`id="${id}"`), `nav item drives #${id}, which does not exist`);
+  for (const mode of ['image', 'voice', 'compare', 'batch', 'diffuse', 'ocr', 'vision', 'clone']) {
+    assert.match(nav[1], new RegExp(`data-mode="${mode}"`), `nav lacks the ${mode} mode`);
+    assert.match(indexSource, new RegExp(`activeMode === '${mode}'`), `no ${mode} mode in refreshModeUI`);
+  }
+  assert.match(indexSource, /class="card" role="main"/);
+  assert.match(indexSource, /\.mode-chip\.moved:not\(\.active\) \{ display: none; \}/);
+}
+
+// Empty state + load failure (Chunk L layer 4): every path that marks a load failed also shows
+// the cause with Retry / Choose another model; the welcome has no mascot and no stale "Pick a
+// … model" copy; Things to Try moved out of About into the empty chat.
+{
+  const failures = indexSource.split("statusBadge.className = 'status-badge error';").length - 1;
+  const handled = indexSource.split('showLoadError(').length - 1 - 1; // minus the definition
+  assert.ok(failures >= 3, 'load-failure paths: ' + failures);
+  for (const marker of ["statusText.textContent = 'Worker error';", "statusText.textContent = 'Error';", "statusText.textContent = 'Gemini Nano unavailable';"]) {
+    const at = indexSource.indexOf(marker);
+    assert.ok(at > 0, marker);
+    assert.match(indexSource.slice(at, at + 400), /showLoadError\(/, `no showLoadError after ${marker}`);
+  }
+  assert.ok(handled >= 3);
+  assert.match(indexSource, /try \{ hideLoadError\(\); \} catch \{\}/);
+  const welcome = /<div class="welcome" id="welcomeMsg">([\s\S]*?)<p class="mobile-tip"/.exec(indexSource)[1];
+  assert.doesNotMatch(welcome, /&#129504;|Pick a Ternary Bonsai/);
+  assert.match(welcome, /id="welcomeStatus" role="status"/);
+  assert.ok((welcome.match(/class="try-prompt"/g) || []).length >= 4);
+  assert.doesNotMatch(indexSource, /data-tab="try"/);
+}
+
+// Settings + models (Chunk L layer 3): sections are reached by deep link, never a blocking
+// confirm(); the tab row leads the panel; the model descriptions live once, in Settings →
+// Models, and name every model in the picker.
+{
+  assert.doesNotMatch(indexSource, /confirm\([^)]*Settings/, 'a confirm() still sends the user to Settings');
+  assert.match(indexSource, /function needsSearchOrConfigure\(what\) \{\s*if \(isSearchConfigured\(\)\) return true;\s*openSettings\('tools', 'searchSettingsSection'\);/);
+  assert.match(indexSource, /<div class="settings-panel" id="settingsPanel">\s*<div class="settings-tabs" id="settingsTabs"/);
+  assert.equal(indexSource.split('About each model').length, 2);
+  const docs = /<details class="model-docs">([\s\S]*?)<\/details>/.exec(indexSource)[1];
+  const documented = new Set([...docs.matchAll(/<strong>([^<]+)<\/strong> \(/g)].map((m) => m[1].replace(/&middot;/g, '·')));
+  const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'), indexSource.indexOf('\n    };', indexSource.indexOf('const MODELS = {')));
+  const labels = [...registry.matchAll(/^\s{8}label: '([^']+)'/gm)].map((m) => m[1]);
+  assert.ok(labels.length >= 11, 'registry labels: ' + labels);
+  for (const label of labels) assert.ok(documented.has(label), `Settings → Models does not describe ${label}`);
+}
+
+// Model picker (Chunk L layer 2): the hidden select stays the source of truth, every in-tab
+// engine in the roster has a cache store to check, and the inventory tracks bytes per store.
+{
+  assert.match(indexSource, /modelSelect\.value = value;\s*modelSelect\.dispatchEvent\(new Event\('change', \{ bubbles: true \}\)\);/);
+  const stores = /const ENGINE_STORES = \{([\s\S]*?)\};/.exec(indexSource);
+  assert.ok(stores, 'ENGINE_STORES missing');
+  const backends = new Set([...indexSource.matchAll(/^\s{8}backend: '([\w-]+)',/gm)].map((m) => m[1]));
+  assert.ok(backends.size >= 5, 'roster backends: ' + [...backends]);
+  for (const b of backends) {
+    if (b === 'chrome-ai' || b === 'endpoint') continue;
+    assert.match(stores[1], new RegExp(`'${b}':`), `engine ${b} has no cache store in ENGINE_STORES`);
+  }
+  assert.match(indexSource, /g\.byStore\[store\] = \(g\.byStore\[store\] \|\| 0\) \+ \(bytes \|\| 0\);/);
+  assert.match(indexSource, /<button type="button" class="model-select model-picker-btn" id="modelPickerBtn" aria-haspopup="listbox"/);
+}
 
 console.log('LocalMind inference workers and host catalog: ok');

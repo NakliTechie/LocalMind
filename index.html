@@ -229,6 +229,16 @@
       margin-top: 8px;
     }
 
+    /* Empty state (Chunk L layer 4) */
+    .welcome-status { font-size: 0.8rem; color: var(--gray-700); margin-bottom: 14px; font-variant-numeric: tabular-nums; }
+    .welcome-status.ready { color: var(--success-text); }
+    .welcome-status.error { color: var(--error-text); }
+    .welcome-prompts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 14px auto 0; max-width: 560px; }
+    .welcome-prompts .try-prompt { display: inline-block; margin: 0; font: inherit; font-size: 0.78rem; font-style: normal; }
+    .welcome-prompts .try-prompt:focus-visible { outline: 2px solid var(--indigo-500); outline-offset: 1px; }
+    .load-error { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 16px; background: var(--error-bg); border-top: 1px solid var(--error-border); color: var(--error-text); font-size: 0.78rem; }
+    .load-error[hidden] { display: none; }
+    .load-error-text { flex: 1 1 260px; overflow-wrap: anywhere; }
     .try-prompt {
       display: block;
       background: var(--gray-50);
@@ -323,11 +333,6 @@
       font-size: 0.88rem;
       margin: auto 0;
       padding: 40px 20px;
-    }
-
-    .welcome-icon {
-      font-size: 2.5rem;
-      margin-bottom: 12px;
     }
 
     .welcome h2 {
@@ -1165,7 +1170,15 @@
 
     .settings-panel.open { display: block; }
     /* Settings sub-tabs — a bottom bar that reuses the .btn-icon menu style */
-    .settings-tabs { display: flex; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--gray-200); }
+    /* Settings sections — a tab row pinned to the top of the panel while it scrolls */
+    .settings-tabs { display: flex; gap: 6px; position: sticky; top: -12px; z-index: 2; margin: -12px -16px 10px; padding: 8px 16px; background: var(--gray-50); border-bottom: 1px solid var(--gray-200); }
+    .settings-panel > [data-tab] { scroll-margin-top: 52px; }   /* clear the pinned tab row */
+    .settings-flash { animation: settingsFlash 1.2s ease-out 1; border-radius: 6px; }
+    @keyframes settingsFlash { from { box-shadow: 0 0 0 3px var(--indigo-focus-ring); } to { box-shadow: 0 0 0 3px transparent; } }
+    @media (prefers-reduced-motion: reduce) { .settings-flash { animation: none; outline: 2px solid var(--indigo-500); } }
+    .model-docs summary { cursor: pointer; font-size: 0.8rem; font-weight: 600; color: var(--gray-700); }
+    .model-docs ul { margin: 8px 0 0 18px; font-size: 0.75rem; color: var(--gray-700); }
+    .model-docs li { margin-bottom: 6px; }
     .settings-tab-btn.active { background: var(--indigo-100); color: var(--indigo-600); font-weight: 600; }
     .s-tab-hidden { display: none !important; }
     .mobile-tip { display: none; }
@@ -1799,7 +1812,56 @@
     .mode-hint { font-size: 0.72rem; color: var(--gray-400); margin-left: 4px; }
     /* Separates input modes (Search/Research/Compare/Batch) from on-device
        generation engines (Image/Diffuse) — different kinds of thing. */
+    /* Model picker (Chunk L layer 2). #modelSelect stays the source of truth, hidden. */
+    #modelSelect { display: none; }
+    .model-picker-wrap { position: relative; display: inline-flex; min-width: 0; }
+    .model-picker-btn { max-width: 360px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+    .model-picker-btn:focus-visible { border-color: var(--indigo-500); }
+    .model-picker-btn:disabled { opacity: 0.6; cursor: default; }
+    .model-picker {
+      position: absolute; right: 0; bottom: calc(100% + 6px); width: min(400px, 92vw);
+      max-height: min(60vh, 480px); overflow: auto; z-index: 80; padding: 6px;
+      background: var(--white); border: 1px solid var(--gray-200); border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(26, 20, 8, 0.12);
+    }
+    .model-picker[hidden] { display: none; }
+    .mp-group { font-size: 0.66rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--gray-600); padding: 8px 8px 4px; }
+    .mp-opt { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 6px 8px; border-radius: 6px; font-size: 0.8rem; color: var(--gray-800); cursor: pointer; }
+    .mp-opt:hover, .mp-opt.focused { background: var(--gray-50); }
+    .mp-opt[aria-selected="true"] { font-weight: 600; color: var(--gray-900); box-shadow: inset 2px 0 0 var(--indigo-500); }
+    .mp-opt[aria-disabled="true"] { color: var(--gray-600); cursor: default; }
+    .mp-meta { font-size: 0.72rem; font-weight: 400; color: var(--gray-600); white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .mp-opt.on-device .mp-meta { color: var(--success-text); }
+    .model-picker-note { font-size: 0.7rem; color: var(--gray-600); padding: 6px 8px 2px; border-top: 1px solid var(--gray-200); margin-top: 4px; }
+
     .mode-divider { width: 1px; height: 16px; background: var(--gray-200); margin: 0 4px; flex: none; align-self: center; }
+    /* Modes reached from the sidebar nav: their chip appears only while active, as the exit. */
+    .mode-chip.moved:not(.active) { display: none; }
+
+    .header-menu-btn { display: none; align-items: center; justify-content: center; width: 36px; height: 36px; margin-right: 6px; border: none; border-radius: 8px; background: none; font-size: 1.2rem; color: var(--gray-800); cursor: pointer; }
+    .header-menu-btn:focus-visible { outline: 2px solid var(--indigo-500); }
+    .header > h1 { margin-right: auto; }
+    .nav-mobile-only, .app-nav .nav-mobile-only { display: none; }
+    /* Sidebar navigation (Chunk L layer 1) */
+    .app-nav { display: flex; flex-direction: column; gap: 1px; padding: 8px; border-bottom: 1px solid var(--gray-200); flex-shrink: 0; }
+    .app-nav button, .nav-more summary, .sidebar-foot button {
+      display: block; width: 100%; text-align: left; background: none; border: none; border-radius: 6px;
+      padding: 6px 10px; font: inherit; font-size: 0.86rem; color: var(--gray-800); cursor: pointer;
+    }
+    .app-nav button:hover, .nav-more summary:hover, .sidebar-foot button:hover { background: var(--gray-50); }
+    .app-nav button:focus-visible, .nav-more summary:focus-visible, .sidebar-foot button:focus-visible { outline: 2px solid var(--indigo-500); outline-offset: -2px; }
+    .app-nav button.active { background: var(--gray-50); color: var(--gray-900); font-weight: 600; box-shadow: inset 2px 0 0 var(--indigo-500); }
+    .app-nav button:disabled { color: var(--gray-600); cursor: default; background: none; }
+    .nav-more summary { list-style: none; }
+    .nav-more summary::-webkit-details-marker { display: none; }
+    .nav-more summary::after { content: ' \25B8'; color: var(--gray-600); }
+    .nav-more[open] summary::after { content: ' \25BE'; }
+    .nav-more button { padding-left: 22px; }
+    .sidebar-foot { display: flex; align-items: center; gap: 8px; padding: 8px; border-top: 1px solid var(--gray-200); flex-shrink: 0; }
+    .sidebar-foot button { width: auto; flex: 1; }
+    .sidebar-links { padding: 4px 18px 10px; font-size: 0.75rem; }
+    .sidebar-links a { color: var(--gray-700); margin-right: 14px; }
+    .app-version { font-size: 0.72rem; color: var(--gray-600); font-variant-numeric: tabular-nums; padding-right: 6px; }
     .mode-extra { display: none; padding: 8px 16px 0; }
     .mode-extra.open { display: block; }
     .mode-extra-head { font-size: 0.78rem; color: var(--gray-600); margin-bottom: 4px; }
@@ -2111,12 +2173,41 @@
       .attachment-chip.audio-chip { width: 150px; height: 44px; }
       /* Toolbar: model picker to its own full-width row, buttons wrap, bigger taps */
       .actions-bar { flex-wrap: wrap; gap: 6px; }
-      .actions-bar .model-select { order: -1; flex: 1 1 100%; max-width: 100%; }
+      .actions-bar .model-picker-wrap { order: -1; flex: 1 1 100%; max-width: 100%; }
+      .model-picker-btn { max-width: 100%; width: 100%; }
+      .model-picker { left: 0; right: 0; width: auto; }
       .actions-bar .flex-spacer { display: none; }
       .btn-icon { padding: 7px 10px; font-size: 0.8rem; }
       .mode-chip { padding: 6px 11px; }
       .settings-tab-btn { padding: 7px 12px; }
       .mobile-tip { display: block; }
+
+      /* Phone layout (Chunk L, 2026-10-04): the conversation and the composer get the height.
+         Navigation and per-chat actions live in the drawer, opened from the header's menu
+         button; the toolbar keeps only the model picker; the footer pill moves into the drawer. */
+      body { padding: 8px 6px; }
+      .app { height: calc(100dvh - 16px); }
+      .header { margin-bottom: 8px; }
+      .header-menu-btn { display: inline-flex; }
+      .footer-nav { display: none; }
+      .nav-mobile-only, .app-nav .nav-mobile-only { display: block; }
+      .actions-bar { padding: 6px 10px; }
+      #newChatBtn, #clearBtn, #settingsBtn, #memoryBtn, #folderBtn, #historyBtn, #shareBtn { display: none; }
+      /* Composer: attach, reasoning and voice stack in a narrow column so the text box gets the
+         width; camera and mic go (a phone's file picker already offers both). */
+      .input-bar { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 8px; row-gap: 6px; align-items: end; padding: 8px 10px; }
+      #inputAffordances { grid-column: 1; grid-row: 1; flex-direction: column; gap: 6px; }
+      #voiceBtn { grid-column: 1; grid-row: 2; }
+      #chatInput { grid-column: 2; grid-row: 1 / span 2; min-height: 76px; }
+      .send-group { grid-column: 3; grid-row: 1 / span 2; align-self: end; }
+      #cameraBtn, #micBtn { display: none !important; }
+      /* The drawer scrolls as one column, so an open "More" never pushes Settings off-screen. */
+      .history-sidebar { overflow-y: auto; }
+      .history-sidebar-list { flex: none; overflow: visible; }
+      /* One-line status pill; the model's full name is on the picker just below. */
+      .header-right { min-width: 0; }
+      .status-badge { max-width: 44vw; white-space: nowrap; }
+      .status-badge #statusText { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     }
 
     /* Desktop (≥1100px): an app-shell layout. A full-width top bar pulls the
@@ -2155,6 +2246,8 @@
       }
       .history-backdrop { display: none !important; }
       #historyBtn { display: none; }              /* rail is always visible */
+      /* These live in the docked nav on desktop; narrower layouts keep them in the toolbar. */
+      #newChatBtn, #settingsBtn, #memoryBtn, #folderBtn { display: none; }
       .app { max-width: 960px; height: calc(100vh - 140px); }
       .msg { max-width: min(86%, 720px); }        /* keep chat legible */
       .footer-nav { left: calc(50% + 136px); }    /* re-center over main area */
@@ -2165,6 +2258,7 @@
   <div class="app">
     <!-- Header -->
     <div class="header">
+      <button type="button" class="header-menu-btn" id="headerMenuBtn" aria-label="Menu" aria-controls="historySidebar">&#9776;</button>
       <h1>LocalMind</h1>
       <div class="header-right">
         <button class="install-btn" id="installBtn" title="Install LocalMind as an app" aria-label="Install LocalMind as an app" hidden>&#x2913; Install</button>
@@ -2173,10 +2267,9 @@
           <div class="help-popover" id="helpPopover">
             <div class="help-tabs">
               <button class="help-tab active" data-tab="about">About</button>
-              <button class="help-tab" data-tab="models">Models</button>
+              <button class="help-tab" data-tab="models">Tools</button>
               <button class="help-tab" data-tab="features">Features</button>
               <button class="help-tab" data-tab="api">JS API</button>
-              <button class="help-tab" data-tab="try">Things to Try</button>
             </div>
             <div class="help-tab-content active" data-tab="about">
               <p>A private AI workspace running open models (<strong>Bonsai, Qwen3.5, LFM2, Gemma, MiniCPM5</strong>) entirely in your browser via WebGPU &mdash; chat, a model council, deep research, skills, memory, and tool calling, all on-device.</p>
@@ -2186,19 +2279,6 @@
               <div class="help-note">v2.6.0 &middot; Powered by Transformers.js &middot; models from Prism ML, Alibaba, Liquid AI, Google, Kokoro &amp; Moonshine &middot; multilingual document search via e5 &middot; auto-escalation to your local endpoint (opt-in).</div>
             </div>
             <div class="help-tab-content" data-tab="models">
-              <h4>Available Models</h4>
-              <ul>
-                <li><strong>Ternary Bonsai 4B</strong> (~1.1 GB) &mdash; text + agent (tool calling). 1.58-bit ternary weights, Qwen3 backbone, Apache-2.0 &mdash; the small ternary tier.</li>
-                <li><strong>Ternary Bonsai 2 27B</strong> (~5.9 GB) &mdash; text + agent. PrismML's Ternary Bonsai 2 27B (Sept 2026; ternary 1.75-bit weights, Qwen3.8-27B backbone, 98% of the full-precision model's benchmark score) on a from-scratch WebGPU engine: hand-written WGSL for ternary dequant + Gated-DeltaNet linear attention, reading the PTQ1_0 GGUF directly. Ported from <em>webml-community/ternary-bonsai-2-webgpu-kernels</em>; Apache-2.0 weights. WebGPU-only &mdash; the biggest in-browser model here. A reasoning model: flip <strong>Show reasoning</strong> in Settings for its chain-of-thought. Text-only here (its optional vision tower is not loaded).</li>
-                <li><strong>Qwen3.5 4B</strong> (~3 GB) &mdash; text + image + agent (tool calling). Qwen3.5 at q4f16, Apache-2.0; its native 262K context is capped to 32K to keep browser memory bounded.</li>
-                <li><strong>LFM2.5 1.2B</strong> (~760 MB) &mdash; text + agent (tool calling). Liquid AI's LFM2.5-1.2B-Instruct (Jan 2026) &mdash; same LFM2 hybrid arch as the 230M default, RL-tuned for instruction following + tool use. q4f16, 32K context.</li>
-                <li><strong>Gemini Nano</strong> (0 MB) &mdash; Google's on-device model built into Chrome, via the Prompt API. Zero download, no WebGPU. Chrome/Edge only; runs where your browser exposes <code>self.LanguageModel</code>. When Nano is already downloaded on desktop Chrome/Edge, LocalMind starts on it by default so you can chat with no model download.</li>
-                <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
-                <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only. About 4&times; the ONNX Gemma 4 E2B&rsquo;s decode speed on the same Mac (171 vs 42 tok/s, M4 Pro); text-only.</li>
-                <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
-                <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
-                <li><strong>MiniCPM5 2B &middot; GGUF</strong> (~1.6 GB) &mdash; text + agent (tool calling). OpenBMB&rsquo;s MiniCPM5-2B (Sept 2026, Apache-2.0) loaded from its first-party GGUF through wllama (llama.cpp &rarr; WebAssembly) &mdash; there is no ONNX export, so this is the only way to run it in the tab. WebGPU when your browser has it, CPU otherwise. Gets <strong>16K context</strong>, twice the other GGUF models, because its 2 KV heads make the cache unusually cheap; its native 131K is capped since wllama reserves the whole cache up front. Long-document retrieval is what it is best at. It emits tool calls in its own XML format rather than the <code>&lt;tool_call&gt;</code> JSON the other models use; LocalMind parses both. Short-horizon tool use is its strength &mdash; don&rsquo;t expect long multi-step agent runs to hold up.</li>
-              </ul>
               <h4>Agent Tools (Ternary Bonsai + Qwen3.5 + LFM2 + MiniCPM5 + Gemma 4)</h4>
               <ul>
                 <li><strong>calculate</strong> &mdash; math, percentages, conversions</li>
@@ -2320,68 +2400,6 @@
               <p>Open <code>demo.html</code> in the same folder. It iframes LocalMind, auto-flips the toggle, waits for the model, and runs both a non-streaming and a streaming completion against <code>iframe.contentWindow.localmind</code>.</p>
               <div class="help-note">Experimental &mdash; the shape may change before a stable v1.1.</div>
             </div>
-            <div class="help-tab-content" data-tab="try">
-              <h4>Math &amp; Conversions</h4>
-              <span class="try-prompt" data-prompt="What is 15% of 2450?">What is 15% of 2450?</span>
-              <span class="try-prompt" data-prompt="Convert 72 Fahrenheit to Celsius">Convert 72 Fahrenheit to Celsius</span>
-              <span class="try-prompt" data-prompt="If I invest $10,000 at 7% annual return, how much after 5 years with compound interest?">Compound interest: $10K at 7% for 5 years?</span>
-              <h4>Time &amp; Reminders</h4>
-              <span class="try-prompt" data-prompt="What time is it in Tokyo?">What time is it in Tokyo?</span>
-              <span class="try-prompt" data-prompt="Remind me in 5 minutes to check the oven">Remind me in 5 minutes to check the oven</span>
-              <h4>Memory</h4>
-              <span class="try-prompt" data-prompt="Remember that I'm a software engineer working on a React project called Dashboard Pro">Remember: I'm a software engineer on Dashboard Pro</span>
-              <span class="try-prompt" data-prompt="What do you know about me and my projects?">What do you know about me?</span>
-              <span class="try-prompt" data-prompt="Forget everything about my preferences">Forget my preferences</span>
-              <h4>Translation</h4>
-              <span class="try-prompt" data-prompt="Translate 'Good morning, how are you?' to Japanese, French, and Hindi">Translate "Good morning" to Japanese, French, Hindi</span>
-              <span class="try-prompt" data-prompt="How do you say 'Where is the nearest train station?' in Spanish and German?">Train station directions in Spanish &amp; German</span>
-              <h4>Writing &amp; Analysis</h4>
-              <span class="try-prompt" data-prompt="Write a professional email declining a meeting invitation politely">Write a polite meeting decline email</span>
-              <span class="try-prompt" data-prompt="Summarize the pros and cons of microservices vs monolithic architecture">Microservices vs monolith: pros and cons</span>
-              <span class="try-prompt" data-prompt="Explain the concept of WebGPU to a non-technical person in 3 sentences">Explain WebGPU in 3 simple sentences</span>
-              <h4>Documents (attach a PDF, DOCX, or text file)</h4>
-              <span class="try-prompt" data-prompt="Summarize the key points from the document I just uploaded">Summarize the uploaded document</span>
-              <span class="try-prompt" data-prompt="What are the main conclusions or recommendations in my document?">Main conclusions from my document</span>
-              <h4>Multimodal (attach an image first)</h4>
-              <span class="try-prompt" data-prompt="Describe this image in detail">Describe this image in detail</span>
-              <span class="try-prompt" data-prompt="What text can you see in this image? Transcribe it.">Transcribe text from this image</span>
-              <h4>Web Research (requires API key)</h4>
-              <span class="try-prompt" data-prompt="What are the top tech news stories today?">Top tech news today</span>
-              <span class="try-prompt" data-prompt="Search for the latest WebGPU browser support status and summarize">Latest WebGPU browser support status</span>
-              <span class="try-prompt" data-prompt="Find recent articles about AI running locally in the browser and give me a summary with sources">AI in the browser: recent articles with sources</span>
-              <h4>Coding</h4>
-              <span class="try-prompt" data-prompt="Write a Python function that finds all prime numbers up to n using the Sieve of Eratosthenes">Sieve of Eratosthenes in Python</span>
-              <span class="try-prompt" data-prompt="Explain the difference between async/await and Promises in JavaScript with examples">async/await vs Promises explained</span>
-              <h4>Math &amp; Diagrams</h4>
-              <span class="try-prompt" data-prompt="Derive the quadratic formula step by step, using inline and display LaTeX math.">Derive the quadratic formula with LaTeX</span>
-              <span class="try-prompt" data-prompt="Show the Pythagorean identity sin^2 x + cos^2 x = 1 and sketch a short proof using LaTeX display math.">Pythagorean identity with display math</span>
-              <span class="try-prompt" data-prompt="Draw a Mermaid flowchart for a login flow: user submits credentials, server validates, issues a JWT, client stores it, requests authorized resources.">Mermaid: login + JWT flow</span>
-              <span class="try-prompt" data-prompt="Draw a Mermaid sequence diagram for the classic producer-consumer pattern with a bounded buffer.">Mermaid: producer-consumer sequence</span>
-              <h4>Live HTML / SVG Artifacts</h4>
-              <span class="try-prompt" data-prompt="Output only a full standalone HTML document in a ```html block: a click counter with +, -, and reset buttons. Style it nicely.">Interactive counter (HTML artifact)</span>
-              <span class="try-prompt" data-prompt="Output only a complete HTML document in a ```html block: a Pomodoro timer with 25-minute countdown, start, pause, reset.">Pomodoro timer (HTML artifact)</span>
-              <span class="try-prompt" data-prompt="Output only an SVG in a ```svg block: a sunrise scene with gradient sky, sun, and three mountain silhouettes.">Sunrise scene (SVG artifact)</span>
-              <h4>Python (Gemma 4, run_python tool)</h4>
-              <span class="try-prompt" data-prompt="Use run_python to compute the first 20 Fibonacci numbers and print them as a comma-separated list.">First 20 Fibonacci via Python</span>
-              <span class="try-prompt" data-prompt="Use run_python with pandas to generate a synthetic dataframe of 1000 rows with columns age (18-80), income (30k-200k, roughly log-normal), and compute the correlation.">Pandas synthetic data + correlation</span>
-              <span class="try-prompt" data-prompt="Use run_python to solve this system of equations with numpy: 2x + 3y - z = 5, x - y + 2z = 3, 3x + y + z = 10">Solve a 3x3 linear system</span>
-              <h4>Multi-step planning (Gemma 4, Settings toggle)</h4>
-              <span class="try-prompt" data-prompt="Compare cold brew, pour-over, and French press coffee: typical brew time, caffeine content, flavor profile, and equipment cost. Give a recommendation for someone new to specialty coffee.">Compare 3 coffee brewing methods</span>
-              <span class="try-prompt" data-prompt="Research the history of the Silk Road in 3 phases (ancient origins, medieval peak, modern revival), then summarize the key goods traded at each phase.">Silk Road in 3 phases</span>
-              <h4>MCP tools (after adding a server in Settings)</h4>
-              <span class="try-prompt" data-prompt="List every MCP tool you have available and what each one does.">List all MCP tools I have</span>
-              <span class="try-prompt" data-prompt="Use mcp_fetch_url (or whatever fetch-like MCP tool is available) to grab https://example.com and summarise the response.">Use an MCP fetch tool</span>
-              <h4>Voice to text (no prompt needed)</h4>
-              <p style="font-size:0.78rem;color:var(--gray-500);margin:4px 0 8px">Click the 🗣 button to the left of the input, speak a sentence, click again to stop. Whisper runs on-device. Try saying: <em>&ldquo;Write a short summary of the Great Pyramid of Giza in three sentences.&rdquo;</em></p>
-              <div class="help-note">
-                <strong>Tips.</strong>
-                <ul style="margin:4px 0 0 16px;padding:0;font-size:0.72rem;line-height:1.5">
-                  <li>For artifact and Mermaid prompts, start with <em>&ldquo;Output only this&hellip;&rdquo;</em> or <em>&ldquo;Copy this exactly&hellip;&rdquo;</em> &mdash; smaller models tend to wrap code blocks in prose otherwise.</li>
-                  <li>If a <code>```mermaid</code> block renders as plain code, the model stripped the language label. Re-send with <em>&ldquo;Preserve the language tag after the backticks&rdquo;</em>.</li>
-                  <li>Click any prompt above to paste it. Web search needs a provider in Settings. Multimodal needs a Gemma 4 model + an attached image. Artifact, math, and Mermaid rendering work on any model; <code>run_python</code>, MCP tools, and multi-step planning require an agent-capable (Gemma 4) model.</li>
-                </ul>
-              </div>
-            </div>
           </div>
         </div>
         <div class="status-badge loading" id="statusBadge">
@@ -2392,19 +2410,31 @@
     </div>
 
     <!-- Main card -->
-    <div class="card" style="position:relative">
+    <div class="card" role="main" style="position:relative">
       <!-- Drag-drop overlay -->
       <div class="drag-overlay" id="dragOverlay">Drop image, audio, or video here</div>
 
       <!-- Chat messages -->
       <div class="chat-area" id="chatArea">
         <div class="welcome" id="welcomeMsg">
-          <div class="welcome-icon">&#129504;</div>
-          <h2>Private AI, right in your browser</h2>
-          <p>Models run entirely on your device via WebGPU. Nothing is sent to any server.</p>
-          <p style="font-size:0.78rem;color:var(--gray-400);margin-top:4px">Pick a Ternary Bonsai or Qwen3.5 model for tool calling and memory; Qwen3.5 accepts images, while Gemma 4 accepts images and audio.<br>Web search requires an API key (Tavily, Brave) or a self-hosted SearXNG instance.</p>
+          <p class="welcome-status" id="welcomeStatus" role="status">Starting&hellip;</p>
+          <h2>Private AI on this device</h2>
+          <p>Models run in this browser. What you type is not sent to any server; web search runs only when you turn it on.</p>
+          <div class="welcome-prompts" id="welcomePrompts" aria-label="Example prompts">
+            <button type="button" class="try-prompt" data-prompt="What is 15% of 2450?">What is 15% of 2450?</button>
+            <button type="button" class="try-prompt" data-prompt="What time is it in Tokyo?">What time is it in Tokyo?</button>
+            <button type="button" class="try-prompt" data-prompt="Remember that I prefer metric units">Remember that I prefer metric units</button>
+            <button type="button" class="try-prompt" data-prompt="Translate 'Good morning, how are you?' to Japanese, French, and Hindi">Translate &ldquo;Good morning&rdquo; into Japanese, French and Hindi</button>
+          </div>
           <p class="mobile-tip" style="font-size:0.8rem;color:var(--indigo-600);margin:10px auto 0;max-width:340px;padding:9px 12px;background:var(--indigo-100);border-radius:8px;line-height:1.5">&#128241; On a phone, big models won&rsquo;t fit. Point LocalMind at your computer&rsquo;s <strong>Ollama / LM&nbsp;Studio</strong> (Settings &rarr; Models &rarr; Local endpoint) and use any model over your network.</p>
         </div>
+      </div>
+
+      <!-- Load failure (Chunk L layer 4, UX review H2): cause + a way out, instead of a bare "Error" badge -->
+      <div class="load-error" id="loadError" role="alert" hidden>
+        <span class="load-error-text" id="loadErrorText"></span>
+        <button type="button" class="btn-icon" id="loadErrorRetry">Retry</button>
+        <button type="button" class="btn-icon" id="loadErrorPick">Choose another model</button>
       </div>
 
       <!-- Progress bar (model loading) -->
@@ -2428,6 +2458,12 @@
 
       <!-- Settings (system prompt + thinking toggle) -->
       <div class="settings-panel" id="settingsPanel">
+        <div class="settings-tabs" id="settingsTabs" role="tablist" aria-label="Settings sections">
+          <button class="btn-icon settings-tab-btn active" data-tab="general" type="button">General</button>
+          <button class="btn-icon settings-tab-btn" data-tab="models" type="button">Models</button>
+          <button class="btn-icon settings-tab-btn" data-tab="tools" type="button">Tools</button>
+          <button class="btn-icon settings-tab-btn" data-tab="data" type="button">Data</button>
+        </div>
         <div class="settings-group" data-tab="general">
         <label for="systemPrompt">System prompt (optional)</label>
         <textarea id="systemPrompt" placeholder="e.g. You are a helpful coding assistant."></textarea>
@@ -2491,6 +2527,24 @@
           <input type="checkbox" id="autoBackupToggle">
           Auto-download backup on New Chat
         </label>
+        <div class="settings-divider" data-tab="models" id="modelDocsSection">
+          <details class="model-docs">
+            <summary>About each model</summary>
+            <ul>
+              <li><strong>Ternary Bonsai 4B</strong> (~1.1 GB) &mdash; text + agent (tool calling). 1.58-bit ternary weights, Qwen3 backbone, Apache-2.0 &mdash; the small ternary tier.</li>
+              <li><strong>Ternary Bonsai 2 27B</strong> (~5.9 GB) &mdash; text + agent. PrismML's Ternary Bonsai 2 27B (Sept 2026; ternary 1.75-bit weights, Qwen3.8-27B backbone, 98% of the full-precision model's benchmark score) on a from-scratch WebGPU engine: hand-written WGSL for ternary dequant + Gated-DeltaNet linear attention, reading the PTQ1_0 GGUF directly. Ported from <em>webml-community/ternary-bonsai-2-webgpu-kernels</em>; Apache-2.0 weights. WebGPU-only &mdash; the biggest in-browser model here. A reasoning model: flip <strong>Show reasoning</strong> in Settings for its chain-of-thought. Text-only here (its optional vision tower is not loaded).</li>
+              <li><strong>Qwen3.5 4B</strong> (~3 GB) &mdash; text + image + agent (tool calling). Qwen3.5 at q4f16, Apache-2.0; its native 262K context is capped to 32K to keep browser memory bounded.</li>
+              <li><strong>LFM2.5 1.2B</strong> (~760 MB) &mdash; text + agent (tool calling). Liquid AI's LFM2.5-1.2B-Instruct (Jan 2026) &mdash; same LFM2 hybrid arch as the 230M default, RL-tuned for instruction following + tool use. q4f16, 32K context.</li>
+              <li><strong>Gemini Nano</strong> (0 MB) &mdash; Google's on-device model built into Chrome, via the Prompt API. Zero download, no WebGPU. Chrome/Edge only; runs where your browser exposes <code>self.LanguageModel</code>. When Nano is already downloaded on desktop Chrome/Edge, LocalMind starts on it by default so you can chat with no model download.</li>
+              <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
+              <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only. About 4&times; the ONNX Gemma 4 E2B&rsquo;s decode speed on the same Mac (171 vs 42 tok/s, M4 Pro); text-only.</li>
+              <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
+              <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
+              <li><strong>LFM2.5 230M &middot; GGUF</strong> (~170 MB) &mdash; the same LFM2.5 230M through wllama (llama.cpp &rarr; WebAssembly), reading a Q5_K_M GGUF. WebGPU when your browser has it, CPU otherwise, so it also runs where WebGPU is missing.</li>
+              <li><strong>MiniCPM5 2B &middot; GGUF</strong> (~1.6 GB) &mdash; text + agent (tool calling). OpenBMB&rsquo;s MiniCPM5-2B (Sept 2026, Apache-2.0) loaded from its first-party GGUF through wllama (llama.cpp &rarr; WebAssembly) &mdash; there is no ONNX export, so this is the only way to run it in the tab. WebGPU when your browser has it, CPU otherwise. Gets <strong>16K context</strong>, twice the other GGUF models, because its 2 KV heads make the cache unusually cheap; its native 131K is capped since wllama reserves the whole cache up front. Long-document retrieval is what it is best at. It emits tool calls in its own XML format rather than the <code>&lt;tool_call&gt;</code> JSON the other models use; LocalMind parses both. Short-horizon tool use is its strength &mdash; don&rsquo;t expect long multi-step agent runs to hold up.</li>
+            </ul>
+          </details>
+        </div>
         <div class="settings-divider" data-tab="models">
           <label>Model cache</label>
           <div id="cacheInfo" style="font-size:0.75rem;color:var(--gray-500);margin-top:4px">Loading...</div>
@@ -2665,12 +2719,6 @@
           </div>
           <button class="btn-icon" id="apiLogBtn" style="margin-top:8px">View activity log</button>
         </div>
-        <div class="settings-tabs" id="settingsTabs">
-          <button class="btn-icon settings-tab-btn active" data-tab="general" type="button">General</button>
-          <button class="btn-icon settings-tab-btn" data-tab="models" type="button">Models</button>
-          <button class="btn-icon settings-tab-btn" data-tab="tools" type="button">Tools</button>
-          <button class="btn-icon settings-tab-btn" data-tab="data" type="button">Data</button>
-        </div>
       </div>
 
       <!-- Attachment bar -->
@@ -2705,7 +2753,7 @@
         <button class="btn-icon" id="settingsBtn" title="System prompt settings">Settings</button>
         <button class="btn-icon" id="memoryBtn" title="View stored memories">Memory</button>
         <button class="btn-icon" id="folderBtn" title="Open folder — ingest all .md/.txt/.pdf files into memory">Folder</button>
-        <button class="btn-icon" id="historyBtn" title="Past conversations">History</button>
+        <button class="btn-icon" id="historyBtn" title="Navigation and past conversations" aria-controls="historySidebar">Menu</button>
         <button class="btn-icon" id="shareBtn" title="Share conversation (encrypted link)">Share</button>
         <button class="btn-icon" id="batchBtn" style="display:none" title="Batch (now in the mode chips above the input)">Batch</button>
         <button class="btn-icon" id="compareBtn" style="display:none" title="Compare (now in the mode chips above the input)">Compare</button>
@@ -2724,21 +2772,30 @@
           <option value="gemma4-e2b-webgpu">Gemma 4 E2B &middot; WebGPU kernels (~2 GB)</option>
           <option value="minicpm5-2b-gguf">MiniCPM5 2B &middot; GGUF (~1.6 GB)</option>
         </select>
+        <!-- Model picker (Chunk L layer 2): renders #modelSelect's options grouped by what is
+             already in this browser; picking sets the select's value and fires its change event. -->
+        <span class="model-picker-wrap">
+          <button type="button" class="model-select model-picker-btn" id="modelPickerBtn" aria-haspopup="listbox" aria-expanded="false" aria-controls="modelPickerList"></button>
+          <div class="model-picker" id="modelPicker" hidden>
+            <div role="listbox" id="modelPickerList" aria-label="Models" tabindex="-1"></div>
+            <p class="model-picker-note">A model downloads once, then loads from this browser.</p>
+          </div>
+        </span>
       </div>
 
       <!-- Unified mode chips + per-mode controls — all drive the main input below -->
       <div class="mode-row" id="modeRow">
         <button class="mode-chip" id="chipSearch" title="Web-enrich this message with a live search">&#127760; Search</button>
         <button class="mode-chip" id="chipResearch" title="Deep research &rarr; multi-source cited report">&#128300; Research</button>
-        <button class="mode-chip" id="chipCompare" title="Run the prompt through 2&ndash;3 models, then a judge">&#9878; Compare</button>
-        <button class="mode-chip" id="chipBatch" title="Run one prompt per line, in sequence">&#8801; Batch</button>
-        <span class="mode-divider" aria-hidden="true"></span>
-        <button class="mode-chip" id="chipImage" title="Generate an image from a prompt — on-device diffusion (WebGPU)">&#127912; Image</button>
-        <button class="mode-chip" id="chipDiffuse" title="Experimental: masked-diffusion text generation — watch the answer denoise (WebGPU)">&#127787;&#65039; Diffuse</button>
-        <button class="mode-chip" id="chipOCR" title="Extract text from an image or PDF on-device — GLM-OCR (WebGPU)">&#128196; OCR</button>
-        <button class="mode-chip" id="chipVision" title="Point your camera or drop an image — SmolVLM describes it on-device (WebGPU)">&#128247; Vision</button>
-        <button class="mode-chip" id="chipVoice" title="Hands-free voice conversation — talk, it transcribes, answers, and reads back (on-device)">&#127897;&#65039; Voice</button>
-        <button class="mode-chip" id="chipClone" title="Clone a voice from a short sample, then make it say anything — Chatterbox on-device (WebGPU)">&#127917; Clone</button>
+        <!-- The modes below live in the sidebar nav; each chip shows here only while its mode is active (one-click exit). -->
+        <button class="mode-chip moved" id="chipCompare" title="Run the prompt through 2&ndash;3 models, then a judge">&#9878; Compare</button>
+        <button class="mode-chip moved" id="chipBatch" title="Run one prompt per line, in sequence">&#8801; Batch</button>
+        <button class="mode-chip moved" id="chipImage" title="Generate an image from a prompt — on-device diffusion (WebGPU)">&#127912; Image</button>
+        <button class="mode-chip moved" id="chipDiffuse" title="Experimental: masked-diffusion text generation — watch the answer denoise (WebGPU)">&#127787;&#65039; Diffuse</button>
+        <button class="mode-chip moved" id="chipOCR" title="Extract text from an image or PDF on-device — GLM-OCR (WebGPU)">&#128196; OCR</button>
+        <button class="mode-chip moved" id="chipVision" title="Point your camera or drop an image — SmolVLM describes it on-device (WebGPU)">&#128247; Vision</button>
+        <button class="mode-chip moved" id="chipVoice" title="Hands-free voice conversation — talk, it transcribes, answers, and reads back (on-device)">&#127897;&#65039; Voice</button>
+        <button class="mode-chip moved" id="chipClone" title="Clone a voice from a short sample, then make it say anything — Chatterbox on-device (WebGPU)">&#127917; Clone</button>
         <span class="mode-hint" id="modeHint"></span>
       </div>
       <div class="mode-extra" id="comparePanel">
@@ -2926,11 +2983,41 @@
     <!-- History sidebar -->
     <div class="history-backdrop" id="historyBackdrop"></div>
     <div class="history-sidebar" id="historySidebar">
+      <!-- App navigation (Chunk L layer 1). Each item drives an existing chip or button
+           (data-click), so every mode keeps one code path; data-mode mirrors the active chip. -->
+      <nav class="app-nav" id="appNav" aria-label="Main">
+        <button type="button" data-click="newChatBtn">New chat</button>
+        <button type="button" data-mode="chat">Chat</button>
+        <button type="button" data-click="chipImage" data-mode="image">Image</button>
+        <button type="button" data-click="chipVoice" data-mode="voice">Voice</button>
+        <button type="button" data-models>Models</button>
+        <button type="button" data-click="memoryBtn">Memory</button>
+        <details class="nav-more">
+          <summary>More</summary>
+          <button type="button" data-click="chipCompare" data-mode="compare">Compare</button>
+          <button type="button" data-click="chipBatch" data-mode="batch">Batch</button>
+          <button type="button" data-click="chipDiffuse" data-mode="diffuse">Diffuse</button>
+          <button type="button" data-click="chipOCR" data-mode="ocr">OCR</button>
+          <button type="button" data-click="chipVision" data-mode="vision">Vision</button>
+          <button type="button" data-click="chipClone" data-mode="clone">Clone</button>
+          <button type="button" data-click="folderBtn">Folder</button>
+          <button type="button" class="nav-mobile-only" data-click="clearBtn">Clear this chat</button>
+          <button type="button" class="nav-mobile-only" data-click="shareBtn">Share this chat</button>
+        </details>
+      </nav>
       <div class="history-sidebar-header">
-        <strong>History</strong>
+        <strong>Recents</strong>
         <span class="memory-count" id="historyCount">0 conversations</span>
       </div>
       <div class="history-sidebar-list" id="historyList"></div>
+      <div class="sidebar-foot">
+        <button type="button" data-click="settingsBtn">Settings</button>
+        <span class="app-version" id="appVersion"></span>
+      </div>
+      <div class="sidebar-links nav-mobile-only">
+        <a href="https://naklitechie.github.io/" target="_blank" rel="noopener">More projects</a>
+        <a href="https://github.com/NakliTechie/LocalMind" target="_blank" rel="noopener">Source</a>
+      </div>
     </div>
   </div>
 
@@ -8287,8 +8374,9 @@ self.addEventListener('message', async (e) => {
     }
 
     // ── Model registry ──────────────────────────────────────────
-    // Repos LocalMind once shipped in the picker and no longer does. No code path can
-    // read their caches again, so sweepRetiredModelCaches() removes them at boot.
+    // Repos LocalMind once shipped in the picker and no longer does. Unless the user re-adds
+    // one as a custom model, no code path reads its cache again, so
+    // sweepRetiredModelCaches() removes it at boot.
     // Append here whenever a MODELS entry is retired; scripts/test-inference-worker.mjs
     // checks the list never overlaps the live registry.
     const RETIRED_MODEL_REPOS = [
@@ -9971,6 +10059,23 @@ self.addEventListener('message', async (e) => {
       memoryPanel.classList.remove('open');
       closeHistorySidebar();
     });
+    // Deep link into Settings: open it on `tab`, and when `sectionId` is given, reveal that
+    // section (some are hidden until a model needs them), scroll to it, flash it and focus its
+    // first control. Replaces the blocking confirm() prompts (UX review M4).
+    function openSettings(tab, sectionId) {
+      memoryPanel.classList.remove('open');
+      settingsPanel.classList.add('open');
+      closeHistorySidebar();
+      setSettingsTab(tab);
+      if (tab === 'models') refreshCacheInfo();
+      const sec = sectionId && document.getElementById(sectionId);
+      if (!sec) { settingsPanel.scrollTop = 0; return; }
+      sec.style.display = '';
+      sec.scrollIntoView({ block: 'nearest' });
+      sec.classList.remove('settings-flash'); void sec.offsetWidth; sec.classList.add('settings-flash');
+      const control = sec.querySelector('select, input, textarea, button');
+      if (control) control.focus({ preventScroll: true });
+    }
 
     // ── Model cache inventory + eviction ──────────────────────
     // Every in-tab backend caches weights somewhere different:
@@ -9984,7 +10089,7 @@ self.addEventListener('message', async (e) => {
     // 'safetensors-cache-v1' + Cache Storage 'bonsai-pipeline-v1'. inventoryModelCaches() walks all of it and groups by
     // Hugging Face repo (or URL origin for custom GGUF URLs), so Settings shows one row
     // per model with its own Delete, and sweepRetiredModelCaches() removes at boot only
-    // the groups whose repo is in RETIRED_MODEL_REPOS. Everything else is the user's call.
+    // the groups isRetiredRepo() names. Everything else is the user's call.
     const cacheInfo = document.getElementById('cacheInfo');
 
     function repoOfUrl(url) {
@@ -10001,14 +10106,18 @@ self.addEventListener('message', async (e) => {
     const COMPONENT_CACHE_LABELS = {
       'naklitechie/Qwen3.8-27B-DFlash2-ternary-bonsai2': 'DFlash 2 drafter \u00b7 Ternary Bonsai 2',
     };
+    // A MODELS entry reads `repo` when its id is that HF repo, or a file URL inside it.
+    const modelUsesRepo = (m, repo) => { const id = String(m.id || ''); return id === repo || (id.startsWith('http') && repoOfUrl(id) === repo); };
     function registryLabelForRepo(repo) {
       const labels = [];
-      for (const m of Object.values(MODELS)) {
-        const id = String(m.id || '');
-        if (id === repo || (id.startsWith('http') && repoOfUrl(id) === repo)) labels.push(m.label);
-      }
+      for (const m of Object.values(MODELS)) if (modelUsesRepo(m, repo)) labels.push(m.label);
       if (labels.length) return labels.join(' / ');
       return COMPONENT_CACHE_LABELS[repo] || null;
+    }
+    // A listed repo stops being retired while any MODELS entry reads it: a user who re-adds one as a
+    // custom model (restored from storage before the boot sweep runs) keeps its cache across reloads.
+    function isRetiredRepo(repo) {
+      return RETIRED_MODEL_REPOS.includes(repo) && !Object.values(MODELS).some(m => modelUsesRepo(m, repo));
     }
     const fmtBytes = (n) => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : Math.round(n / 1048576) + ' MB';
     const idbReq = (req) => new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
@@ -10025,11 +10134,12 @@ self.addEventListener('message', async (e) => {
       const add = (repo, store, bytes, deleter) => {
         let g = groups.get(repo);
         if (!g) {
-          g = { repo, label: registryLabelForRepo(repo), retired: RETIRED_MODEL_REPOS.includes(repo), bytes: 0, stores: new Set(), deleters: [] };
+          g = { repo, label: registryLabelForRepo(repo), retired: isRetiredRepo(repo), bytes: 0, stores: new Set(), byStore: {}, deleters: [] };
           g.remove = async () => { for (const d of g.deleters) { try { await d(); } catch (e) { console.warn('cache delete failed:', repo, e); } } };
           groups.set(repo, g);
         }
         g.bytes += bytes || 0; g.stores.add(store); g.deleters.push(deleter);
+        g.byStore[store] = (g.byStore[store] || 0) + (bytes || 0);
       };
       // 1. Cache Storage (transformers.js, LFM2 kernels, retired Gemma kernels)
       try {
@@ -10160,8 +10270,9 @@ self.addEventListener('message', async (e) => {
       }
     }
 
-    // Boot sweep: drop caches only for repos in RETIRED_MODEL_REPOS. Sized via
-    // storage.estimate() before/after so the boot path never reads blobs.
+    // Boot sweep: drop caches only for repos isRetiredRepo() names (in RETIRED_MODEL_REPOS
+    // and not re-added as a custom model). Sized via storage.estimate() before/after so
+    // the boot path never reads blobs.
     async function sweepRetiredModelCaches() {
       try {
         const groups = await inventoryModelCaches({ measure: false });
@@ -12095,6 +12206,7 @@ self.addEventListener('message', async (e) => {
     function openHistorySidebar() {
       historySidebar.classList.add('open');
       historyBackdrop.classList.add('open');
+      syncSidebarInert();
       memoryPanel.classList.remove('open');
       settingsPanel.classList.remove('open');
       refreshHistoryPanel();
@@ -12103,7 +12215,16 @@ self.addEventListener('message', async (e) => {
     function closeHistorySidebar() {
       historySidebar.classList.remove('open');
       historyBackdrop.classList.remove('open');
+      syncSidebarInert();
     }
+    // Below 1100px the sidebar is an off-screen drawer: keep its nav out of the tab order
+    // and the accessibility tree until it is open. Docked (desktop) it is always live.
+    const sidebarDocked = matchMedia('(min-width: 1100px)');
+    function syncSidebarInert() {
+      historySidebar.inert = !sidebarDocked.matches && !historySidebar.classList.contains('open');
+    }
+    sidebarDocked.addEventListener('change', syncSidebarInert);
+    syncSidebarInert();
 
     historyBtn.addEventListener('click', () => {
       if (historySidebar.classList.contains('open')) closeHistorySidebar();
@@ -12111,6 +12232,8 @@ self.addEventListener('message', async (e) => {
     });
 
     historyBackdrop.addEventListener('click', closeHistorySidebar);
+    // Phones: the header's ☰ is the way into the drawer (the toolbar's Menu is hidden there).
+    document.getElementById('headerMenuBtn').addEventListener('click', () => historyBtn.click());
 
     async function refreshHistoryPanel() {
       try {
@@ -16048,6 +16171,7 @@ self.addEventListener('message', async (e) => {
         progressSection.classList.remove('visible');
         progressText.textContent = e.message || 'Worker failed to start';
         modelSelect.disabled = false;
+        showLoadError(e.message || 'the worker failed to start');
       });
 
       w.addEventListener('message', (e) => {
@@ -16168,6 +16292,7 @@ self.addEventListener('message', async (e) => {
             statusText.textContent = 'Error';
             progressSection.classList.remove('visible');
             modelSelect.disabled = false;
+            showLoadError(data.message);
           }
           console.error('Worker error:', data.message);
           if (generating && currentAssistantEl) {
@@ -16188,6 +16313,61 @@ self.addEventListener('message', async (e) => {
       });
     }
 
+    // ── Load failure + empty-state status (Chunk L layer 4) ───
+    // A failed load used to leave a bare red "Error" badge and an input stuck on "Loading…"
+    // (UX review H2). Every load-failure path now calls showLoadError(): the model's name, the
+    // cause, and two ways on — Retry (same model) and Choose another model (the picker).
+    const loadError = document.getElementById('loadError');
+    const loadErrorText = document.getElementById('loadErrorText');
+    let loadErrorKey = null;
+    function showLoadError(message, key) {
+      loadErrorKey = key || activeModelKey;
+      const m = MODELS[loadErrorKey];
+      const name = m ? m.label : 'The model';
+      const cause = String(message || 'unknown error').replace(/^Failed to load model:\s*/i, '');
+      loadErrorText.textContent = `${name} didn't load: ${cause.length > 220 ? cause.slice(0, 220) + '…' : cause}`;
+      loadErrorText.title = cause;
+      statusText.textContent = 'Load failed';
+      chatInput.placeholder = `${name} didn't load — retry, or choose another model`;
+      loadError.hidden = false;
+    }
+    function hideLoadError() { loadError.hidden = true; }
+    document.getElementById('loadErrorRetry').addEventListener('click', () => {
+      hideLoadError();
+      if (loadErrorKey && MODELS[loadErrorKey]) loadModel(loadErrorKey);
+    });
+    document.getElementById('loadErrorPick').addEventListener('click', () => {
+      document.getElementById('modelPickerBtn').click();
+    });
+
+    // The empty chat states what is actually loaded, loading, or failed (M1), following the
+    // status badge; the example prompts fill the input (moved from About → Things to Try, L1).
+    const welcomeStatus = document.getElementById('welcomeStatus');
+    function updateWelcomeStatus() {
+      const m = MODELS[activeModelKey];
+      let text = statusText.textContent, state = '';
+      if (!loadError.hidden) {   // not the badge's error class: "WebGPU off" uses it too
+        text = `${m ? m.label : 'The model'} didn't load — see the message below.`; state = 'error';
+      } else if (modelReady && m) {
+        text = `${m.label} is ready · ` + (m.backend === 'chrome-ai' ? 'built into Chrome' : m.backend === 'endpoint' ? 'on your local server' : 'runs on this device');
+        state = 'ready';
+      } else if (m) {
+        const size = String(m.size || '').replace(/\s*\(.*$/, '');
+        const fetched = size && m.backend !== 'chrome-ai' && m.backend !== 'endpoint';
+        text = `Loading ${m.label}` + (fetched ? ` · ${size}, downloaded once, then loaded from this browser` : '') + '…';
+      }
+      welcomeStatus.textContent = text;
+      welcomeStatus.className = 'welcome-status' + (state ? ' ' + state : '');
+    }
+    new MutationObserver(updateWelcomeStatus).observe(statusBadge, { attributes: true, childList: true, subtree: true, characterData: true });
+    document.getElementById('welcomePrompts').addEventListener('click', (e) => {
+      const b = e.target.closest('.try-prompt');
+      if (!b) return;
+      chatInput.value = b.dataset.prompt;
+      chatInput.dispatchEvent(new Event('input'));
+      chatInput.focus();
+    });
+
     // ── Load model ──────────────────────────────────────────────
     // Thin shell over LocalMind.runtime.loadModel that drives the
     // existing UI state machine. The runtime owns worker lifecycle;
@@ -16198,6 +16378,8 @@ self.addEventListener('message', async (e) => {
     function loadModel(key) {
       const m = MODELS[key];
       if (!m) return;
+      try { refreshModelPickerLabel(); } catch {}   // boot and API loads set the select without a change event
+      try { hideLoadError(); } catch {}
 
       if (m.backend === 'chrome-ai') { loadChromeAIModel(key, m); return; }
       if (m.backend === 'endpoint') { loadEndpointModel(key, m); return; }
@@ -16316,6 +16498,150 @@ self.addEventListener('message', async (e) => {
       loadModel(key);
     });
 
+    // ── Model picker (Chunk L layer 2) ────────────────────────
+    // A popover over #modelSelect, which stays the source of truth: the list is rebuilt from
+    // its options on every open, and a pick sets its value and fires its change event. Models
+    // are grouped by whether their engine's own store already holds most of their bytes, so
+    // the cost of a choice (a download, and how big) shows before it is made (UX review H1).
+    const modelPickerBtn = document.getElementById('modelPickerBtn');
+    const modelPicker = document.getElementById('modelPicker');
+    const modelPickerList = document.getElementById('modelPickerList');
+    const ENGINE_STORES = {
+      'transformers': ['transformers-cache'], 'wllama': ['wllama'], 'lfm2-webgpu': ['gguf-v1'],
+      'bonsai2-webgpu': ['gguf-cache-v1'], 'gemma4-webgpu': ['safetensors-cache-v1', 'bonsai-pipeline-v1'],
+    };
+    function parseSizeBytes(size) {
+      const m = /([\d.]+)\s*(GB|MB)/i.exec(String(size || ''));
+      return m ? parseFloat(m[1]) * (m[2].toUpperCase() === 'GB' ? 1e9 : 1048576) : 0;
+    }
+    function repoForModel(m) {
+      const id = String(m.id || '');
+      return id.startsWith('http') ? repoOfUrl(id) : id;
+    }
+    // 'device' | 'partial' | 'download', from an inventoryModelCaches() result.
+    function modelCacheState(m, groups) {
+      if (m.backend === 'chrome-ai' || m.backend === 'endpoint' || m.localFile) return 'device';
+      const g = groups && groups.get(repoForModel(m));
+      if (!g) return 'download';
+      const own = (ENGINE_STORES[m.backend || 'transformers'] || []).reduce((n, s) => n + (g.byStore[s] || 0), 0);
+      const want = parseSizeBytes(m.size);
+      if (own > 0 && (!want || own >= want * 0.5)) return 'device';
+      return own > 0 || g.byStore['partial download'] ? 'partial' : 'download';
+    }
+    // Option text minus its size: roster entries end "(~1.1 GB)", custom ones "· ~201 MB".
+    const optionName = (o) => o.textContent
+      .replace(/\s*\((?:~?[\d.]+\s*(?:GB|MB)[^)]*)\)\s*$/i, '')
+      .replace(/\s*·\s*~?[\d.]+\s*(?:GB|MB)\s*$/i, '').trim();
+    function refreshModelPickerLabel() {
+      const o = modelSelect.selectedOptions[0];
+      const name = o ? optionName(o) : 'Choose a model';
+      modelPickerBtn.textContent = name;
+      modelPickerBtn.setAttribute('aria-label', 'Model, ' + name);
+      modelPickerBtn.title = 'Model: ' + name;
+      modelPickerBtn.disabled = modelSelect.disabled;
+    }
+    let pickerGroups = null;
+    function renderModelPicker() {
+      const rows = { device: [], partial: [], download: [] };
+      for (const o of modelSelect.options) {
+        const m = MODELS[o.value]; if (!m) continue;
+        const state = modelCacheState(m, pickerGroups);
+        const meta = m.backend === 'chrome-ai' ? 'built into Chrome'
+          : m.backend === 'endpoint' ? 'local server'
+          : state === 'device' ? 'on this device'
+          : (state === 'partial' ? 'resumes · ' : 'download · ') + String(m.size || '').replace(/\s*\(.*$/, '');
+        rows[state === 'device' ? 'device' : state === 'partial' ? 'partial' : 'download'].push({ o, meta, state });
+      }
+      const groups = [['On this device', rows.device], ['Partly downloaded', rows.partial], ['Download', rows.download]];
+      modelPickerList.innerHTML = '';
+      for (const [title, list] of groups) {
+        if (!list.length) continue;
+        const gid = 'mpg-' + title.replace(/\W+/g, '-').toLowerCase();
+        const group = document.createElement('div');
+        group.setAttribute('role', 'group'); group.setAttribute('aria-labelledby', gid);
+        group.innerHTML = `<div class="mp-group" id="${gid}">${title}</div>`;
+        for (const { o, meta, state } of list) {
+          const row = document.createElement('div');
+          row.className = 'mp-opt' + (state === 'device' ? ' on-device' : '');
+          row.id = 'mpo-' + [...modelSelect.options].indexOf(o);
+          row.setAttribute('role', 'option');
+          row.dataset.value = o.value;
+          row.setAttribute('aria-selected', String(o.value === modelSelect.value));
+          if (o.disabled) row.setAttribute('aria-disabled', 'true');
+          row.innerHTML = `<span>${escapeHtml(optionName(o))}</span><span class="mp-meta">${escapeHtml(o.disabled ? 'needs WebGPU' : meta)}</span>`;
+          group.appendChild(row);
+        }
+        modelPickerList.appendChild(group);
+      }
+    }
+    const pickerRows = () => [...modelPickerList.querySelectorAll('.mp-opt:not([aria-disabled="true"])')];
+    function focusPickerRow(row) {
+      modelPickerList.querySelectorAll('.mp-opt.focused').forEach(r => r.classList.remove('focused'));
+      if (!row) return;
+      row.classList.add('focused');
+      modelPickerList.setAttribute('aria-activedescendant', row.id);
+      row.scrollIntoView({ block: 'nearest' });
+    }
+    function openModelPicker() {
+      if (modelPickerBtn.disabled) return;
+      renderModelPicker();
+      modelPicker.hidden = false;
+      modelPickerBtn.setAttribute('aria-expanded', 'true');
+      focusPickerRow(modelPickerList.querySelector('.mp-opt[aria-selected="true"]') || pickerRows()[0]);
+      modelPickerList.focus();
+      // Cache state needs a storage walk; draw first, then redraw with it.
+      inventoryModelCaches().then((g) => {
+        pickerGroups = g;
+        if (modelPicker.hidden) return;
+        const focused = modelPickerList.querySelector('.mp-opt.focused')?.dataset.value;
+        renderModelPicker();
+        focusPickerRow(modelPickerList.querySelector(`.mp-opt[data-value="${CSS.escape(focused || modelSelect.value)}"]`));
+      }).catch(() => {});
+    }
+    function closeModelPicker(returnFocus) {
+      if (modelPicker.hidden) return;
+      modelPicker.hidden = true;
+      modelPickerBtn.setAttribute('aria-expanded', 'false');
+      if (returnFocus) modelPickerBtn.focus();
+    }
+    function pickModel(value) {
+      const o = [...modelSelect.options].find(x => x.value === value);
+      if (!o || o.disabled) return;
+      closeModelPicker(true);
+      if (modelSelect.value !== value) {
+        modelSelect.value = value;
+        modelSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      refreshModelPickerLabel();
+    }
+    modelPickerBtn.addEventListener('click', () => (modelPicker.hidden ? openModelPicker() : closeModelPicker(false)));
+    modelPickerBtn.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); openModelPicker(); }
+    });
+    modelPickerList.addEventListener('click', (e) => {
+      const row = e.target.closest('.mp-opt');
+      if (row && row.getAttribute('aria-disabled') !== 'true') pickModel(row.dataset.value);
+    });
+    modelPickerList.addEventListener('keydown', (e) => {
+      const rows = pickerRows();
+      const i = rows.indexOf(modelPickerList.querySelector('.mp-opt.focused'));
+      if (e.key === 'ArrowDown') { e.preventDefault(); focusPickerRow(rows[Math.min(rows.length - 1, i + 1)]); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); focusPickerRow(rows[Math.max(0, i - 1)]); }
+      else if (e.key === 'Home') { e.preventDefault(); focusPickerRow(rows[0]); }
+      else if (e.key === 'End') { e.preventDefault(); focusPickerRow(rows[rows.length - 1]); }
+      else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (rows[i]) pickModel(rows[i].dataset.value); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeModelPicker(true); }
+      else if (e.key === 'Tab') closeModelPicker(false);
+    });
+    document.addEventListener('pointerdown', (e) => {
+      if (!modelPicker.hidden && !e.target.closest('.model-picker-wrap')) closeModelPicker(false);
+    });
+    // The select changes in code too (boot pick, API loads, a failed load restoring the last
+    // model); every such path also toggles its disabled state or fires change, so watch both.
+    modelSelect.addEventListener('change', refreshModelPickerLabel);
+    new MutationObserver(refreshModelPickerLabel).observe(modelSelect, { attributes: true, attributeFilter: ['disabled'], childList: true });
+    refreshModelPickerLabel();
+
     // ── Cancel button on the download progress panel ────────────
     // Terminates the worker (which aborts in-flight fetches) and returns
     // the app to an idle state. Partial chunks already saved to IDB stay
@@ -16405,6 +16731,7 @@ self.addEventListener('message', async (e) => {
         statusText.textContent = 'Gemini Nano unavailable';
         chatInput.disabled = true;
         chatInput.placeholder = msg;
+        showLoadError(msg, key);
         sendBtn.disabled = true; if (searchSendBtn) searchSendBtn.disabled = true;
         modelSelect.disabled = false;
         showToast(msg);
@@ -18118,7 +18445,7 @@ self.addEventListener('message', async (e) => {
     // finishGeneration() for the source badge + Save-as-MD + history commit.
     async function runDeepResearch(question) {
       if (!question || !modelReady || generating) return;
-      if (!isSearchConfigured()) { showToast('Configure a web search provider in Settings first'); return; }
+      if (!isSearchConfigured()) { openSettings('tools', 'searchSettingsSection'); showToast('Deep Research needs a web search provider — choose one here.'); return; }
       const m = MODELS[activeModelKey];
       if (!m || !m.agentCapable) { showToast('Deep Research needs an agent-capable model'); return; }
 
@@ -18507,10 +18834,8 @@ self.addEventListener('message', async (e) => {
     }
     function needsSearchOrConfigure(what) {
       if (isSearchConfigured()) return true;
-      if (confirm(what + ' needs a web search provider. Open Settings to set one up?')) {
-        memoryPanel.classList.remove('open');
-        settingsPanel.classList.add('open');
-      }
+      openSettings('tools', 'searchSettingsSection');
+      showToast(what + ' needs a web search provider — choose one here.');
       return false;
     }
     chipResearch.addEventListener('click', () => { if (generating) return; if (activeMode !== 'research' && !needsSearchOrConfigure('Deep Research')) return; setExclusiveMode('research'); });
@@ -18527,6 +18852,44 @@ self.addEventListener('message', async (e) => {
     // 🎭 Clone mode chip. Heavy WebGPU model (Chatterbox ~1.5 GB) — follows the
     // Vision/OCR suspend-restore pattern (unloads the chat model while active).
     if (chipClone) chipClone.addEventListener('click', () => { if (!generating) setExclusiveMode('clone'); });
+
+    // ── Sidebar navigation (Chunk L layer 1) ──────────────────
+    // Nav items click the existing chip or button (data-click), so each mode keeps a single
+    // code path; the nav only mirrors which mode is active. "Chat" leaves whatever mode is on.
+    const appNav = document.getElementById('appNav');
+    const navModeButtons = [...appNav.querySelectorAll('[data-mode]')];
+    const navNewChat = appNav.querySelector('[data-click="newChatBtn"]');
+    const navMore = appNav.querySelector('.nav-more');
+    function syncNav() {
+      for (const b of navModeButtons) {
+        const on = b.dataset.mode === activeMode;
+        b.classList.toggle('active', on);
+        if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+      }
+      if (navMore.querySelector('button.active')) navMore.open = true;
+      navNewChat.disabled = newChatBtn.disabled;
+    }
+    historySidebar.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-click], button[data-mode], button[data-models]');
+      if (!b) return;
+      if (b.dataset.mode === 'chat' && !b.dataset.click) {
+        if (!generating && activeMode !== 'chat') setExclusiveMode(activeMode);
+      } else if ('models' in b.dataset) {
+        openSettings('models');
+      } else {
+        const target = document.getElementById(b.dataset.click);
+        if (target && !target.disabled) target.click();
+      }
+      if (!sidebarDocked.matches) closeHistorySidebar();
+    });
+    new MutationObserver(syncNav).observe(document.getElementById('modeRow'), { subtree: true, attributes: true, attributeFilter: ['class'] });
+    new MutationObserver(syncNav).observe(newChatBtn, { attributes: true, attributeFilter: ['disabled'] });
+    syncNav();
+    // Version string in view (TASTE bias 8); the About note is its single source.
+    {
+      const v = (document.querySelector('.help-note')?.textContent.match(/v\d+\.\d+\.\d+/) || [])[0];
+      if (v) document.getElementById('appVersion').textContent = v;
+    }
     // Push-to-talk: hold the mic (pointer) or hold V (when not typing). Release = send.
     if (voiceMicBtn) {
       const down = (e) => { if (activeMode !== 'voice') return; e.preventDefault(); voiceStartRecording(); };

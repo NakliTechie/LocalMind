@@ -79,9 +79,14 @@ assert.ok(worstOld < -0.8, 'the fixtures must still contain a case the old chars
 
 // Cheap enough to run over a whole history on every turn.
 const big = TOKEN_FIXTURES.map((s) => s.text).join('\n').repeat(40);
-const t0 = performance.now();
-countTokens(big, 'qwen35-4b');
-const ms = performance.now() - t0;
+// Best of 5: one run on a busy machine (a model download, a GPU job) can stall for
+// hundreds of ms without the function being slow (seen 2026-10-04: 354 ms once, then 3-6 ms).
+let ms = Infinity;
+for (let i = 0; i < 5; i++) {
+  const t0 = performance.now();
+  countTokens(big, 'qwen35-4b');
+  ms = Math.min(ms, performance.now() - t0);
+}
 assert.ok(ms < 250, `countTokens took ${ms.toFixed(0)} ms on ${big.length} characters`);
 
 assert.equal(countTokens('', 'qwen35-4b'), 0);
