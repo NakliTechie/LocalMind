@@ -41,13 +41,22 @@ assert.match(workerSource, /const reader = body;/);
 assert.doesNotMatch(workerSource, /rangeResp\.body\.getReader\(\)/);
 assert.match(workerSource, /cancel\(\) \{ body\.cancel\(\); closeDb\(\); \}/);
 
-// 2. Runtime contract, with the stall window shrunk to 40 ms.
+// 2. Runtime contract, with the stall window shrunk to 40 ms and the 1-5 s backoff between
+// reopens shrunk to 1-5 ms (at full length the backoffs alone kept this suite running 68 s).
 const guard = /\/\/ STALL-GUARD-START([\s\S]*?)\/\/ STALL-GUARD-END/.exec(workerSource);
 assert.ok(guard, 'STALL-GUARD block missing');
 assert.match(guard[1], /const __STALL_MS = 30000;/);
-const modPath = join(dir, 'guard.mjs');
-await writeFile(modPath, guard[1].replace('const __STALL_MS = 30000;', 'const __STALL_MS = 40;') + '\nexport { __stallGuardedBody, __guardedGet, __boundedFetch };\n');
-const { __stallGuardedBody, __guardedGet, __boundedFetch } = await import(pathToFileURL(modPath).href);
+const shortStall = guard[1].replace('const __STALL_MS = 30000;', 'const __STALL_MS = 40;');
+const BACKOFF = /Math\.min\(1000 \* (retries|\(attempt \+ 1\)), 5000\)/g;
+assert.equal(shortStall.match(BACKOFF).length, 3, 'every reopen backoff is shrunk');
+const loadGuard = async (name, source) => {
+  const path = join(dir, name);
+  await writeFile(path, source + '\nexport { __stallGuardedBody, __guardedGet, __boundedFetch };\n');
+  return import(pathToFileURL(path).href);
+};
+const { __stallGuardedBody, __guardedGet, __boundedFetch } = await loadGuard('guard.mjs', shortStall.replace(BACKOFF, 'Math.min($1, 5)'));
+// A copy with the full backoff, for the check that a cancelled load waits out no backoff.
+const fullBackoff = await loadGuard('guard-full-backoff.mjs', shortStall);
 
 const FILE = new Uint8Array(1000);
 for (let i = 0; i < FILE.length; i++) FILE[i] = i % 251;
@@ -202,7 +211,7 @@ const run = async (from, script) => {
   const caller = new AbortController();
   let calls = 0;
   const fetchImpl = (url, init) => { calls++; return never(init.signal); };
-  const p = __boundedFetch('https://huggingface.co/x', { headers: { Range: 'bytes=0-0' }, signal: caller.signal }, fetchImpl);
+  const p = fullBackoff.__boundedFetch('https://huggingface.co/x', { headers: { Range: 'bytes=0-0' }, signal: caller.signal }, fetchImpl);
   const t0 = Date.now();
   setTimeout(() => caller.abort(new Error('user cancelled')), 10);
   await assert.rejects(p, /user cancelled/);
