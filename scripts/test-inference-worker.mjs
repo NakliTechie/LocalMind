@@ -96,7 +96,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   const build = await readFile(new URL('./build-gemma-4-e2b.mjs', import.meta.url), 'utf8');
   assert.match(build, /UPSTREAM_SHA256 = '0234c0e866bfaa9623e938a7cfa7f5740cca22532cc1112dd4e8915b97f78d62'/);
   const engine = await readFile(new URL('../gemma-4-e2b.js', import.meta.url));
-  assert.equal(createHash('sha256').update(engine).digest('hex'), '18a7f3702ff6bb7d7696c65859b9f0e7518eabb3d46c9b432fe8235ad4e358e9', 'gemma-4-e2b.js differs from the last build: rerun scripts/build-gemma-4-e2b.mjs and update this pin');
+  assert.equal(createHash('sha256').update(engine).digest('hex'), '84540424d55384146e0dd695d303f0d84090809606f6ee77c0d5e44b40609d23', 'gemma-4-e2b.js differs from the last build: rerun scripts/build-gemma-4-e2b.mjs and update this pin');
   assert.match(indexSource, /new URL\('ple-opfs\.js', document\.baseURI\)/);
   assert.match(indexSource, /'gemma4-e2b-webgpu': \{\s*id: 'google\/gemma-4-E2B-it-qat-mobile-transformers',[^]*?backend: 'gemma4-webgpu'/);
   assert.match(indexSource, /: isGemma4Webgpu \? createGemma4WebgpuWorker\(\)/);

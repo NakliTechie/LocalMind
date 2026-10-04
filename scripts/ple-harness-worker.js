@@ -4,7 +4,7 @@
 // greedy generations, returning token ids and timings. No LocalMind UI is involved.
 //
 // Messages (each answered by {id, ok, result | error}):
-//   {op:'load', mode:'resident'|'opfs', patches?:[[from, to], ...], pleOpts?: createGemmaPle options}
+//   {op:'load', mode:'resident'|'opfs', modelId?, patches?:[[from, to], ...], pleOpts?: createGemmaPle options}
 //       patches are exact-once string replacements applied to the engine text before import
 //       (for experiments such as the decode pipeline depth); the engine is then imported
 //       from a blob URL. With no patches the served gemma-4-e2b.js is imported as is.
@@ -63,16 +63,16 @@ async function importEngine(patches) {
 }
 
 const handlers = {
-  async load({ mode = 'resident', patches = [], loadOpts = {}, pleOpts = {} }) {
+  async load({ mode = 'resident', patches = [], loadOpts = {}, pleOpts = {}, modelId = null }) {
     if (model) { model.dispose(); model = null; }
     engine = await importEngine(patches);
     const before = live;
     const t0 = performance.now();
     const status = [];
     const ple = mode === 'opfs'
-      ? (await import(new URL('../ple-opfs.js' + self.location.search, self.location.href).href)).createGemmaPle({ ...pleOpts, onStatus: (s) => status.push(s) })
+      ? (await import(new URL('../ple-opfs.js' + self.location.search, self.location.href).href)).createGemmaPle({ source: modelId ? { repo: modelId } : null, ...pleOpts, onStatus: (s) => status.push(s) })
       : undefined;
-    model = await engine.Gemma4Mobile.load(null, { ple, ...loadOpts });
+    model = await engine.Gemma4Mobile.load(modelId, { ple, ...loadOpts });
     const loadMs = performance.now() - t0;
     const afterLoad = live;
     await model.warmup();

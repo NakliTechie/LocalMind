@@ -248,7 +248,13 @@ export const GEMMA4_WARM = [[0, 28672], [236743, 4096]];
 // ranges above, a GPU slot map, and part A = 60% of each decode step (a shorter part A ends before
 // the token's readback and the GPU waits; a longer one wastes more on a miss). gpuMap: false gives the
 // simpler mode where the CPU looks every decode token up and decode runs one step at a time.
-export function createGemmaPle({ key = 'gemma-4-e2b', slots = 32768, warm = GEMMA4_WARM, gpuMap = true, split = 0.6, source = null, onStatus = () => {} } = {}) {
+// The OPFS directory under localmind-ssd/: one per model, from its repo name
+// ('google/gemma-4-E2B-it-qat-mobile-transformers' -> 'gemma-4-e2b').
+export function gemmaPleKey(repo) {
+  return repo ? repo.split('/').pop().toLowerCase().replace(/-it-qat-mobile-transformers$/, '') : 'gemma-4-e2b';
+}
+
+export function createGemmaPle({ key = null, slots = 32768, warm = GEMMA4_WARM, gpuMap = true, split = 0.6, source = null, onStatus = () => {} } = {}) {
   return {
     async attach({ bits, scale, vocab, hidden, groups, codeBits, device, alloc }) {
       const wordsPerRow = (hidden * codeBits) / 32;
@@ -258,7 +264,7 @@ export function createGemmaPle({ key = 'gemma-4-e2b', slots = 32768, warm = GEMM
       }
       let file;
       try {
-        file = await RowFile.open({ key, name: 'ple.bin', rowBytes, rows: vocab });
+        file = await RowFile.open({ key: key || gemmaPleKey(source && source.repo), name: 'ple.bin', rowBytes, rows: vocab });
         const fp = fingerprint([bits, scale]);
         let wroteMs = null;
         if (!file.matches(fp)) {

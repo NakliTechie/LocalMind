@@ -16,7 +16,7 @@
 //   4. prefill (time to first token) for a ~2k-token prompt, first time and repeated
 //
 //   python3 -m http.server 8766 --bind 127.0.0.1      # from the repo root (or .claude/launch.json)
-//   node scripts/test-ple-opfs.mjs [--profile ~/.cache/localmind-ple-profile] [--out result.json]
+//   node scripts/test-ple-opfs.mjs [--model google/gemma-4-E4B-it-qat-mobile-transformers] [--rounds 6] [--out result.json]
 //
 // The first run downloads the model (2.46 GB) into --profile and writes the 1.2 GB table to its
 // OPFS; later runs reuse both. Close other GPU work first: speeds on a busy machine are indicative.
@@ -33,6 +33,7 @@ const PORT = Number(opt('port', 9435));
 const CHROME = opt('chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
 const MAX = Number(opt('max-tokens', 128));
 const ROUNDS = Number(opt('rounds', 6));
+const MODEL = opt('model', null); // a Gemma 4 QAT-mobile repo id; default: the engine's (E2B)
 
 const LONG = readFileSync(new URL('../ARCHITECTURE.md', import.meta.url), 'utf8').slice(0, 6700);
 const PROMPTS = [
@@ -111,7 +112,7 @@ async function withChrome(fn) {
 
 async function runMode(name, loadArgs) {
   return withChrome(async (call) => {
-    const load = await call('load', loadArgs);
+    const load = await call('load', { ...loadArgs, modelId: MODEL });
     if (load.pleMode !== (loadArgs.mode === 'opfs' ? 'opfs' : 'resident')) throw new Error(`${name}: engine reports PLE mode ${load.pleMode}`);
     const r = { name, pleMode: load.pleMode, loadMs: Math.round(load.loadMs), gpuBytesAfterLoad: load.gpuAfterLoad, gpuProcessMBAfterLoad: gpuProcessMB(), pleStatus: load.status };
     log(`${name}: loaded in ${(r.loadMs / 1000).toFixed(1)} s, ${(r.gpuBytesAfterLoad / 1e9).toFixed(3)} GB of GPU buffers, GPU process ${r.gpuProcessMBAfterLoad} MB`);
@@ -142,7 +143,7 @@ const rounds = ROUNDS > 0 ? await withChrome(async (call) => {
   for (let round = 0; round < ROUNDS; round++) {
     const row = { round };
     for (const mode of round % 2 ? ['opfs', 'resident'] : ['resident', 'opfs']) {
-      await call('load', { mode });
+      await call('load', { mode, modelId: MODEL });
       const a = await call('gen', { prompt: PROSE, maxNewTokens: 256 });
       const b = await call('gen', { prompt: PROSE, maxNewTokens: 256 });
       const c = await call('gen', { prompt: CODE, maxNewTokens: 256 });
@@ -172,7 +173,7 @@ const report = results.map((r) => ({
 console.table(report);
 const firstDiffs = results.slice(1).map((r) => ({ mode: r.name, diffs: r.ids.map((ids, i) => ({ i, at: ids.findIndex((x, j) => x !== ref.ids[i][j]) })).filter((d) => d.at >= 0 || r.ids[d.i].length !== ref.ids[d.i].length) }));
 if (OUT) {
-  writeFileSync(OUT, JSON.stringify({ date: new Date().toISOString(), url: URL_, maxTokens: MAX, report, firstDiffs, paired, rounds, results: results.map(({ ids, decodeIds, ...r }) => r) }, null, 1));
+  writeFileSync(OUT, JSON.stringify({ date: new Date().toISOString(), model: MODEL || 'google/gemma-4-E2B-it-qat-mobile-transformers', url: URL_, maxTokens: MAX, report, firstDiffs, paired, rounds, results: results.map(({ ids, decodeIds, ...r }) => r) }, null, 1));
   log('wrote', OUT);
 }
 const gate1 = results.filter((r) => r.pleMode === 'opfs').every((r) => r.ids.every((ids, i) => same(ids, ref.ids[i])) && r.decodeIds.every((ids, i) => same(ids, ref.decodeIds[i])));

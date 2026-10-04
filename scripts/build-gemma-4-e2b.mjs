@@ -12,7 +12,8 @@
 // per-layer embedding (PLE) table from OPFS instead of keeping it resident on the GPU (see
 // ple-opfs.js). Without `ple` every graph is built exactly as upstream builds it.
 //   (a) load() and fromSnapshot() pass `ple` through to the weight loader.
-//   (b) the loader hands the PLE tensors' bytes to ple.attach(), which writes the OPFS file and
+//   (b) the loader hands the PLE tensors' bytes (2- or 4-bit codes; E4B's are 2-bit, E2B's 4-bit) to
+//       ple.attach(), which writes the OPFS file and
 //       returns a small GPU row table; on null (no OPFS) it uploads the table resident as before.
 //   (c) the decode, prefill-block and whole-sequence graphs gather PLE rows through their own ids
 //       tensor (table slots) instead of the token ids; the gather kernel itself is unchanged.
@@ -57,7 +58,7 @@ export function applyGemmaPatches(src, helpers) {
     '(t.ple?a.push(Ln({names:[`${gn}.embed_tokens_per_layer.embedding_quantized`,`${gn}.embed_tokens_per_layer.embedding_scale`],progressLabel:`${gn}.embed_tokens_per_layer`,run:async E=>{' +
       'let $c=`${gn}.embed_tokens_per_layer`,b=E[`${$c}.embedding_quantized`],W=E[`${$c}.embedding_scale`];if(!b||!W)throw new Error(`Missing tensors for ${$c}`);' +
       'let d=n.vocab_size_per_layer_input,p=n.num_hidden_layers*n.hidden_size_per_layer_input,m=n.num_hidden_layers,q=b.byteLength*8/(d*p);' +
-      'let P=q===4?await t.ple.attach({bits:new Uint8Array(b.buffer,b.byteOffset,b.byteLength),scale:new Uint8Array(W.buffer,W.byteOffset,W.byteLength),vocab:d,hidden:p,groups:m,codeBits:q,device:e.host.device,' +
+      'let P=q===2||q===4?await t.ple.attach({bits:new Uint8Array(b.buffer,b.byteOffset,b.byteLength),scale:new Uint8Array(W.buffer,W.byteOffset,W.byteLength),vocab:d,hidden:p,groups:m,codeBits:q,device:e.host.device,' +
       'alloc:(B,T,S,L)=>e.allocateWeightsBuffer({byteLength:B,dtype:T,shape:S,label:L})}):null;' +
       'if(P){l.embedTokensPerLayer={bitsT:P.bitsT,scaleT:P.scaleT,bits:q,ple:P};return}' +
       'let G=e.allocateWeightsBuffer({byteLength:b.byteLength,dtype:"uint32",shape:[d,p*q/32],label:`${$c}.bits`});e.writeWeightsRange(G,0,b);' +
