@@ -2,15 +2,17 @@
 // qwen3-moe-worker.mjs (engine in a dedicated worker, the way LocalMind runs engines).
 // Every method returns JSON-able results for a DevTools-protocol client.
 import { Qwen3MoeSsd, removeIngest } from '../qwen3_moe_ssd.js';
+import { Qwen35MoeSsd } from '../qwen35_moe_ssd.js';
 
 export function makeApi(log = () => {}) {
   let m = null;
   const api = {
-    async load({ url, key, poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead } = {}) {
+    // engine: 'qwen3' (rung 2a, qwen3moe GGUFs) or 'qwen35' (rung 2b, qwen35moe GGUFs).
+    async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead } = {}) {
       if (m) { await m.dispose(); m = null; }
       const t0 = performance.now();
       let last = 0;
-      m = await Qwen3MoeSsd.load(null, {
+      m = await (engine === 'qwen35' ? Qwen35MoeSsd : Qwen3MoeSsd).load(null, {
         url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead,
         onProgress: (e) => {
           if (e.status === 'weights' && e.kind !== 'tensors' && performance.now() - last > 2000) { last = performance.now(); log({ ingest: e.loaded, total: e.total, secs: e.secs }); }
