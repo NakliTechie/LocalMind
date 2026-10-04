@@ -725,7 +725,11 @@ export class Qwen3MoeSsd {
     this.pipelines = {};
     this.position = 0;
     this.cached = [];          // token ids whose K/V are in the cache, in order
-    this.prefetch = !!opts.prefetch;
+    // Prefetch: routers of the next `lookahead` layers guess their experts from this layer's
+    // post-attention state. Measured 2026-10-04 (full model, 4 GB pool, M4 Pro): off 4.41,
+    // lookahead 1 5.02, 2 5.48, 4 4.56, 6 3.90 tok/s — guesses beyond 2 layers waste SSD bandwidth.
+    this.prefetch = opts.prefetch ?? true;
+    this.lookahead = Math.max(1, opts.lookahead || 2);
     this.resetCounters();
   }
 
@@ -827,12 +831,13 @@ export class Qwen3MoeSsd {
     const A = (n) => this.buffer(n * 4, STORAGE | COPY_SRC | COPY_DST);
     this.a = {
       x: A(H), xn: A(H), q: A(QN), k: A(kvn), v: A(kvn), att: A(QN), o: A(H), sc: A(c.heads * this.maxCtx),
-      rl: A(c.experts), sel: A(2 * K), pxn: A(H), prl: A(c.experts), psel: A(2 * K), slots: A(K),
+      rl: A(c.experts), sel: A(2 * K), pxn: A(H), prl: A(c.experts), psel: A(64 * this.lookahead), slots: A(K),
       gu: A(K * 2 * F), act: A(K * F), dn: A(K * H), logits: A(c.vocab), am: A(4),
       rope: A(c.headDim),
     };
     this.tok = this.buffer(16, UNIFORM | COPY_DST);
-    this.rbSel = this.buffer(4 * K * 4, MAP_READ | COPY_DST);
+    // Readback: this layer's selection at 0, guess d (layers ahead) at 256 × d bytes.
+    this.rbSel = this.buffer(256 * (1 + this.lookahead), MAP_READ | COPY_DST);
     this.rbLogits = this.buffer(c.vocab * 4, MAP_READ | COPY_DST);
     this.rbArg = this.buffer(16, MAP_READ | COPY_DST);
 
@@ -849,7 +854,6 @@ export class Qwen3MoeSsd {
     this.layers = [];
     for (let l = 0; l < c.layers; l++) {
       const p = (n) => W[`blk.${l}.${n}.weight`];
-      const next = l + 1 < c.layers ? (n) => W[`blk.${l + 1}.${n}.weight`] : null;
       this.layers.push({
         rmsA: this.bind('rmsnorm', [a.x, p('attn_norm').raw, a.xn, u.rmsH]),
         q: this.bind('matmulQ8', [a.xn, p('attn_q').q, p('attn_q').s, a.q, u.mmQ]),
@@ -866,10 +870,20 @@ export class Qwen3MoeSsd {
         rmsF: this.bind('rmsnorm', [a.x, p('ffn_norm').raw, a.xn, u.rmsH]),
         router: this.bind('matmulF32', [a.xn, p('ffn_gate_inp').raw, a.rl, u.router]),
         topk: this.bind('topk', [a.rl, a.sel, u.topk]),
-        // Next layer's router on this layer's post-attention state: the prefetch guess.
-        pRms: next && this.bind('rmsnorm', [a.x, next('ffn_norm').raw, a.pxn, u.rmsH]),
-        pRouter: next && this.bind('matmulF32', [a.pxn, next('ffn_gate_inp').raw, a.prl, u.router]),
-        pTopk: next && this.bind('topk', [a.prl, a.psel, u.topk]),
+        // Routers of layers l+1..l+lookahead on this layer's post-attention state: the prefetch
+        // guesses, each written to its own 256-byte region of psel.
+        pf: Array.from({ length: Math.min(this.lookahead, c.layers - 1 - l) }, (_, i) => {
+          const at = (n) => W[`blk.${l + 1 + i}.${n}.weight`];
+          return {
+            rms: this.bind('rmsnorm', [a.x, at('ffn_norm').raw, a.pxn, u.rmsH]),
+            router: this.bind('matmulF32', [a.pxn, at('ffn_gate_inp').raw, a.prl, u.router]),
+            topk: this.device.createBindGroup({ layout: this.pipeline('topk').getBindGroupLayout(0), entries: [
+              { binding: 0, resource: { buffer: a.prl } },
+              { binding: 1, resource: { buffer: a.psel, offset: 256 * i, size: 8 * K } },
+              { binding: 2, resource: { buffer: u.topk } },
+            ] }),
+          };
+        }),
         gu: this.bind('expertQ8', [a.xn, this.pool.guQ, this.pool.guS, a.gu, u.gu, a.slots]),
         silu: this.bind('siluMulMoe', [a.gu, a.act, u.silu]),
         dn: this.bind('expertQ8', [a.act, this.pool.dQ, this.pool.dS, a.dn, u.dn, a.slots]),
@@ -901,7 +915,7 @@ export class Qwen3MoeSsd {
     d('attnOut', g.attOut, Math.ceil(QN / 256));
     d('matmulQ8', g.o, Math.ceil(c.hidden / 4));
     d('addInPlace', g.addO, Math.ceil(c.hidden / 256));
-    if (this.prefetch && g.pRms) { d('rmsnorm', g.pRms, 1); d('matmulF32', g.pRouter, c.experts); d('topk', g.pTopk, 1); }
+    if (this.prefetch) for (const p of g.pf) { d('rmsnorm', p.rms, 1); d('matmulF32', p.router, c.experts); d('topk', p.topk, 1); }
     d('rmsnorm', g.rmsF, 1);
     d('matmulF32', g.router, c.experts);
     d('topk', g.topk, 1);
@@ -931,14 +945,24 @@ export class Qwen3MoeSsd {
     if (this.xs) this.xs.resetStats();
   }
 
-  async readSel(withPred) {
-    const K = this.cfg.topK;
+  // → { ids, preds }: this layer's top-k ids and `nPred` guesses for the layers after it.
+  async readSel(nPred) {
+    const K = this.cfg.topK, bytes = 256 * (1 + nPred);
     const t0 = performance.now();
-    await this.rbSel.mapAsync(1, 0, 16 * K);
+    await this.rbSel.mapAsync(1, 0, bytes);
     this.counters.gpuWaitMs += performance.now() - t0;
-    const u = new Uint32Array(this.rbSel.getMappedRange(0, 16 * K).slice(0));
+    const u = new Uint32Array(this.rbSel.getMappedRange(0, bytes).slice(0));
     this.rbSel.unmap();
-    return { ids: u.subarray(0, K), pred: withPred ? u.subarray(2 * K, 3 * K) : null };
+    const preds = [];
+    for (let i = 1; i <= nPred; i++) preds.push(u.subarray(64 * i, 64 * i + K));
+    return { ids: u.subarray(0, K), preds };
+  }
+  // Encodes the readback of layer l's selection and its guesses.
+  copySel(enc, l) {
+    enc.copyBufferToBuffer(this.a.sel, 0, this.rbSel, 0, 8 * this.cfg.topK);
+    const n = this.prefetch ? this.layers[l].pf.length : 0;
+    if (n) enc.copyBufferToBuffer(this.a.psel, 0, this.rbSel, 256, 256 * n);
+    return n;
   }
 
   // One token through all layers at position this.position. want: 'none' | 'argmax' | 'logits'.
@@ -953,20 +977,20 @@ export class Qwen3MoeSsd {
     this.dispatch(pass, 'embedQ8', this.g.embed, Math.ceil(c.hidden / 256));
     this.encodeAttention(pass, 0, seqLen);
     pass.end();
-    enc.copyBufferToBuffer(this.a.sel, 0, this.rbSel, 0, 8 * K);
-    if (this.prefetch) enc.copyBufferToBuffer(this.a.psel, 0, this.rbSel, 8 * K, 8 * K);
+    let nPred = this.copySel(enc, 0);
     dev.queue.submit([enc.finish()]);
     this.counters.encodeMs += performance.now() - te;
     let predIds = null;
     for (let l = 0; l < c.layers; l++) {
-      const { ids, pred } = await this.readSel(this.prefetch && l + 1 < c.layers);
-      if (predIds) { // accuracy of the guess made one layer earlier
+      const { ids, preds } = await this.readSel(nPred);
+      if (predIds) { // accuracy of the one-layer-ahead guess made one layer earlier
         let hit = 0; for (const e of ids) if (predIds.includes(e)) hit++;
         this.counters.predHits += hit; this.counters.predTotal += K;
       }
       const tq = performance.now();
       const ensuring = this.xs.ensure(l, ids);
-      if (pred) { this.xs.prefetch(l + 1, pred); predIds = Array.from(pred); } else predIds = null;
+      preds.forEach((p, i) => this.xs.prefetch(l + 1 + i, p));   // nearest layer first
+      predIds = preds.length ? Array.from(preds[0]) : null;
       const slots = await ensuring;
       this.counters.ensureMs += performance.now() - tq;
       dev.queue.writeBuffer(this.a.slots, 0, slots);
@@ -976,8 +1000,7 @@ export class Qwen3MoeSsd {
       if (l + 1 < c.layers) {
         this.encodeAttention(pass, l + 1, seqLen);
         pass.end();
-        enc.copyBufferToBuffer(this.a.sel, 0, this.rbSel, 0, 8 * K);
-        if (this.prefetch && l + 2 < c.layers) enc.copyBufferToBuffer(this.a.psel, 0, this.rbSel, 8 * K, 8 * K);
+        nPred = this.copySel(enc, l + 1);
       } else {
         if (want !== 'none') {
           this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);

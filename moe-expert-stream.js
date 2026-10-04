@@ -20,8 +20,12 @@
  */
 
 export class ExpertStreamer {
-  constructor({ device, reader, recordBytes, recordOffset, parts, slots, numLayers, numExperts, maxStaging = 32, uploadRing = 16, evict = 'lru', hotHalfLife = 8 }) {
-    Object.assign(this, { device, reader, recordBytes, recordOffset, parts, slots, numLayers, numExperts, maxStaging, evict });
+  constructor({ device, reader, recordBytes, recordOffset, parts, slots, numLayers, numExperts, maxStaging = 32, uploadRing = 16, evict = 'lru', hotHalfLife = 8, maxPrefetchInflight = 8 }) {
+    Object.assign(this, { device, reader, recordBytes, recordOffset, parts, slots, numLayers, numExperts, maxStaging, evict, maxPrefetchInflight });
+    // Prefetches wait in pfQueue (nearest layer first) and at most maxPrefetchInflight of them
+    // read at once, so a demand read never queues behind a long run of guesses in the workers.
+    this.pfQueue = [];
+    this.pfInflight = 0;
     // evict 'hot': drop the unpinned expert with the lowest decaying route count, oldest first
     // on ties (llama.cpp PR #25294's policy). One tick per ensure() call, so the half-life is in
     // tokens × layers. 'lru' (default): plain least recently used.
@@ -157,6 +161,7 @@ export class ExpertStreamer {
   // the same order as `ids`. The caller must release() them after submitting the GPU work.
   async ensure(layer, ids) {
     this.tick++;
+    if (this.pfQueue.length && this.pfQueue[0].layer <= layer) this.pfQueue = this.pfQueue.filter((q) => q.layer > layer);
     const out = new Uint32Array(ids.length);
     const waits = [];
     const st = this.stats;
@@ -190,21 +195,33 @@ export class ExpertStreamer {
     return out;
   }
 
-  // Starts loads for experts that are neither resident nor in flight. Never awaits, never
-  // evicts a pinned slot; skips silently when the pool has nothing evictable left.
+  // Queues loads for experts that are neither resident, in flight nor queued; never awaits.
+  // Call with the nearest layer first: the queue is served in order, and entries for a layer
+  // are dropped once that layer's demand (ensure) arrives. Returns how many loads it started.
   prefetch(layer, ids) {
-    let started = 0;
+    const before = this.stats.prefetchIssued;
     for (const e of ids) {
       const key = this.key(layer, e);
-      if (this.lru.has(key) || this.inflight.has(key)) continue;
-      try {
-        this.load(layer, e).p.catch(() => {});
-        this.prefetched.add(key);
-        started++;
-      } catch (_) { break; }
+      if (this.lru.has(key) || this.inflight.has(key) || this.pfQueue.some((q) => q.key === key)) continue;
+      this.pfQueue.push({ layer, e, key });
     }
-    this.stats.prefetchIssued += started;
-    return started;
+    this.pump();
+    return this.stats.prefetchIssued - before;
+  }
+
+  // Starts queued prefetches while fewer than maxPrefetchInflight are reading. Stops when the
+  // pool has nothing evictable left.
+  pump() {
+    while (this.pfInflight < this.maxPrefetchInflight && this.pfQueue.length) {
+      const { layer, e, key } = this.pfQueue.shift();
+      if (this.lru.has(key) || this.inflight.has(key)) continue;
+      let entry;
+      try { entry = this.load(layer, e); } catch (_) { this.pfQueue.length = 0; break; }
+      this.prefetched.add(key);
+      this.stats.prefetchIssued++;
+      this.pfInflight++;
+      entry.p.catch(() => {}).finally(() => { this.pfInflight--; this.pump(); });
+    }
   }
 
   // Waits for every in-flight load and staging-ring map (before teardown and between runs).
@@ -215,6 +232,7 @@ export class ExpertStreamer {
   ringBytes() { return this.ring.reduce((a, r) => a + r.buf.size, 0); }
 
   clear() {
+    this.pfQueue = [];
     this.lru.clear();
     this.inflight.clear();
     this.prefetched.clear();

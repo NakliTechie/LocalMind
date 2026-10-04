@@ -103,6 +103,19 @@ writes.length = 0;
   assert.ok(xs.lru.has(xs.key(0, 2)));
 }
 
+{ // prefetch queue: at most maxPrefetchInflight guesses read at once; a layer's demand drops its queued guesses
+  const xs = new ExpertStreamer({ device, reader, recordBytes: REC, recordOffset: (l, e) => (l * E + e) * REC, parts, slots: 8, numLayers: L, numExperts: E, uploadRing, maxPrefetchInflight: 2 });
+  reads = 0;
+  assert.equal(xs.prefetch(1, [0, 1, 2, 3, 4]), 2, 'only two start');
+  assert.equal(xs.pfQueue.length, 3);
+  assert.equal(xs.inflight.size, 2);
+  const s = await xs.ensure(1, [7]);           // layer 1's demand arrives: its queued guesses go
+  assert.equal(xs.pfQueue.length, 0, 'queued guesses for a demanded layer are dropped');
+  await xs.drain();
+  assert.equal(reads, 3, 'two guesses + one demand were read, the three dropped guesses were not');
+  xs.release(s);
+}
+
 { // exhausted pool: demanding more experts than slots fails loudly
   const xs = mk(2);
   await assert.rejects(async () => xs.ensure(0, [0, 1, 2]), /pool exhausted/);
