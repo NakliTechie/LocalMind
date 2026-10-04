@@ -1838,6 +1838,10 @@
     /* Modes reached from the sidebar nav: their chip appears only while active, as the exit. */
     .mode-chip.moved:not(.active) { display: none; }
 
+    .header-menu-btn { display: none; align-items: center; justify-content: center; width: 36px; height: 36px; margin-right: 6px; border: none; border-radius: 8px; background: none; font-size: 1.2rem; color: var(--gray-800); cursor: pointer; }
+    .header-menu-btn:focus-visible { outline: 2px solid var(--indigo-500); }
+    .header > h1 { margin-right: auto; }
+    .nav-mobile-only, .app-nav .nav-mobile-only { display: none; }
     /* Sidebar navigation (Chunk L layer 1) */
     .app-nav { display: flex; flex-direction: column; gap: 1px; padding: 8px; border-bottom: 1px solid var(--gray-200); flex-shrink: 0; }
     .app-nav button, .nav-more summary, .sidebar-foot button {
@@ -1855,6 +1859,8 @@
     .nav-more button { padding-left: 22px; }
     .sidebar-foot { display: flex; align-items: center; gap: 8px; padding: 8px; border-top: 1px solid var(--gray-200); flex-shrink: 0; }
     .sidebar-foot button { width: auto; flex: 1; }
+    .sidebar-links { padding: 4px 18px 10px; font-size: 0.75rem; }
+    .sidebar-links a { color: var(--gray-700); margin-right: 14px; }
     .app-version { font-size: 0.72rem; color: var(--gray-600); font-variant-numeric: tabular-nums; padding-right: 6px; }
     .mode-extra { display: none; padding: 8px 16px 0; }
     .mode-extra.open { display: block; }
@@ -2175,6 +2181,33 @@
       .mode-chip { padding: 6px 11px; }
       .settings-tab-btn { padding: 7px 12px; }
       .mobile-tip { display: block; }
+
+      /* Phone layout (Chunk L, 2026-10-04): the conversation and the composer get the height.
+         Navigation and per-chat actions live in the drawer, opened from the header's menu
+         button; the toolbar keeps only the model picker; the footer pill moves into the drawer. */
+      body { padding: 8px 6px; }
+      .app { height: calc(100dvh - 16px); }
+      .header { margin-bottom: 8px; }
+      .header-menu-btn { display: inline-flex; }
+      .footer-nav { display: none; }
+      .nav-mobile-only, .app-nav .nav-mobile-only { display: block; }
+      .actions-bar { padding: 6px 10px; }
+      #newChatBtn, #clearBtn, #settingsBtn, #memoryBtn, #folderBtn, #historyBtn, #shareBtn { display: none; }
+      /* Composer: attach, reasoning and voice stack in a narrow column so the text box gets the
+         width; camera and mic go (a phone's file picker already offers both). */
+      .input-bar { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 8px; row-gap: 6px; align-items: end; padding: 8px 10px; }
+      #inputAffordances { grid-column: 1; grid-row: 1; flex-direction: column; gap: 6px; }
+      #voiceBtn { grid-column: 1; grid-row: 2; }
+      #chatInput { grid-column: 2; grid-row: 1 / span 2; min-height: 76px; }
+      .send-group { grid-column: 3; grid-row: 1 / span 2; align-self: end; }
+      #cameraBtn, #micBtn { display: none !important; }
+      /* The drawer scrolls as one column, so an open "More" never pushes Settings off-screen. */
+      .history-sidebar { overflow-y: auto; }
+      .history-sidebar-list { flex: none; overflow: visible; }
+      /* One-line status pill; the model's full name is on the picker just below. */
+      .header-right { min-width: 0; }
+      .status-badge { max-width: 44vw; white-space: nowrap; }
+      .status-badge #statusText { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     }
 
     /* Desktop (≥1100px): an app-shell layout. A full-width top bar pulls the
@@ -2225,6 +2258,7 @@
   <div class="app">
     <!-- Header -->
     <div class="header">
+      <button type="button" class="header-menu-btn" id="headerMenuBtn" aria-label="Menu" aria-controls="historySidebar">&#9776;</button>
       <h1>LocalMind</h1>
       <div class="header-right">
         <button class="install-btn" id="installBtn" title="Install LocalMind as an app" aria-label="Install LocalMind as an app" hidden>&#x2913; Install</button>
@@ -2967,6 +3001,8 @@
           <button type="button" data-click="chipVision" data-mode="vision">Vision</button>
           <button type="button" data-click="chipClone" data-mode="clone">Clone</button>
           <button type="button" data-click="folderBtn">Folder</button>
+          <button type="button" class="nav-mobile-only" data-click="clearBtn">Clear this chat</button>
+          <button type="button" class="nav-mobile-only" data-click="shareBtn">Share this chat</button>
         </details>
       </nav>
       <div class="history-sidebar-header">
@@ -2977,6 +3013,10 @@
       <div class="sidebar-foot">
         <button type="button" data-click="settingsBtn">Settings</button>
         <span class="app-version" id="appVersion"></span>
+      </div>
+      <div class="sidebar-links nav-mobile-only">
+        <a href="https://naklitechie.github.io/" target="_blank" rel="noopener">More projects</a>
+        <a href="https://github.com/NakliTechie/LocalMind" target="_blank" rel="noopener">Source</a>
       </div>
     </div>
   </div>
@@ -12192,6 +12232,8 @@ self.addEventListener('message', async (e) => {
     });
 
     historyBackdrop.addEventListener('click', closeHistorySidebar);
+    // Phones: the header's ☰ is the way into the drawer (the toolbar's Menu is hidden there).
+    document.getElementById('headerMenuBtn').addEventListener('click', () => historyBtn.click());
 
     async function refreshHistoryPanel() {
       try {
