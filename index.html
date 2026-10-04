@@ -2631,6 +2631,7 @@
               <li><strong>Gemini Nano</strong> (0 MB) &mdash; Google's on-device model built into Chrome, via the Prompt API. Zero download, no WebGPU. Chrome/Edge only; runs where your browser exposes <code>self.LanguageModel</code>. When Nano is already downloaded on desktop Chrome/Edge, LocalMind starts on it by default so you can chat with no model download.</li>
               <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
               <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only. About 4&times; the ONNX Gemma 4 E2B&rsquo;s decode speed on the same Mac (171 vs 42 tok/s, M4 Pro); text-only.</li>
+              <li><strong>Gemma 4 E4B &middot; WebGPU kernels</strong> (~3.6 GB) &mdash; text + agent. The larger Gemma 4 (QAT mobile) on the same hand-written WebGPU engine. Its per-layer embedding table can also live on disk (Settings &rarr; Models, below).</li>
               <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
               <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
               <li><strong>LFM2.5 230M &middot; GGUF</strong> (~170 MB) &mdash; the same LFM2.5 230M through wllama (llama.cpp &rarr; WebAssembly), reading a Q5_K_M GGUF. WebGPU when your browser has it, CPU otherwise, so it also runs where WebGPU is missing.</li>
@@ -2743,7 +2744,8 @@
           <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
             Keeps the model's 1.2 GB per-layer embedding table in this browser's private storage and only
             its ~33K most-used rows on the GPU: ~1 GB less GPU memory, unchanged output, decoding within a
-            few percent. The first load writes the table to disk once (~1 s). Applies to the next model load.
+            few percent. The first load writes the table to disk once (~1 s). Also applies to Gemma 4 E4B (WebGPU kernels), whose
+            2-bit table is 749 MB. Applies to the next model load.
           </div>
         </div>
         <div class="settings-divider" data-tab="models">
@@ -2889,6 +2891,7 @@
           <option value="lfm2-230m-gguf">LFM2.5 230M &middot; GGUF (~170 MB)</option>
           <option value="lfm2-230m-webgpu" selected>LFM2.5 230M &middot; WebGPU kernels (~140 MB)</option>
           <option value="gemma4-e2b-webgpu">Gemma 4 E2B &middot; WebGPU kernels (~2 GB)</option>
+          <option value="gemma4-e4b-webgpu">Gemma 4 E4B &middot; WebGPU kernels (~3.6 GB)</option>
           <option value="minicpm5-2b-gguf">MiniCPM5 2B &middot; GGUF (~1.6 GB)</option>
           <option value="qwen36-35b-a3b-ssd">Qwen3.6 35B-A3B &middot; SSD-streamed, experimental (~37 GB)</option>
         </select>
@@ -7867,7 +7870,7 @@ let abortController = null;
 let stopFlag = false;
 let lastHistoryLen = 0; // tracks conversation length to reset KV state on a fresh chat
 
-const WEIGHTS_LABEL = 'Gemma 4 E2B (QAT)';
+let WEIGHTS_LABEL = 'Gemma 4 E2B (QAT)';
 const post = (m) => self.postMessage(m);
 // The hidden-tab rAF shim, `hfToken` and `engineFetch` come from the shared
 // prelude (#engineWorkerPreludeSrc) that the factory prepends to this source.
@@ -7877,6 +7880,7 @@ self.onmessage = async (e) => {
   try {
     if (d.type === 'load') {
       if (!Gemma4Mobile) ({ Gemma4Mobile } = await import(ENGINE_URL));
+      WEIGHTS_LABEL = /E4B/.test(d.modelId || '') ? 'Gemma 4 E4B (QAT)' : 'Gemma 4 E2B (QAT)';
       hfToken = (typeof d.hfToken === 'string' && d.hfToken.trim()) || null;
       post({ type: 'progress', data: { status: 'initiate', file: WEIGHTS_LABEL } });
       // Settings → Models "per-layer embeddings from disk": the engine writes the
@@ -7888,7 +7892,7 @@ self.onmessage = async (e) => {
         ple = createGemmaPle({
           source: { repo: d.modelId || Gemma4Mobile.DEFAULT_MODEL_ID },
           onStatus: (s) => {
-            if (s.phase === 'write') post({ type: 'progress', data: { status: 'loading', file: 'per-layer embeddings to disk (1.2 GB, once)' } });
+            if (s.phase === 'write') post({ type: 'progress', data: { status: 'loading', file: 'per-layer embeddings to disk (once)' } });
             else if (s.phase === 'fallback') console.warn('Gemma 4 PLE from disk unavailable, keeping it on the GPU:', s.error);
           },
         });
@@ -8833,6 +8837,20 @@ self.addEventListener('message', async (e) => {
         // WebGPU-only (no CPU fallback). Text-only here (this engine is a decoder).
         genConfig: { max_new_tokens: 2048 },
       },
+      // The same engine and worker run Gemma 4 E4B (QAT mobile): 42 layers, and a 2-bit per-layer
+      // embedding table (749 MB) that the disk setting can keep in OPFS. Gates passed on the test
+      // harness 2026-10-04 (`7f74e95`).
+      'gemma4-e4b-webgpu': {
+        id: 'google/gemma-4-E4B-it-qat-mobile-transformers',
+        label: 'Gemma 4 E4B · WebGPU kernels',
+        backend: 'gemma4-webgpu',
+        size: '~3.6 GB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: true,
+        contextSize: 32768,
+        genConfig: { max_new_tokens: 2048 },
+      },
       // backend:'bonsai2-webgpu' → loaded by the custom-WGSL TernaryBonsai2 engine
       // (ternary_bonsai_2_27b.js), a from-scratch WebGPU engine for PrismML's ternary
       // Bonsai 2 27B (Qwen3.8-27B backbone, hybrid ~75% Gated-DeltaNet linear / ~25%
@@ -9564,6 +9582,8 @@ self.addEventListener('message', async (e) => {
       'lfm2-230m-webgpu': 'lfm2',
       'gemma4-e2b': 'gemma',
       'gemma4-e4b': 'gemma',
+      'gemma4-e2b-webgpu': 'gemma',
+      'gemma4-e4b-webgpu': 'gemma',
       'minicpm5-2b-gguf': 'minicpm5',
     };
     function tokenClassIndex(cp) {
