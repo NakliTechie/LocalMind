@@ -846,9 +846,9 @@ export class Qwen3MoeSsd {
     const queue = [];
     for (const name of names) {
       const d = m.dense.tensors[name];
-      if (d.type === 'q8') {
+      if (d.type === 'q8' || d.type === 'q4') {   // q4: Gemma 4 (two values per byte)
         const q = this.buffer(d.q.bytes, STORAGE | COPY_DST, 'dense'), s = this.buffer(d.s.bytes, STORAGE | COPY_DST, 'dense');
-        this.w[name] = { q, s, rows: d.q.bytes / d.dims[0], cols: d.dims[0] };
+        this.w[name] = { q, s, rows: (d.type === 'q4' ? 2 * d.q.bytes : d.q.bytes) / d.dims[0], cols: d.dims[0] };
         queue.push(() => upload(q, d.q), () => upload(s, d.s));
       } else {
         const raw = this.buffer(d.raw.bytes, STORAGE | COPY_DST, 'dense');
@@ -987,6 +987,14 @@ export class Qwen3MoeSsd {
     d('matmulF32', g.router, c.experts);
     d('topk', g.topk, 1);
   }
+  // The token's embedding into a.x, and the head (final norm, logits, argmax when wanted): a subclass
+  // with another embedding or head format overrides these two.
+  encodeEmbed(pass) { this.dispatch(pass, 'embedQ8', this.g.embed, Math.ceil(this.cfg.hidden / 256)); }
+  encodeHead(pass, want) {
+    this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);
+    this.dispatch(pass, 'matmulQ8', this.g.lm, Math.ceil(this.cfg.vocab / 4));
+    if (want === 'argmax') this.dispatch(pass, 'argmax', this.g.am, 1);
+  }
   encodeExperts(pass, l) {
     const c = this.cfg, g = this.layers[l], d = (n, gr, x, y, z) => this.dispatch(pass, n, gr, x, y, z);
     d('expertQ8', g.gu, Math.ceil(2 * c.expertFf / 4), 1, c.topK);
@@ -1041,7 +1049,7 @@ export class Qwen3MoeSsd {
     this.writeTokenUniforms(token, pos);
     let te = performance.now();
     let enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
-    this.dispatch(pass, 'embedQ8', this.g.embed, Math.ceil(c.hidden / 256));
+    this.encodeEmbed(pass);
     this.encodeAttention(pass, 0, seqLen);
     pass.end();
     let nPred = this.copySel(enc, 0);
@@ -1069,11 +1077,7 @@ export class Qwen3MoeSsd {
         pass.end();
         nPred = this.copySel(enc, l + 1);
       } else {
-        if (want !== 'none') {
-          this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);
-          this.dispatch(pass, 'matmulQ8', this.g.lm, Math.ceil(c.vocab / 4));
-          if (want === 'argmax') this.dispatch(pass, 'argmax', this.g.am, 1);
-        }
+        if (want !== 'none') this.encodeHead(pass, want);
         pass.end();
         if (want === 'argmax') enc.copyBufferToBuffer(this.a.am, 0, this.rbArg, 0, 4);
         if (want === 'logits') enc.copyBufferToBuffer(this.a.logits, 0, this.rbLogits, 0, c.vocab * 4);

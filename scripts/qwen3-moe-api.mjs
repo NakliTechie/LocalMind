@@ -3,17 +3,22 @@
 // Every method returns JSON-able results for a DevTools-protocol client.
 import { Qwen3MoeSsd, removeIngest } from '../qwen3_moe_ssd.js';
 import { Qwen35MoeSsd } from '../qwen35_moe_ssd.js';
+import { Gemma4MoeSsd } from '../gemma4_moe_ssd.js';
+
+const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd };
 
 export function makeApi(log = () => {}) {
   let m = null;
   const api = {
-    // engine: 'qwen3' (rung 2a, qwen3moe GGUFs) or 'qwen35' (rung 2b, qwen35moe GGUFs).
-    async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow } = {}) {
+    // engine: 'qwen3' (rung 2a, qwen3moe GGUFs), 'qwen35' (rung 2b, qwen35moe) or 'gemma4' (rung 2c, Gemma 4 MoE).
+    // capture (gemma4): keep each layer's states of the last step for states().
+    async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture } = {}) {
       if (m) { await m.dispose(); m = null; }
       const t0 = performance.now();
       let last = 0;
-      m = await (engine === 'qwen35' ? Qwen35MoeSsd : Qwen3MoeSsd).load(null, {
-        url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow,
+      if (!ENGINES[engine]) throw new Error(`unknown engine ${engine}`);
+      m = await ENGINES[engine].load(null, {
+        url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture,
         onProgress: (e) => {
           if (e.status === 'weights' && e.kind !== 'tensors' && performance.now() - last > 2000) { last = performance.now(); log({ ingest: e.loaded, total: e.total, secs: e.secs }); }
           else if (e.status === 'ingest-plan') log(e);
@@ -96,9 +101,9 @@ export function makeApi(log = () => {}) {
         m.writeTokenUniforms(1000, 0);
         const t0 = performance.now();
         const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
-        m.dispatch(pass, 'embedQ8', m.g.embed, Math.ceil(c.hidden / 256));
+        m.encodeEmbed(pass);
         for (let l = 0; l < c.layers; l++) { if (attention) m.encodeAttention(pass, l, 1); if (experts) m.encodeExperts(pass, l); }
-        if (head) { m.dispatch(pass, 'rmsnorm', m.g.rmsOut, 1); m.dispatch(pass, 'matmulQ8', m.g.lm, Math.ceil(c.vocab / 4)); m.dispatch(pass, 'argmax', m.g.am, 1); }
+        if (head) m.encodeHead(pass, 'argmax');
         pass.end(); dev.queue.submit([enc.finish()]);
         await dev.queue.onSubmittedWorkDone();
         times.push(performance.now() - t0);
@@ -106,6 +111,23 @@ export function makeApi(log = () => {}) {
       if (m.a.stop) dev.queue.writeBuffer(m.a.stop, 0, new Uint32Array(4));
       times.sort((a, b) => a - b);
       return { msPerToken: times[Math.floor(n / 2)], min: times[0], max: times[n - 1] };
+    },
+    // gemma4 with load({ capture: true }): prefill `ids`, then the last position's per-layer states
+    // (attn_out after the attention residual, each layer's output) and the top logits, for scripts/gemma4-ref.py.
+    async states(ids, { top = 5 } = {}) {
+      m.reset();
+      const logits = await m.prefill(ids, 'logits');
+      const cap = await m.readCapture();
+      const r = (a) => Array.from(a, (v) => +v.toPrecision(7));
+      return { attnOut: cap.attnOut.map(r), layers: cap.layers.map(r), top: topLogits(logits, top), stats: m.stats() };
+    },
+    // Router picks of every layer for every position of `ids` (one-token steps), as [token][layer] → ids.
+    async selections(ids) {
+      const orig = m.readSel, rec = [];
+      m.readSel = async function (n) { const r = await orig.call(this, n); rec.push(Array.from(r.ids)); return r; };
+      try { m.reset(); await m.prefill(ids, 'none'); } finally { m.readSel = orig; }
+      const L = m.cfg.layers;
+      return Array.from({ length: rec.length / L }, (_, t) => rec.slice(t * L, (t + 1) * L));
     },
     setPrefetch(on) { m.prefetch = !!on; return m.prefetch; },
     // rung 2b: switch between chunked and one-token prefill (the batch buffers stay allocated).
@@ -140,4 +162,13 @@ export function makeApi(log = () => {}) {
     async remove(key) { if (m) { await m.dispose(); m = null; } await removeIngest(key); return api.opfs(); },
   };
   return api;
+}
+
+function topLogits(lg, n) {
+  const idx = Array.from(lg.keys()).sort((a, b) => lg[b] - lg[a] || a - b).slice(0, n);
+  let mx = -Infinity, sum = 0;
+  for (const v of lg) if (v > mx) mx = v;
+  for (const v of lg) sum += Math.exp(v - mx);
+  const lse = mx + Math.log(sum);
+  return idx.map((i) => [i, +lg[i].toFixed(4), +(lg[i] - lse).toFixed(5)]);
 }
