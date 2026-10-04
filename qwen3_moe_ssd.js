@@ -729,7 +729,7 @@ export class Qwen3MoeSsd {
     // post-attention state. Measured 2026-10-04 (full model, 4 GB pool, M4 Pro): off 4.41,
     // lookahead 1 5.02, 2 5.48, 4 4.56, 6 3.90 tok/s — guesses beyond 2 layers waste SSD bandwidth.
     this.prefetch = opts.prefetch ?? true;
-    this.lookahead = Math.max(1, opts.lookahead || 2);
+    this.lookahead = Math.max(1, Math.floor(opts.lookahead ?? 2));
     this.resetCounters();
   }
 
@@ -828,6 +828,7 @@ export class Qwen3MoeSsd {
       this.vc.push(this.buffer(this.maxCtx * kvn * 2, STORAGE, 'kv'));
     }
     const H = c.hidden, QN = c.heads * c.headDim, F = c.expertFf, K = c.topK;
+    if (2 * K * 4 > 256) throw new Error(`top-k ${K} > 32: selections would overlap their 256-byte readback regions`);
     const A = (n) => this.buffer(n * 4, STORAGE | COPY_SRC | COPY_DST);
     this.a = {
       x: A(H), xn: A(H), q: A(QN), k: A(kvn), v: A(kvn), att: A(QN), o: A(H), sc: A(c.heads * this.maxCtx),

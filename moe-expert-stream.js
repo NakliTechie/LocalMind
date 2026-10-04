@@ -161,7 +161,7 @@ export class ExpertStreamer {
   // the same order as `ids`. The caller must release() them after submitting the GPU work.
   async ensure(layer, ids) {
     this.tick++;
-    if (this.pfQueue.length && this.pfQueue[0].layer <= layer) this.pfQueue = this.pfQueue.filter((q) => q.layer > layer);
+    if (this.pfQueue.length) this.pfQueue = this.pfQueue.filter((q) => q.layer > layer);   // not sorted by layer once lookahead >= 3
     const out = new Uint32Array(ids.length);
     const waits = [];
     const st = this.stats;
@@ -231,8 +231,11 @@ export class ExpertStreamer {
   }
   ringBytes() { return this.ring.reduce((a, r) => a + r.buf.size, 0); }
 
-  clear() {
+  // Empties the pool. Waits for loads still reading first: a load that finished after the
+  // reset would claim a slot that is back on the free list.
+  async clear() {
     this.pfQueue = [];
+    await this.drain();
     this.lru.clear();
     this.inflight.clear();
     this.prefetched.clear();
@@ -241,4 +244,5 @@ export class ExpertStreamer {
     this.free = [];
     for (let s = this.slots - 1; s >= 0; s--) this.free.push(s);
   }
+
 }

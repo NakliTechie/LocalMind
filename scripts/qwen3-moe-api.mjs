@@ -68,7 +68,7 @@ export function makeApi(log = () => {}) {
     // (the OS page cache is outside the tab's control — the caller records its state).
     async bench(ids, n = 64, { clearPool = true, prefetch } = {}) {
       if (prefetch !== undefined) m.prefetch = !!prefetch;
-      if (clearPool) m.xs.clear();
+      if (clearPool) await m.xs.clear();
       m.reset(); m.resetCounters();
       const t0 = performance.now();
       let next = await m.prefill(ids, 'argmax');
@@ -81,7 +81,7 @@ export function makeApi(log = () => {}) {
       return { prefetch: m.prefetch, poolSlots: m.poolSlots, promptTokens: ids.length, ids: out, text: m.tokenizer.decode(out), prefill, decode };
     },
     setPrefetch(on) { m.prefetch = !!on; return m.prefetch; },
-    clearPool() { m.xs.clear(); m.resetCounters(); return true; },
+    async clearPool() { await m.xs.clear(); m.resetCounters(); return true; },
     stats() { return m.stats(); },
     encode(text) { return m.tokenizer.encode(text); },
     decode(ids) { return m.tokenizer.decode(ids); },

@@ -116,6 +116,24 @@ writes.length = 0;
   xs.release(s);
 }
 
+{ // queue out of layer order (lookahead >= 3): a demanded layer's guesses are dropped wherever they sit
+  const xs = new ExpertStreamer({ device, reader, recordBytes: REC, recordOffset: (l, e) => (l * E + e) * REC, parts, slots: 16, numLayers: L, numExperts: E, uploadRing, maxPrefetchInflight: 1 });
+  xs.prefetch(3, [0, 1]); xs.prefetch(2, [2, 3]);   // queue: 3:1, 2:2, 2:3 (3:0 is reading)
+  const s = await xs.ensure(2, [7]);
+  assert.ok(!xs.pfQueue.some((q) => q.layer <= 2), 'no guess for layer 2 left queued');
+  xs.release(s); await xs.drain();
+}
+
+{ // clear() while guesses are still reading: no slot ends up owned twice or pinned below zero
+  const xs = new ExpertStreamer({ device, reader, recordBytes: REC, recordOffset: (l, e) => (l * E + e) * REC, parts, slots: 4, numLayers: L, numExperts: E, uploadRing });
+  xs.prefetch(3, [5, 6]);
+  await xs.clear();
+  await xs.drain();
+  assert.equal(xs.lru.size, 0, 'a cleared pool holds no experts');
+  assert.ok([...xs.pinCount].every((n) => n === 0), 'no negative or leftover pins');
+  assert.equal(new Set(xs.free).size, 4, 'every slot free exactly once');
+}
+
 { // exhausted pool: demanding more experts than slots fails loudly
   const xs = mk(2);
   await assert.rejects(async () => xs.ensure(0, [0, 1, 2]), /pool exhausted/);
