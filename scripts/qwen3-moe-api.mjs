@@ -2,15 +2,17 @@
 // qwen3-moe-worker.mjs (engine in a dedicated worker, the way LocalMind runs engines).
 // Every method returns JSON-able results for a DevTools-protocol client.
 import { Qwen3MoeSsd, removeIngest } from '../qwen3_moe_ssd.js';
+import { Qwen35MoeSsd } from '../qwen35_moe_ssd.js';
 
 export function makeApi(log = () => {}) {
   let m = null;
   const api = {
-    async load({ url, key, poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead } = {}) {
+    // engine: 'qwen3' (rung 2a, qwen3moe GGUFs) or 'qwen35' (rung 2b, qwen35moe GGUFs).
+    async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead } = {}) {
       if (m) { await m.dispose(); m = null; }
       const t0 = performance.now();
       let last = 0;
-      m = await Qwen3MoeSsd.load(null, {
+      m = await (engine === 'qwen35' ? Qwen35MoeSsd : Qwen3MoeSsd).load(null, {
         url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead,
         onProgress: (e) => {
           if (e.status === 'weights' && e.kind !== 'tensors' && performance.now() - last > 2000) { last = performance.now(); log({ ingest: e.loaded, total: e.total, secs: e.secs }); }
@@ -23,7 +25,7 @@ export function makeApi(log = () => {}) {
     async greedy(ids, n = 16, { top = 5, resetStats = true } = {}) {
       if (resetStats) m.resetCounters();
       const r = await m.greedy(ids, n, { top });
-      return { ids: r.ids, tops: r.tops.map((t) => t.map((x) => [x.id, +x.logit.toFixed(4)])), stats: m.stats() };
+      return { ids: r.ids, tops: r.tops.map((t) => t.map((x) => [x.id, +x.logit.toFixed(4), +x.logprob.toFixed(5)])), stats: m.stats() };
     },
     // Greedy-match gate against a llama-ref.mjs JSON: same prompt ids, same number of tokens.
     // At the first divergence, both sides' top-2 log-prob margins tell a near-tie from a bug.

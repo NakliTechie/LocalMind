@@ -88,11 +88,19 @@ export function tensorBytes(t) {
   throw new Error(`unsupported tensor type ${t.type} (${t.name})`);
 }
 
+// qwen3moe (rung 2a) and qwen35moe (Qwen3.5/3.6 MoE, rung 2b: qwen35_moe_ssd.js) share the
+// expert layout; qwen35moe adds the Gated DeltaNet (ssm.*), partial RoPE and a shared expert.
 export function configFromGguf(kv) {
   const a = kv['general.architecture'];
-  if (a !== 'qwen3moe') throw new Error(`expected a qwen3moe GGUF, got ${a}`);
+  if (a !== 'qwen3moe' && a !== 'qwen35moe') throw new Error(`expected a qwen3moe or qwen35moe GGUF, got ${a}`);
   const g = (k) => kv[`${a}.${k}`];
+  const extra = a !== 'qwen35moe' ? {} : {
+    ropeDims: g('rope.dimension_count'), shexpFf: g('expert_shared_feed_forward_length'),
+    attnInterval: g('full_attention_interval') || 4,
+    ssm: { dConv: g('ssm.conv_kernel'), dInner: g('ssm.inner_size'), dState: g('ssm.state_size'), vHeads: g('ssm.time_step_rank'), kHeads: g('ssm.group_count') },
+  };
   return {
+    ...extra,
     arch: a,
     layers: g('block_count'), hidden: g('embedding_length'),
     heads: g('attention.head_count'), kvHeads: g('attention.head_count_kv'),
@@ -298,6 +306,8 @@ export async function ingestGguf({ url, key, fetch: fetchFn = fetch, onProgress 
 // ── Tokenizer: byte-level BPE from the GGUF vocab (tokenizer.ggml.model = gpt2, pre = qwen2) ──
 // Same pre-tokenizer regex llama.cpp uses for LLAMA_VOCAB_PRE_TYPE_QWEN2.
 const QWEN2_PRE = /(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+/gu;
+// LLAMA_VOCAB_PRE_TYPE_QWEN35 (Qwen3.5/3.6): combining marks (\p{M}) count as part of a word.
+const QWEN35_PRE = /(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+|\p{N}| ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+/gu;
 
 function byteToUnicode() {
   const bs = [];
@@ -315,6 +325,7 @@ function byteToUnicode() {
 export class BpeTokenizer {
   constructor(kv) {
     this.tokens = kv['tokenizer.ggml.tokens'];
+    this.preRe = kv['tokenizer.ggml.pre'] === 'qwen35' ? QWEN35_PRE : QWEN2_PRE;
     const types = kv['tokenizer.ggml.token_type'] || [];
     this.ids = new Map(this.tokens.map((t, i) => [t, i]));
     this.ranks = new Map((kv['tokenizer.ggml.merges'] || []).map((m, i) => [m, i]));
@@ -358,7 +369,7 @@ export class BpeTokenizer {
       const piece = pieces[i];
       if (!piece) continue;
       if (parseSpecial && i % 2 === 1) { out.push(this.ids.get(piece)); continue; }
-      for (const m of piece.matchAll(QWEN2_PRE)) {
+      for (const m of piece.matchAll(this.preRe)) {
         let s = '';
         for (const b of this.utf8.encode(m[0])) s += this.byteEnc[b];
         out.push(...this.bpe(s));
@@ -392,8 +403,8 @@ export function chatPrompt(messages, { enableThinking = true } = {}) {
 // ── WGSL ────────────────────────────────────────────────────────────────────
 // Activations f32 throughout; Q8_0 weights as an int8 plane (u32-packed) + an f16 scale per
 // 32 values, dequantized exactly in f32 inside the GEMV; KV cache f16 (llama.cpp's default).
-const TOK = 'struct Tok { token: u32, pos: u32, seqLen: u32, pad: u32 }';
-const I8 = `fn i8at(w: u32, lane: u32) -> f32 { let b = (w >> (lane * 8u)) & 0xffu; return f32(select(i32(b), i32(b) - 256, b >= 128u)); }`;
+export const TOK = 'struct Tok { token: u32, pos: u32, seqLen: u32, pad: u32 }';
+export const I8 = `fn i8at(w: u32, lane: u32) -> f32 { let b = (w >> (lane * 8u)) & 0xffu; return f32(select(i32(b), i32(b) - 256, b >= 128u)); }`;
 const WGSL = {
   embedQ8: `enable f16;
 ${TOK}
@@ -687,7 +698,7 @@ var<workgroup> bi: array<u32, 256>;
 }`,
 };
 
-const STORAGE = 0x80, COPY_SRC = 0x04, COPY_DST = 0x08, UNIFORM = 0x40, MAP_READ = 0x01;
+export const STORAGE = 0x80, COPY_SRC = 0x04, COPY_DST = 0x08, UNIFORM = 0x40, MAP_READ = 0x01;
 
 // ── Engine ──────────────────────────────────────────────────────────────────
 export class Qwen3MoeSsd {
@@ -721,7 +732,7 @@ export class Qwen3MoeSsd {
     const headerFile = await (await (await navigator.storage.getDirectory()).getDirectoryHandle(OPFS_ROOT)).getDirectoryHandle(key);
     const headerBytes = new Uint8Array(await (await (await headerFile.getFileHandle('header.bin')).getFile()).arrayBuffer());
     const gguf = parseGguf(headerBytes);
-    const engine = new Qwen3MoeSsd(device, manifest, gguf, { ...opts, dir, key, url });
+    const engine = new this(device, manifest, gguf, { ...opts, dir, key, url });
     await engine.init(onProgress);
     return engine;
   }
@@ -757,9 +768,13 @@ export class Qwen3MoeSsd {
     this.device.queue.writeBuffer(b, 0, ab);
     return b;
   }
+  // The kernel sources; a subclass adds its own.
+  get kernels() { return WGSL; }
   pipeline(name) {
     if (!this.pipelines[name]) {
-      const module = this.device.createShaderModule({ code: WGSL[name], label: name });
+      const code = this.kernels[name];
+      if (!code) throw new Error(`no kernel ${name}`);
+      const module = this.device.createShaderModule({ code, label: name });
       this.pipelines[name] = this.device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' }, label: name });
     }
     return this.pipelines[name];
@@ -772,14 +787,21 @@ export class Qwen3MoeSsd {
   }
 
   async init(onProgress) {
-    const c = this.cfg, dev = this.device, m = this.manifest;
+    const dev = this.device;
     // Fail early on a shader that does not compile.
     dev.pushErrorScope('validation');
-    for (const k of Object.keys(WGSL)) this.pipeline(k);
+    for (const k of Object.keys(this.kernels)) this.pipeline(k);
     const err = await dev.popErrorScope();
     if (err) throw new Error(`WGSL: ${err.message}`);
+    await this.uploadDense(onProgress);
+    await this.initPool();
+    this.initBuffers();
+    await dev.queue.onSubmittedWorkDone();
+  }
 
-    // Dense weights: OPFS → GPU.
+  // Dense weights: OPFS → GPU (this.w[name] = { q, s, rows, cols } or { raw }).
+  async uploadDense(onProgress) {
+    const dev = this.device, m = this.manifest;
     const t0 = performance.now();
     const reader = await OpfsReaderPool.open(`${this.opts.dir}/${m.dense.file}`, { workers: 4 });
     const names = Object.keys(m.dense.tensors);
@@ -814,9 +836,11 @@ export class Qwen3MoeSsd {
     await reader.close();
     await dev.queue.onSubmittedWorkDone();
     this.denseUploadSecs = (performance.now() - t0) / 1000;
+  }
 
-    // Expert slot pool + the streamer that feeds it.
-    const xp = m.experts;
+  // Expert slot pool + the streamer that feeds it.
+  async initPool() {
+    const c = this.cfg, dev = this.device, xp = this.manifest.experts;
     const maxSlotsByBinding = Math.floor(dev.limits.maxStorageBufferBindingSize / xp.parts.guQ.bytes);
     this.poolSlots = Math.max(c.topK * 2, Math.min(maxSlotsByBinding, Math.floor((this.opts.poolBytes || 4 * 2 ** 30) / xp.record), c.layers * c.experts));
     this.pool = {};
@@ -831,8 +855,11 @@ export class Qwen3MoeSsd {
       ...(this.opts.evict ? { evict: this.opts.evict, hotHalfLife: this.opts.hotHalfLife } : {}),
     });
     this.gpuBytes.staging = this.xs.ringBytes();
+  }
 
-    // KV cache (f16) and activations.
+  // KV cache (f16), activations, uniforms and every layer's bind groups.
+  initBuffers() {
+    const c = this.cfg;
     const kvn = c.kvHeads * c.headDim;
     this.kc = []; this.vc = [];
     for (let l = 0; l < c.layers; l++) {
@@ -907,7 +934,6 @@ export class Qwen3MoeSsd {
     this.g.rmsOut = this.bind('rmsnorm', [a.x, W['output_norm.weight'].raw, a.xn, u.rmsH]);
     this.g.lm = this.bind('matmulQ8', [a.xn, W['output.weight'].q, W['output.weight'].s, a.logits, u.lm]);
     this.g.am = this.bind('argmax', [a.logits, a.am, u.am]);
-    await dev.queue.onSubmittedWorkDone();
   }
 
   // ── forward ───────────────────────────────────────────────────────────────
@@ -1085,7 +1111,7 @@ export class Qwen3MoeSsd {
   }
 
   async *generate(messages, { maxNewTokens = 512, signal, enableThinking = true } = {}) {
-    const ids = this.tokenizer.encode(chatPrompt(messages, { enableThinking }));
+    const ids = this.tokenizer.encode(this.chatPrompt(messages, { enableThinking }));
     const stops = new Set([this.cfg.eos, this.tokenizer.ids.get('<|im_end|>'), this.tokenizer.ids.get('<|endoftext|>')]);
     let next = await this.prefill(ids, 'argmax');
     const outIds = [];
@@ -1098,6 +1124,8 @@ export class Qwen3MoeSsd {
       next = await this.step(next, 'argmax');
     }
   }
+
+  chatPrompt(messages, opts) { return chatPrompt(messages, opts); }
 
   // Raw ids of the reasoning delimiters, for hosts that re-mark the thought block.
   get thinkOpenTokenId() { return this.tokenizer.ids.get('<think>') ?? null; }
@@ -1127,7 +1155,7 @@ export class Qwen3MoeSsd {
   }
 }
 
-function topN(logits, n) {
+export function topN(logits, n) {
   const best = [];
   for (let i = 0; i < logits.length; i++) {
     const v = logits[i];
