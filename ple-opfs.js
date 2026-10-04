@@ -247,7 +247,7 @@ export const GEMMA4_WARM = [[0, 28672], [236743, 4096]];
 // Defaults are the measured choice (2026-10-04, M4 Pro): 32,768 slots (151 MB) warmed with the
 // ranges above, a GPU slot map, and part A = 30% of each decode step. gpuMap: false gives the
 // simpler mode where the CPU looks every decode token up and decode runs one step at a time.
-export function createGemmaPle({ key = 'gemma-4-e2b', slots = 32768, warm = GEMMA4_WARM, gpuMap = true, split = 0.3, onStatus = () => {} } = {}) {
+export function createGemmaPle({ key = 'gemma-4-e2b', slots = 32768, warm = GEMMA4_WARM, gpuMap = true, split = 0.3, source = null, onStatus = () => {} } = {}) {
   return {
     async attach({ bits, scale, vocab, hidden, groups, codeBits, device, alloc }) {
       const wordsPerRow = (hidden * codeBits) / 32;
@@ -268,7 +268,7 @@ export function createGemmaPle({ key = 'gemma-4-e2b', slots = 32768, warm = GEMM
               dst.set(bits.subarray(t * bitsBytes, (t + 1) * bitsBytes), o);
               dst.set(scale.subarray(t * scaleBytes, (t + 1) * scaleBytes), o + bitsBytes);
             }
-          }, { extra: { layout: 'per token: packed codes (u32 words, LSB first) then f32 group scales', vocab, hidden, groups, codeBits } });
+          }, { extra: { source, layout: 'per token: packed codes (u32 words, LSB first) then f32 group scales', vocab, hidden, groups, codeBits } });
         }
         await file.openRead();
         const warmRows = warm.reduce((k, [, c]) => k + c, 0);

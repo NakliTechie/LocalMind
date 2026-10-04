@@ -9,6 +9,7 @@
 //   node scripts/bench-engines.mjs                 # both suites against localmind.naklitechie.com
 //   node scripts/bench-engines.mjs --suite engines # kernels vs Transformers.js vs wllama
 //   node scripts/bench-engines.mjs --suite dflash  # Ternary Bonsai 2 27B, plain vs DFlash 2, code and prose
+//   node scripts/bench-engines.mjs --suite ple     # Gemma 4 E2B kernels, PLE table resident vs from OPFS
 //   node scripts/bench-engines.mjs --url http://127.0.0.1:8000/ --profile ~/.cache/lm-bench --out bench.json
 //   node scripts/bench-engines.mjs --list          # print the rows and exit
 //
@@ -60,10 +61,14 @@ const ROWS = [
   { suite: 'dflash', model: 'Ternary Bonsai 2 27B', engine: 'WGSL + DFlash 2 · code', key: 'ternary-bonsai-2-27b-webgpu', dflash: true, tok: 'qwen38', prompt: CODE },
   { suite: 'dflash', model: 'Ternary Bonsai 2 27B', engine: 'hand-written WGSL · prose', key: 'ternary-bonsai-2-27b-webgpu', dflash: false, tok: 'qwen38', prompt: PROSE },
   { suite: 'dflash', model: 'Ternary Bonsai 2 27B', engine: 'WGSL + DFlash 2 · prose', key: 'ternary-bonsai-2-27b-webgpu', dflash: true, tok: 'qwen38', prompt: PROSE },
+  { suite: 'ple', model: 'Gemma 4 E2B', engine: 'WGSL · PLE resident · prose', key: 'gemma4-e2b-webgpu', ple: false, tok: 'gemma4', prompt: PROSE },
+  { suite: 'ple', model: 'Gemma 4 E2B', engine: 'WGSL · PLE from OPFS · prose', key: 'gemma4-e2b-webgpu', ple: true, tok: 'gemma4', prompt: PROSE },
+  { suite: 'ple', model: 'Gemma 4 E2B', engine: 'WGSL · PLE resident · code', key: 'gemma4-e2b-webgpu', ple: false, tok: 'gemma4', prompt: CODE },
+  { suite: 'ple', model: 'Gemma 4 E2B', engine: 'WGSL · PLE from OPFS · code', key: 'gemma4-e2b-webgpu', ple: true, tok: 'gemma4', prompt: CODE },
 ];
 const rows = ROWS.filter((r) => SUITE === 'all' || r.suite === SUITE);
 if (argv.includes('--list')) { for (const r of rows) console.log(`${r.suite.padEnd(8)} ${r.model.padEnd(22)} ${r.engine}`); process.exit(0); }
-if (!rows.length) { console.error(`unknown --suite ${SUITE} (engines | dflash | all)`); process.exit(2); }
+if (!rows.length) { console.error(`unknown --suite ${SUITE} (engines | dflash | ple | all)`); process.exit(2); }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.error(new Date().toTimeString().slice(0, 8), ...a);
@@ -98,18 +103,21 @@ async function runRow(cdp, row) {
   const seed = `(() => { try {
       localStorage.setItem('lm_api_enabled', '1');
       localStorage.setItem('lm_dflash', ${row.dflash === false ? "'0'" : "'1'"});
+      localStorage.setItem('lm_gemma4_ple', ${row.ple ? "'1'" : "'0'"});
       ${row.custom ? `localStorage.setItem('lm_custom_models', ${JSON.stringify(JSON.stringify([row.custom]))});` : "localStorage.removeItem('lm_custom_models');"}
     } catch (e) {}
-    window.__benchDflash = null;
+    window.__benchDflash = null; window.__benchPle = null;
     const W = window.Worker;
-    window.Worker = function (u, o) { const w = new W(u, o); w.addEventListener('message', (e) => { if (e.data && e.data.type === 'dflash') window.__benchDflash = e.data.status; }); return w; };
+    window.Worker = function (u, o) { const w = new W(u, o); w.addEventListener('message', (e) => { if (e.data && e.data.type === 'dflash') window.__benchDflash = e.data.status; if (e.data && e.data.type === 'ready' && e.data.ple) window.__benchPle = e.data.ple; }); return w; };
     window.Worker.prototype = W.prototype; })()`;
   const { identifier } = (await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: seed })).result;
   await cdp.send('Page.navigate', { url: URL_ + (URL_.includes('?') ? '&' : '?') + 'bench=' + Date.now() });
   for (let i = 0; i < 240 && !(await cdp.ev('!!(window.localmind && window.localmind.ready)').catch(() => false)); i++) await sleep(1000);
   const t0 = Date.now();
   await cdp.ev(`window.localmind.load(${JSON.stringify(row.key)})`);
-  log(`loaded ${row.model} · ${row.engine} in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+  const pleMode = row.ple === undefined ? undefined : await cdp.ev('window.__benchPle');
+  log(`loaded ${row.model} · ${row.engine} in ${((Date.now() - t0) / 1000).toFixed(0)} s${pleMode ? ` (PLE ${pleMode})` : ''}`);
+  if (row.ple !== undefined && pleMode !== (row.ple ? 'opfs' : 'resident')) throw new Error(`PLE mode is ${pleMode}, expected ${row.ple ? 'opfs' : 'resident'}`);
   if (row.dflash) {
     for (let i = 0; i < 900 && (await cdp.ev('window.__benchDflash')) !== 'ready'; i++) await sleep(2000);
     log('DFlash 2 drafter:', await cdp.ev('window.__benchDflash'));
@@ -134,7 +142,7 @@ async function runRow(cdp, row) {
   await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
   const per = runs.map((x, i) => ({ tokens: counts[i], ttftMs: x.ttftMs, tokPerSec: (counts[i] - 1) / (x.decodeMs / 1000) }));
   const warm = per.length > 1 ? per.slice(1) : per;
-  return { ...row, custom: undefined, prompt: row.prompt === CODE ? 'code' : 'prose', runs: per,
+  return { ...row, custom: undefined, prompt: row.prompt === CODE ? 'code' : 'prose', runs: per, pleMode,
     tokens: warm.map((x) => x.tokens), ttftMs: Math.round(median(warm.map((x) => x.ttftMs))),
     tokPerSec: +median(warm.map((x) => x.tokPerSec)).toFixed(1),
     identicalRuns: new Set(runs.map((x) => x.text)).size === 1, firstText: runs[0].text };
@@ -148,11 +156,12 @@ for (const row of rows) {
 }
 cdp.ws.close(); kill();
 
-// DFlash output must match plain decode byte for byte (greedy); flag it if not.
-for (const r of results.filter((x) => x.dflash)) {
-  const plain = results.find((x) => x.key === r.key && x.dflash === false && x.prompt === r.prompt);
+// DFlash, and the PLE table from OPFS, must match plain decode byte for byte (greedy); flag it if not.
+for (const r of results.filter((x) => x.dflash || x.ple)) {
+  const flag = r.dflash ? 'dflash' : 'ple';
+  const plain = results.find((x) => x.key === r.key && x[flag] === false && x.prompt === r.prompt);
   if (plain && plain.firstText != null) r.identicalToPlain = plain.firstText === r.firstText;
 }
-console.table(results.map((r) => ({ model: r.model, engine: r.engine, 'tok/s': r.tokPerSec ?? r.error, 'TTFT ms': r.ttftMs, tokens: (r.tokens || []).join(','), ...(r.dflash ? { 'same as plain': r.identicalToPlain } : {}) })));
+console.table(results.map((r) => ({ model: r.model, engine: r.engine, 'tok/s': r.tokPerSec ?? r.error, 'TTFT ms': r.ttftMs, tokens: (r.tokens || []).join(','), ...(r.dflash || r.ple ? { 'same as plain': r.identicalToPlain } : {}) })));
 const out = { url: URL_, date: new Date().toISOString(), runs: RUNS, maxTokens: MAX, platform: `${process.platform} ${process.arch}`, results: results.map(({ firstText, ...r }) => r) };
 if (OUT) { writeFileSync(OUT, JSON.stringify(out, null, 1)); log('wrote', OUT); }
