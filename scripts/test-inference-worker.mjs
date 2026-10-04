@@ -202,4 +202,20 @@ assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',/);
   assert.match(indexSource, /\.mode-chip\.moved:not\(\.active\) \{ display: none; \}/);
 }
 
+// Model picker (Chunk L layer 2): the hidden select stays the source of truth, every in-tab
+// engine in the roster has a cache store to check, and the inventory tracks bytes per store.
+{
+  assert.match(indexSource, /modelSelect\.value = value;\s*modelSelect\.dispatchEvent\(new Event\('change', \{ bubbles: true \}\)\);/);
+  const stores = /const ENGINE_STORES = \{([\s\S]*?)\};/.exec(indexSource);
+  assert.ok(stores, 'ENGINE_STORES missing');
+  const backends = new Set([...indexSource.matchAll(/^\s{8}backend: '([\w-]+)',/gm)].map((m) => m[1]));
+  assert.ok(backends.size >= 5, 'roster backends: ' + [...backends]);
+  for (const b of backends) {
+    if (b === 'chrome-ai' || b === 'endpoint') continue;
+    assert.match(stores[1], new RegExp(`'${b}':`), `engine ${b} has no cache store in ENGINE_STORES`);
+  }
+  assert.match(indexSource, /g\.byStore\[store\] = \(g\.byStore\[store\] \|\| 0\) \+ \(bytes \|\| 0\);/);
+  assert.match(indexSource, /<button type="button" class="model-select model-picker-btn" id="modelPickerBtn" aria-haspopup="listbox"/);
+}
+
 console.log('LocalMind inference workers and host catalog: ok');
