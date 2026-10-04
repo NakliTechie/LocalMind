@@ -7770,7 +7770,12 @@ self.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 0);
 // re-requested from the next byte (`Range: bytes=<start+delivered>-<end>`) and
 // spliced into the same stream. Every other request (the HEAD size probe,
 // tokenizer/resource fetches) passes straight through.
+// A body can also stop delivering without erroring (a half-open connection): reader.read() then waits forever,
+// nothing resumes, and the load freezes with no error. Each read is bounded by READ_STALL_MS and a stall is
+// resumed like a drop. Bytes arriving reset the budget, so a slow link that keeps delivering is never cut;
+// more than RANGE_RETRIES drops or stalls in a row with no bytes fail the read instead of retrying forever.
 const RANGE_RETRIES = 4;
+const READ_STALL_MS = 30000;
 const parseRangeHeader = (init) => {
   const h = init.headers ? new Headers(init.headers).get('range') : null;
   const m = h && /^bytes=(\d+)-(\d*)$/.exec(h.trim());
@@ -7816,21 +7821,27 @@ const engineFetch = async (url, init = {}) => {
   // Anything but a partial-content body (e.g. a 200 full-response fallback) is
   // the engine's to interpret; only 206 bodies get the resume treatment.
   if (first.status !== 206 || !first.body) return first;
-  let delivered = 0;
+  let delivered = 0, dry = 0;
   let reader = first.body.getReader();
+  const read = () => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`range read stalled: no bytes in ${READ_STALL_MS} ms`)), READ_STALL_MS);
+    reader.read().then((r) => { clearTimeout(timer); resolve(r); }, (e) => { clearTimeout(timer); reject(e); });
+  });
   const body = new ReadableStream({
     async pull(controller) {
       for (;;) {
         try {
-          const { done, value } = await reader.read();
+          const { done, value } = await read();
           if (done) { controller.close(); return; }
           delivered += value.byteLength;
+          if (value.byteLength) dry = 0;
           controller.enqueue(value);
           return;
         } catch (err) {
           throwIfAborted();
           try { reader.cancel().catch(() => {}); } catch (_) {}
-          // Body dropped mid-range: reopen from the next byte and keep streaming.
+          if (++dry > RANGE_RETRIES) throw err;
+          // Body dropped or stalled mid-range: reopen from the next byte and keep streaming.
           const r = await request(range.start + delivered);
           if (r.status !== 206 || !r.body) throw err;
           reader = r.body.getReader();
