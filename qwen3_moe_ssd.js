@@ -715,8 +715,10 @@ export class Qwen3MoeSsd {
     if (!adapter) throw new Error('no WebGPU adapter');
     if (!adapter.features.has('shader-f16')) throw new Error('this GPU lacks shader-f16');
     const L = adapter.limits;
+    // subgroups: optional; an engine may use subgroup kernels when the adapter offers them.
+    const features = ['shader-f16', ...(adapter.features.has('subgroups') ? ['subgroups'] : [])];
     const device = await adapter.requestDevice({
-      requiredFeatures: ['shader-f16'],
+      requiredFeatures: features,
       requiredLimits: { maxBufferSize: L.maxBufferSize, maxStorageBufferBindingSize: L.maxStorageBufferBindingSize, maxStorageBuffersPerShaderStage: L.maxStorageBuffersPerShaderStage, maxComputeWorkgroupsPerDimension: L.maxComputeWorkgroupsPerDimension },
     });
     device.lost.then((info) => console.warn('qwen3-moe-ssd: GPU device lost:', info.message));
@@ -732,7 +734,7 @@ export class Qwen3MoeSsd {
     const headerFile = await (await (await navigator.storage.getDirectory()).getDirectoryHandle(OPFS_ROOT)).getDirectoryHandle(key);
     const headerBytes = new Uint8Array(await (await (await headerFile.getFileHandle('header.bin')).getFile()).arrayBuffer());
     const gguf = parseGguf(headerBytes);
-    const engine = new this(device, manifest, gguf, { ...opts, dir, key, url });
+    const engine = new this(device, manifest, gguf, { ...opts, dir, key, url, adapterInfo: adapter.info || {} });
     await engine.init(onProgress);
     return engine;
   }

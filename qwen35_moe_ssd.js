@@ -567,6 +567,64 @@ ${SIGMOID}
 }`,
 };
 
+// ── Subgroup Q8_0 GEMV (the LFM2.5 / Gemma 4 kernels' pattern) ──────────────────────────────
+// One 32-lane subgroup per output row, 4 rows per 128-thread workgroup (the same dispatch
+// geometry as matmulQ8/expertQ8). Each lane takes whole Q8_0 blocks: two vec4<u32> of int8
+// codes, unpack4xI8, vec4 dot products against the activations, the block scale applied once;
+// one subgroupAdd reduces the row. Used only when the adapter's subgroups are exactly 32 wide.
+const SG_KERNELS = {
+  matmulQ8: `enable f16;
+enable subgroups;
+struct P { M: u32, N: u32 }
+@group(0) @binding(0) var<storage, read> x: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> qw: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read> qs: array<f16>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@compute @workgroup_size(128) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let m = (wg.y * ng.x + wg.x) * 4u + l.x / 32u; let lane = l.x % 32u;
+  let nb = p.N / 32u; let mr = min(m, p.M - 1u);
+  let wb = mr * nb * 2u; let sb = mr * nb;
+  var acc = 0.0;
+  for (var b = lane; b < nb; b += 32u) {
+    let w0 = qw[wb + b * 2u]; let w1 = qw[wb + b * 2u + 1u]; let xb = b * 8u;
+    var s = dot(vec4<f32>(unpack4xI8(w0.x)), x[xb]) + dot(vec4<f32>(unpack4xI8(w0.y)), x[xb + 1u]);
+    s += dot(vec4<f32>(unpack4xI8(w0.z)), x[xb + 2u]) + dot(vec4<f32>(unpack4xI8(w0.w)), x[xb + 3u]);
+    s += dot(vec4<f32>(unpack4xI8(w1.x)), x[xb + 4u]) + dot(vec4<f32>(unpack4xI8(w1.y)), x[xb + 5u]);
+    s += dot(vec4<f32>(unpack4xI8(w1.z)), x[xb + 6u]) + dot(vec4<f32>(unpack4xI8(w1.w)), x[xb + 7u]);
+    acc += s * f32(qs[sb + b]);
+  }
+  let total = subgroupAdd(acc);
+  if (lane == 0u && m < p.M) { y[m] = total; }
+}`,
+  expertQ8: `enable f16;
+enable subgroups;
+struct P { M: u32, N: u32, rowsPerExpert: u32, inputPerSlot: u32 }
+@group(0) @binding(0) var<storage, read> x: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> qw: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read> qs: array<f16>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@group(0) @binding(5) var<storage, read> slots: array<u32>;
+@compute @workgroup_size(128) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let z = wg.z; let m = (wg.y * ng.x + wg.x) * 4u + l.x / 32u; let lane = l.x % 32u;
+  let nb = p.N / 32u; let r = slots[z] * p.rowsPerExpert + min(m, p.M - 1u);
+  let wb = r * nb * 2u; let sb = r * nb;
+  let xo = select(0u, z * p.N / 4u, p.inputPerSlot == 1u);
+  var acc = 0.0;
+  for (var b = lane; b < nb; b += 32u) {
+    let w0 = qw[wb + b * 2u]; let w1 = qw[wb + b * 2u + 1u]; let xb = xo + b * 8u;
+    var s = dot(vec4<f32>(unpack4xI8(w0.x)), x[xb]) + dot(vec4<f32>(unpack4xI8(w0.y)), x[xb + 1u]);
+    s += dot(vec4<f32>(unpack4xI8(w0.z)), x[xb + 2u]) + dot(vec4<f32>(unpack4xI8(w0.w)), x[xb + 3u]);
+    s += dot(vec4<f32>(unpack4xI8(w1.x)), x[xb + 4u]) + dot(vec4<f32>(unpack4xI8(w1.y)), x[xb + 5u]);
+    s += dot(vec4<f32>(unpack4xI8(w1.z)), x[xb + 6u]) + dot(vec4<f32>(unpack4xI8(w1.w)), x[xb + 7u]);
+    acc += s * f32(qs[sb + b]);
+  }
+  let total = subgroupAdd(acc);
+  if (lane == 0u && m < p.M) { y[z * p.M + m] = total; }
+}`,
+};
+
 export class Qwen35MoeSsd extends Qwen3MoeSsd {
   // Without a url, the pinned Hugging Face file; with one (a local serve, a layer cut), the OPFS
   // directory is named after the file, never after rung 2a's model.
@@ -588,7 +646,12 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     this.chunkTokens = Math.max(2, Math.floor(opts.prefillChunk || 256));
   }
 
-  get kernels() { return { ...super.kernels, ...KERNELS, ...BATCH_KERNELS }; }
+  // Subgroup GEMVs replace the scalar ones when subgroups are exactly 32 wide (Apple, most others).
+  get subgroupKernels() {
+    const i = this.device.adapterInfo || this.opts.adapterInfo || {};
+    return this.opts.subgroups !== false && this.device.features.has('subgroups') && i.subgroupMinSize === 32 && i.subgroupMaxSize === 32;
+  }
+  get kernels() { return { ...super.kernels, ...KERNELS, ...BATCH_KERNELS, ...(this.subgroupKernels ? SG_KERNELS : {}) }; }
 
   // Like bind(), but a resource may be { buffer, offset, size }.
   bindR(name, resources) {
@@ -988,4 +1051,4 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
 }
 
 // For kernel tests (scripts): the WGSL this module adds.
-export { KERNELS as QWEN35_KERNELS, BATCH_KERNELS as QWEN35_BATCH_KERNELS };
+export { KERNELS as QWEN35_KERNELS, BATCH_KERNELS as QWEN35_BATCH_KERNELS, SG_KERNELS as QWEN35_SG_KERNELS };
