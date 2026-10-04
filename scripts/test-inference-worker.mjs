@@ -236,6 +236,11 @@ assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',/);
     assert.ok(drives, `sidebar item #${id} has no COMMANDS entry`);
   }
   assert.match(manifest[1], /id: 'settings\.models'/, 'the sidebar Models item has no command');
+  // Library: the sidebar item has a command, search reads message text, and Recents links to it.
+  assert.match(nav, /<button type="button" data-library>Library<\/button>/);
+  assert.match(manifest[1], /id: 'library\.chats'[^\n]*openLibrary\('chats'\)/, 'the sidebar Library item has no command');
+  assert.match(indexSource, /const body = \(conv\.messages \|\| \[\]\)\.map\(messageText\)\.join/);
+  assert.match(indexSource, /more\.addEventListener\('click', \(\) => openLibrary\('chats'\)\);/);
   for (const id of ['chat.clear', 'chat.share', 'folder.ingest']) {
     assert.match(manifest[1], new RegExp(`id: '${id.replace('.', '\\.')}'[^\\n]*agent: false`), `${id} must be agent:false`);
   }
