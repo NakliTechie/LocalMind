@@ -306,6 +306,8 @@ export async function ingestGguf({ url, key, fetch: fetchFn = fetch, onProgress 
 // ── Tokenizer: byte-level BPE from the GGUF vocab (tokenizer.ggml.model = gpt2, pre = qwen2) ──
 // Same pre-tokenizer regex llama.cpp uses for LLAMA_VOCAB_PRE_TYPE_QWEN2.
 const QWEN2_PRE = /(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+/gu;
+// LLAMA_VOCAB_PRE_TYPE_QWEN35 (Qwen3.5/3.6): combining marks (\p{M}) count as part of a word.
+const QWEN35_PRE = /(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+|\p{N}| ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+/gu;
 
 function byteToUnicode() {
   const bs = [];
@@ -323,6 +325,7 @@ function byteToUnicode() {
 export class BpeTokenizer {
   constructor(kv) {
     this.tokens = kv['tokenizer.ggml.tokens'];
+    this.preRe = kv['tokenizer.ggml.pre'] === 'qwen35' ? QWEN35_PRE : QWEN2_PRE;
     const types = kv['tokenizer.ggml.token_type'] || [];
     this.ids = new Map(this.tokens.map((t, i) => [t, i]));
     this.ranks = new Map((kv['tokenizer.ggml.merges'] || []).map((m, i) => [m, i]));
@@ -366,7 +369,7 @@ export class BpeTokenizer {
       const piece = pieces[i];
       if (!piece) continue;
       if (parseSpecial && i % 2 === 1) { out.push(this.ids.get(piece)); continue; }
-      for (const m of piece.matchAll(QWEN2_PRE)) {
+      for (const m of piece.matchAll(this.preRe)) {
         let s = '';
         for (const b of this.utf8.encode(m[0])) s += this.byteEnc[b];
         out.push(...this.bpe(s));
