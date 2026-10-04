@@ -1881,6 +1881,33 @@
     .header-menu-btn:focus-visible { outline: 2px solid var(--indigo-500); }
     .header > h1 { margin-right: auto; }
     .nav-mobile-only, .app-nav .nav-mobile-only { display: none; }
+    /* Image screen (Chunk L layer 6). Narrow screens keep the inline controls; from 900px Image mode
+       hides the conversation and lays the panel out as controls | large preview. */
+    .image-preview { display: none; }
+    @media (min-width: 900px) {
+      body.image-mode #chatArea { display: none; }
+      body.image-mode #imagePanel.open {
+        flex: 1; min-height: 0; overflow: auto; padding: 14px 16px;
+        display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); grid-template-rows: auto auto auto 1fr; gap: 10px 20px; align-content: start;
+      }
+      body.image-mode #imagePanel > .mode-extra-head { grid-column: 1; grid-row: 1; }
+      body.image-mode #imagePanel > .image-controls { grid-column: 1; grid-row: 2; flex-direction: column; align-items: stretch; gap: 10px; }
+      body.image-mode #imagePanel > .image-controls label { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+      body.image-mode #imagePanel > .image-controls select { max-width: 170px; }
+      body.image-mode #imagePanel > .progress-section { grid-column: 1; grid-row: 3; }
+      body.image-mode #imagePanel > .image-gallery { grid-column: 2; grid-row: 3 / span 2; align-content: flex-start; }
+      body.image-mode .image-preview {
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+        grid-column: 2; grid-row: 1 / span 2; margin: 0; min-height: 320px; padding: 12px;
+        border: 1px dashed var(--gray-200); border-radius: 10px; background: var(--gray-50);
+      }
+      body.image-mode .image-preview img { max-width: 100%; max-height: 52vh; object-fit: contain; border-radius: 8px; }
+      body.image-mode .image-preview figcaption { font-size: 0.75rem; color: var(--gray-500); text-align: center; overflow-wrap: anywhere; }
+      body.image-mode .image-gallery img { cursor: pointer; }
+      body.image-mode .image-gallery img.current { outline: 2px solid var(--indigo-500); outline-offset: 1px; }
+    }
+    .image-preview-empty { font-size: 0.8rem; color: var(--gray-500); text-align: center; margin: 0; }
+
     /* Library (Chunk L layer 6) */
     .library-tabs { display: flex; gap: 6px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--gray-200); }
     .library-snippet { font-size: 0.72rem; color: var(--gray-500); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2927,6 +2954,14 @@
           <div class="progress-text" id="imageProgressText">Type a prompt below and Send. First run downloads the model (~3&nbsp;GB, cached after). Best on Chrome/Edge.</div>
         </div>
         <div class="image-gallery" id="imageGallery"></div>
+        <!-- Image screen (Chunk L layer 6): on wide screens Image mode turns the card into a
+             workspace — controls on the left, the latest image large on the right. -->
+        <figure class="image-preview" id="imagePreview">
+          <p class="image-preview-empty" id="imagePreviewEmpty">Your image appears here. Describe it below and press Send.</p>
+          <img id="imagePreviewImg" alt="" hidden>
+          <figcaption id="imagePreviewMeta"></figcaption>
+          <a id="imagePreviewDownload" class="image-btn" download hidden>Download PNG</a>
+        </figure>
       </div>
       <div class="mode-extra" id="diffusePanel">
         <div class="mode-extra-head">Masked-diffusion text &middot; <span class="memory-count">Qwen3 0.6B (~1.4&nbsp;GB)</span></div>
@@ -16426,7 +16461,7 @@ self.addEventListener('message', async (e) => {
           chatInput.disabled = false;
           const readyCaps = LocalMind.runtime.capabilities();
           const supportsMedia = !!(readyCaps && (readyCaps.image || readyCaps.audio || readyCaps.video));
-          chatInput.placeholder = supportsMedia ? 'Type a message, or attach images/audio...' : 'Type a message...';
+          chatInput.placeholder = supportsMedia ? 'Type a message, or attach images/audio...' : 'Type a message...'; if (activeMode !== 'chat') refreshModeUI();   // keep the mode's placeholder (e.g. Image)
           sendBtn.disabled = false; searchSendBtn.disabled = false;
           clearBtn.disabled = false;
           newChatBtn.disabled = false;
@@ -16658,7 +16693,7 @@ self.addEventListener('message', async (e) => {
       statusSpinner.style.display = 'none';
       statusText.textContent = m.label + ' · endpoint';
       chatInput.disabled = false;
-      chatInput.placeholder = 'Type a message…';
+      chatInput.placeholder = 'Type a message…'; if (activeMode !== 'chat') refreshModeUI();   // keep the mode's placeholder (e.g. Image)
       sendBtn.disabled = false; if (searchSendBtn) searchSendBtn.disabled = false;
       if (clearBtn) clearBtn.disabled = false;
       if (newChatBtn) newChatBtn.disabled = false;
@@ -16974,7 +17009,7 @@ self.addEventListener('message', async (e) => {
       statusSpinner.style.display = 'none';
       statusText.textContent = m.label + ' · Chrome';
       chatInput.disabled = false;
-      chatInput.placeholder = 'Type a message…';
+      chatInput.placeholder = 'Type a message…'; if (activeMode !== 'chat') refreshModeUI();   // keep the mode's placeholder (e.g. Image)
       sendBtn.disabled = false; if (searchSendBtn) searchSendBtn.disabled = false;
       if (clearBtn) clearBtn.disabled = false;
       if (newChatBtn) newChatBtn.disabled = false;
@@ -18980,6 +19015,7 @@ self.addEventListener('message', async (e) => {
       comparePanel.classList.toggle('open', activeMode === 'compare');
       batchPanel.classList.toggle('open', activeMode === 'batch');
       imagePanel.classList.toggle('open', activeMode === 'image');
+      document.body.classList.toggle('image-mode', activeMode === 'image');
       diffusePanel.classList.toggle('open', activeMode === 'diffuse');
       ocrPanel.classList.toggle('open', activeMode === 'ocr');
       if (visionPanel) visionPanel.classList.toggle('open', activeMode === 'vision');
@@ -19303,6 +19339,18 @@ self.addEventListener('message', async (e) => {
       imageProgressText.textContent = 'Model ready.';
     }
 
+    const imagePreview = document.getElementById('imagePreview');
+    function showImagePreview({ url, prompt, meta, seed, thumb }) {
+      const pimg = document.getElementById('imagePreviewImg');
+      pimg.src = url; pimg.alt = prompt; pimg.hidden = false;
+      document.getElementById('imagePreviewEmpty').hidden = true;
+      document.getElementById('imagePreviewMeta').textContent = meta;
+      const dl = document.getElementById('imagePreviewDownload');
+      dl.href = url; dl.download = `localmind-${seed}.png`; dl.hidden = false;
+      imageGallery.querySelectorAll('img.current').forEach(i => i.classList.remove('current'));
+      if (thumb) thumb.classList.add('current');
+    }
+
     async function runImageGen(prompt) {
       if (generating) return;
       lastImagePrompt = prompt;
@@ -19344,9 +19392,15 @@ self.addEventListener('message', async (e) => {
         meta.textContent = `${res.width}×${res.height} · seed ${res.seed} · ${(ms / 1000).toFixed(1)}s · “${prompt}”`;
         ph.bubble.appendChild(meta);
         const thumb = document.createElement('img');
-        thumb.src = url; thumb.title = prompt;
-        thumb.addEventListener('click', () => img.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+        thumb.src = url; thumb.title = prompt; thumb.alt = prompt;
+        const shown = { url, prompt, meta: meta.textContent, seed: res.seed, thumb };
+        // On the Image screen a thumbnail shows that image large; inline (narrow) it scrolls the chat.
+        thumb.addEventListener('click', () => {
+          if (imagePreview.offsetParent) showImagePreview(shown);
+          else img.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
         imageGallery.appendChild(thumb);
+        showImagePreview(shown);
         imageCount++;
         imageModelMeta.textContent = imageCount + (imageCount === 1 ? ' image this session' : ' images this session');
         imageReroll.disabled = false;

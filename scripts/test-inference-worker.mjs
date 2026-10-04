@@ -210,6 +210,17 @@ assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',/);
   assert.match(indexSource, /\.mode-chip\.moved:not\(\.active\) \{ display: none; \}/);
 }
 
+// Image screen (Chunk L layer 6): Image mode marks the body, wide screens swap the chat for the
+// controls | preview workspace, every result reaches the preview, and a model becoming ready
+// does not overwrite a mode's placeholder.
+{
+  assert.match(indexSource, /document\.body\.classList\.toggle\('image-mode', activeMode === 'image'\);/);
+  assert.match(indexSource, /@media \(min-width: 900px\) \{\s*body\.image-mode #chatArea \{ display: none; \}/);
+  assert.match(indexSource, /imageGallery\.appendChild\(thumb\);\s*showImagePreview\(shown\);/);
+  const keeps = indexSource.split("if (activeMode !== 'chat') refreshModeUI();   // keep the mode's placeholder").length - 1;
+  assert.equal(keeps, 3, 'each model-ready path keeps the active mode placeholder');
+}
+
 // Dark theme + contrast (Chunk L layer 6, UX review A1): the dark block redefines every colour token
 // the light :root defines, no text is set in the decorative --gray-400, the accent as text uses
 // --accent-text, and the stored theme is applied in <head> before first paint.
