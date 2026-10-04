@@ -6,8 +6,8 @@
 // GPU and gathers from those with its own, unchanged kernel. The two classes below know nothing
 // about Gemma, so the same row path can carry other tables or MoE experts later.
 //
-//   RowFile   fixed-size rows in one OPFS file plus manifest.json; synchronous reads through a
-//             FileSystemSyncAccessHandle, so it must live in a dedicated worker (LocalMind runs
+//   RowFile   fixed-size rows in one OPFS file plus manifest.json; synchronous reads through
+//             opfs-reader.js in inline mode, so it must live in a dedicated worker (LocalMind runs
 //             every engine in one).
 //   RowCache  `slots` rows on the GPU, split into planes (byte ranges of a row that live in
 //             separate GPU buffers), an O(1) LRU, and a CPU id->slot mirror. lookup(ids) makes
@@ -15,28 +15,10 @@
 //
 // createGemmaPle(opts) is the object the patched gemma-4-e2b.js receives as `load(..., { ple })`.
 
+import { OpfsReaderPool, OpfsWriter, canInline, readOpfsText, writeOpfsText, removeOpfs } from './opfs-reader.js';
+
 const ROOT_DIR = 'localmind-ssd';
 const FORMAT = 'localmind-rows/1';
-
-async function openDir(key) {
-  let dir = await navigator.storage.getDirectory();
-  for (const part of [ROOT_DIR, ...key.split('/')]) dir = await dir.getDirectoryHandle(part, { create: true });
-  return dir;
-}
-
-async function readJson(dir, name) {
-  try { return JSON.parse(await (await (await dir.getFileHandle(name)).getFile()).text()); } catch { return null; }
-}
-
-async function writeJson(dir, name, value) {
-  const h = await (await dir.getFileHandle(name, { create: true })).createSyncAccessHandle();
-  try {
-    const bytes = new TextEncoder().encode(JSON.stringify(value, null, 1));
-    h.truncate(0);
-    h.write(bytes, { at: 0 });
-    h.flush();
-  } finally { h.close(); }
-}
 
 // FNV-1a over a few samples of each source buffer and their lengths: cheap enough to run on every
 // load, and it changes when the model's weights change.
@@ -51,23 +33,25 @@ export function fingerprint(buffers, sample = 1 << 16) {
   return h.toString(16).padStart(8, '0');
 }
 
+// Fixed-size rows in one OPFS file, localmind-ssd/<key>/<name>, with manifest.json beside it.
+// The file I/O is opfs-reader.js in inline mode: the sync handle lives in this dedicated worker,
+// so a row read is a plain synchronous call with no worker hop.
 export class RowFile {
-  #dir;
-  #read = null;
+  #reader = null;
 
-  constructor(dir, { name, rowBytes, rows }) {
-    this.#dir = dir;
+  constructor({ key, name, rowBytes, rows }) {
+    this.path = `${ROOT_DIR}/${key}/${name}`;
+    this.manifestPath = `${ROOT_DIR}/${key}/manifest.json`;
     this.name = name;
     this.rowBytes = rowBytes;
     this.rows = rows;
     this.manifest = null;
   }
 
-  // key: a directory under localmind-ssd/ (for example 'gemma-4-e2b').
   static async open({ key, name = 'rows.bin', rowBytes, rows }) {
-    const dir = await openDir(key);
-    const f = new RowFile(dir, { name, rowBytes, rows });
-    f.manifest = await readJson(dir, 'manifest.json');
+    if (!canInline()) throw new Error('RowFile needs a dedicated worker (FileSystemSyncAccessHandle)');
+    const f = new RowFile({ key, name, rowBytes, rows });
+    try { f.manifest = JSON.parse(await readOpfsText(f.manifestPath)); } catch (_) { f.manifest = null; }
     return f;
   }
 
@@ -81,51 +65,48 @@ export class RowFile {
   // The manifest is removed first and written last, so an interrupted write is never taken as valid.
   async write(fp, fill, { batchRows = 8192, extra = {} } = {}) {
     this.close();
-    await this.#dir.removeEntry('manifest.json').catch(() => {});
+    await removeOpfs(this.manifestPath).catch(() => {});
     this.manifest = null;
     const total = this.rows * this.rowBytes;
-    const h = await (await this.#dir.getFileHandle(this.name, { create: true })).createSyncAccessHandle();
     const t0 = performance.now();
+    const w = await OpfsWriter.open(this.path, { truncate: true, inline: true });
     try {
-      h.truncate(total);
       const buf = new Uint8Array(batchRows * this.rowBytes);
       for (let row0 = 0; row0 < this.rows; row0 += batchRows) {
         const n = Math.min(batchRows, this.rows - row0);
         const view = buf.subarray(0, n * this.rowBytes);
         fill(row0, n, view);
-        const wrote = h.write(view, { at: row0 * this.rowBytes });
-        if (wrote !== view.length) throw new Error(`RowFile ${this.name}: wrote ${wrote} of ${view.length} bytes at row ${row0}`);
+        await w.write(view, row0 * this.rowBytes);
       }
-      h.flush();
-    } finally { h.close(); }
+    } finally { await w.close(); }
     const writeMs = performance.now() - t0;
     this.manifest = { format: FORMAT, name: this.name, rowBytes: this.rowBytes, rows: this.rows, bytes: total,
       fingerprint: fp, complete: true, writtenAt: new Date().toISOString(), writeMs: Math.round(writeMs), ...extra };
-    await writeJson(this.#dir, 'manifest.json', this.manifest);
+    await writeOpfsText(this.manifestPath, JSON.stringify(this.manifest, null, 1));
     return writeMs;
   }
 
   async openRead() {
-    if (this.#read) return;
-    const fh = await this.#dir.getFileHandle(this.name);
-    let h;
-    try { h = await fh.createSyncAccessHandle({ mode: 'read-only' }); } catch { h = await fh.createSyncAccessHandle(); }
-    if (h.getSize() !== this.rows * this.rowBytes) {
-      h.close();
-      throw new Error(`RowFile ${this.name}: size ${h.getSize()} != ${this.rows * this.rowBytes}`);
+    if (this.#reader) return;
+    const r = await OpfsReaderPool.open(this.path, { inline: true });
+    if (r.size !== this.rows * this.rowBytes) {
+      await r.close();
+      throw new Error(`RowFile ${this.name}: size ${r.size} != ${this.rows * this.rowBytes}`);
     }
-    this.#read = h;
+    this.#reader = r;
   }
 
-  // Reads rows [row, row + count) into dst at byte offset `at`. Synchronous.
-  readRows(row, count, dst, at = 0) {
+  // Reads rows [row, row + count) to the start of dst (a Uint8Array that starts its buffer).
+  readRows(row, count, dst) {
+    if (dst.byteOffset !== 0) throw new Error('RowFile.readRows: dst must start at offset 0 of its buffer');
     const len = count * this.rowBytes;
-    const got = this.#read.read(dst.subarray(at, at + len), { at: row * this.rowBytes });
+    const got = this.#reader.readSync(row * this.rowBytes, len, dst.buffer);
     if (got !== len) throw new Error(`RowFile ${this.name}: read ${got} of ${len} bytes at row ${row}`);
   }
 
+  // Closes the read handle. In inline mode the handle closes synchronously inside this call.
   close() {
-    if (this.#read) { try { this.#read.close(); } catch {} this.#read = null; }
+    if (this.#reader) { this.#reader.close(); this.#reader = null; }
   }
 }
 
@@ -276,7 +257,6 @@ export function createGemmaPle({ key = 'gemma-4-e2b', slots = 32768, warm = GEMM
       }
       let file;
       try {
-        if (typeof FileSystemSyncAccessHandle === 'undefined') throw new Error('needs a dedicated worker (FileSystemSyncAccessHandle)');
         file = await RowFile.open({ key, name: 'ple.bin', rowBytes, rows: vocab });
         const fp = fingerprint([bits, scale]);
         let wroteMs = null;
