@@ -16440,9 +16440,39 @@ self.addEventListener('message', async (e) => {
     // ===========================================================
 
     // ── Worker message handling ─────────────────────────────────
+    // Load watchdog. From the start of a load until its download completes, a worker that reports nothing for
+    // LOAD_STALL_MS is treated as wedged: terminated, the load shown as failed with Retry, and any
+    // window.localmind.load() caller rejected. It covers what no worker-side guard can: a worker that stops
+    // running tasks (2026-10-02: no messages, no timers, so the download stall guard never fired; the progress
+    // bar sat at 120 / 201 MB for two days) and engine downloads whose body reads have no stall timeout
+    // (engineFetch). 3 minutes is about three retry cycles of the ONNX stall guard (30 s read stall + backoff +
+    // 30 s reopen). It switches off once the download completes ('loading', 'warmup', 'ready', 'error'),
+    // because session creation and weight upload can be silent for minutes on large models.
+    const LOAD_STALL_MS = 3 * 60 * 1000;
+
     function attachWorkerHandlers(w) {
+      let stallTimer = null;
+      const disarm = () => { clearTimeout(stallTimer); stallTimer = null; };
+      const arm = () => { disarm(); stallTimer = setTimeout(onStall, LOAD_STALL_MS); };
+      const onStall = () => {
+        stallTimer = null;
+        if (w !== worker || modelReady) return;   // superseded, or already loaded
+        const why = `no download progress for ${LOAD_STALL_MS / 60000} minutes`;
+        console.warn('[LocalMind] load watchdog: ' + why + '; terminating the worker');
+        try { LocalMind.runtime.unload(); } catch {}
+        worker = null;
+        statusBadge.className = 'status-badge error';
+        statusSpinner.style.display = 'none';
+        progressSection.classList.remove('visible');
+        modelSelect.disabled = false;
+        showLoadError(why);
+        if (loadResolvers) { const r = loadResolvers; loadResolvers = null; r.reject(new Error('Model load stalled: ' + why)); }
+      };
+      arm();
+
       // Catch silent worker failures (e.g. bad import, missing export)
       w.addEventListener('error', (e) => {
+        disarm();
         console.error('Worker error event:', e.message, e);
         statusBadge.className = 'status-badge error';
         statusSpinner.style.display = 'none';
@@ -16451,6 +16481,7 @@ self.addEventListener('message', async (e) => {
         progressText.textContent = e.message || 'Worker failed to start';
         modelSelect.disabled = false;
         showLoadError(e.message || 'the worker failed to start');
+        if (loadResolvers) { const r = loadResolvers; loadResolvers = null; r.reject(new Error(e.message || 'the worker failed to start')); }
       });
 
       w.addEventListener('message', (e) => {
@@ -16458,6 +16489,11 @@ self.addEventListener('message', async (e) => {
 
         if (data.type === 'progress') {
           const p = data.data;
+          // Watchdog: bytes still to come re-arm it; a finished download or the move to loading ends it; any
+          // other report while it runs counts as life.
+          if (p.status === 'progress_total' && p.total && p.loaded < p.total) arm();
+          else if ((p.status === 'progress_total' && p.total && p.loaded >= p.total) || p.status === 'loading') disarm();
+          else if (stallTimer) arm();
           progressSection.classList.add('visible');
           const fileName = p.file ? p.file.split('/').pop() : '';
           if (fileName) currentDownloadFile = fileName;
@@ -16485,6 +16521,7 @@ self.addEventListener('message', async (e) => {
         }
 
         else if (data.type === 'warmup') {
+          disarm();
           progressText.textContent = 'Compiling shaders and warming up...';
           statusText.textContent = 'Warming up...';
         }
@@ -16502,6 +16539,7 @@ self.addEventListener('message', async (e) => {
         }
 
         else if (data.type === 'ready') {
+          disarm();
           modelReady = true;
           progressSection.classList.remove('visible');
           statusBadge.className = 'status-badge ready';
@@ -16565,6 +16603,7 @@ self.addEventListener('message', async (e) => {
         }
 
         else if (data.type === 'error') {
+          disarm();
           if (!modelReady) {
             statusBadge.className = 'status-badge error';
             statusSpinner.style.display = 'none';

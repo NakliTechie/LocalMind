@@ -269,4 +269,98 @@ assert.equal(workerSource.match(/await load\(\);/g).length, 2, 'one load, at mos
   const gone = async () => new Response(null, { status: 404 });
   assert.deepEqual(await __evictTruncatedCache('org/model', cacheStorage, gone), []);
 }
+
+// 5. Main-thread load watchdog (attachWorkerHandlers, index.html): from the start of a load until its download
+//    completes, a worker that reports nothing for LOAD_STALL_MS is terminated, the load is shown failed and
+//    the window.localmind.load() caller rejected (2026-10-02: a chat worker stopped running tasks at
+//    120 / 201 MB and the bar sat there for two days). The real source runs against a fake worker, fake
+//    timers and stub page globals.
+{
+  const start = indexSource.indexOf('    const LOAD_STALL_MS = ');
+  const fnAt = indexSource.indexOf('function attachWorkerHandlers(w) {', start);
+  assert.ok(start > 0 && fnAt > start, 'LOAD_STALL_MS + attachWorkerHandlers missing from index.html');
+  let depth = 0, end = -1;
+  for (let i = indexSource.indexOf('{', fnAt); i < indexSource.length; i++) {
+    if (indexSource[i] === '{') depth++;
+    else if (indexSource[i] === '}' && --depth === 0) { end = i + 1; break; }
+  }
+  const src = indexSource.slice(start, end);
+  const REAL = new Set(['Math', 'String', 'Number', 'Error', 'Object', 'Array', 'JSON', 'Promise', 'Symbol', 'Boolean', 'undefined']);
+  // Any other page global (badges, inputs, MODELS, helpers) is a stub that accepts every get, set and call.
+  const anything = () => new Proxy(function () {}, { get: (f, p) => (p === Symbol.toPrimitive ? () => '' : (f[p] ??= anything())), set: () => true, apply: () => undefined });
+  const setup = () => {
+    let now = 0, nextId = 0;
+    const timers = new Map(), calls = { unload: 0, shown: [], rejected: [], resolved: 0 };
+    const store = {
+      setTimeout: (fn, ms) => { timers.set(++nextId, { fn, at: now + ms }); return nextId; },
+      clearTimeout: (id) => { timers.delete(id); },
+      console: { warn() {}, error() {}, debug() {}, log() {} },
+      LocalMind: { runtime: { unload: () => { calls.unload++; }, capabilities: () => ({}) } },
+      showLoadError: (m) => { calls.shown.push(m); },
+      modelReady: false, generating: false,
+      loadResolvers: { resolve: () => { calls.resolved++; }, reject: (e) => { calls.rejected.push(e.message); } },
+    };
+    // Symbol keys get undefined: `with` reads Symbol.unscopables, and a stub there would hide every name.
+    const scope = new Proxy(store, { has: (t, k) => typeof k === 'string' && !REAL.has(k), get: (t, k) => (typeof k === 'symbol' ? undefined : k in t ? t[k] : (t[k] = anything())), set: (t, k, v) => { t[k] = v; return true; } });
+    const mod = new Function('scope', `with (scope) { ${src}\nreturn { attachWorkerHandlers, LOAD_STALL_MS }; }`)(scope);
+    const listeners = {};
+    const w = { addEventListener: (type, fn) => { listeners[type] = fn; } };
+    store.worker = w;
+    mod.attachWorkerHandlers(w);
+    const advance = (ms) => { now += ms; for (const [id, t] of [...timers]) if (t.at <= now) { timers.delete(id); t.fn(); } };
+    const msg = (data) => listeners.message({ data });
+    const progress = (status, loaded, total) => msg({ type: 'progress', data: { status, loaded, total } });
+    return { store, calls, advance, msg, progress, error: (m) => listeners.error({ message: m }), pending: () => timers.size, STALL: mod.LOAD_STALL_MS };
+  };
+  const STALLED = 'no download progress for 3 minutes';
+
+  // Silent from the start: nothing before the deadline, then terminate + banner + rejected caller.
+  let t = setup();
+  assert.equal(t.STALL, 3 * 60 * 1000, 'the window is above three ONNX stall-guard retry cycles');
+  t.advance(t.STALL - 1);
+  assert.equal(t.calls.unload, 0);
+  t.advance(1);
+  assert.equal(t.calls.unload, 1);
+  assert.deepEqual(t.calls.shown, [STALLED]);
+  assert.deepEqual(t.calls.rejected, ['Model load stalled: ' + STALLED]);
+  assert.equal(t.store.worker, null);
+  // Bytes arriving keep it alive however long the download takes; silence after them still trips it.
+  t = setup();
+  for (let i = 1; i <= 10; i++) { t.advance(t.STALL - 1000); t.progress('progress_total', i, 100); }
+  assert.equal(t.calls.unload, 0, 'a slow download that keeps delivering is never cut');
+  t.advance(t.STALL);
+  assert.equal(t.calls.unload, 1);
+  // A finished download ends it: session creation may be silent; other reports do not re-arm it; a later file does.
+  t = setup();
+  t.progress('progress_total', 100, 100);
+  t.advance(10 * t.STALL);
+  t.progress('initiate'); t.progress('done');
+  t.advance(10 * t.STALL);
+  assert.equal(t.calls.unload, 0, 'silence after the download completes is not a stall');
+  t.progress('progress_total', 150, 200);
+  t.advance(t.STALL);
+  assert.equal(t.calls.unload, 1, 'a further file re-arms it');
+  // 'loading', 'warmup' and 'ready' end it (no timer left behind); 'ready' resolves the caller.
+  for (const finish of [(x) => x.progress('loading'), (x) => x.msg({ type: 'warmup' }), (x) => x.msg({ type: 'ready' })]) {
+    t = setup();
+    t.progress('progress_total', 10, 100);
+    finish(t);
+    assert.equal(t.pending(), 0, 'the watchdog timer is cleared');
+    t.advance(10 * t.STALL);
+    assert.equal(t.calls.unload, 0);
+  }
+  assert.equal(t.calls.resolved, 1);
+  // A superseded worker, or a model already loaded, is left alone.
+  t = setup(); t.store.worker = {}; t.advance(t.STALL);
+  assert.deepEqual([t.calls.unload, t.calls.shown.length, t.calls.rejected.length], [0, 0, 0]);
+  t = setup(); t.store.modelReady = true; t.advance(t.STALL);
+  assert.equal(t.calls.unload, 0);
+  // A worker that fails to start rejects the caller and ends the watchdog; so does a load error message.
+  t = setup(); t.error('boom'); t.advance(t.STALL);
+  assert.deepEqual(t.calls.rejected, ['boom']);
+  assert.equal(t.calls.unload, 0);
+  t = setup(); t.msg({ type: 'error', message: 'Failed to load model: x' }); t.advance(t.STALL);
+  assert.deepEqual(t.calls.rejected, ['Failed to load model: x']);
+  assert.equal(t.calls.unload, 0);
+}
 console.log('download stall guard: all checks pass');
