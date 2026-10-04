@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Qwen3-MoE SSD harness</title>
+<style>body{font:13px ui-monospace,monospace;margin:16px;background:#111;color:#ddd}pre{white-space:pre-wrap}</style>
+<pre id="out">loading…</pre>
+<script type="module">
+// ?worker=1 runs the engine in a dedicated module worker (LocalMind's real context); otherwise
+// on this page's thread. Either way window.h.* has the same methods (scripts/qwen3-moe-api.mjs).
+import { makeApi } from './qwen3-moe-api.mjs';
+const out = document.getElementById('out');
+const log = (o) => { out.textContent += '\n' + (typeof o === 'string' ? o : JSON.stringify(o)); return o; };
+const inWorker = new URLSearchParams(location.search).get('worker') === '1';
+if (inWorker) {
+  const w = new Worker(new URL('./qwen3-moe-worker.mjs', import.meta.url), { type: 'module' });
+  const pending = new Map(); let next = 1;
+  w.onmessage = (e) => {
+    const m = e.data;
+    if (m.log !== undefined) { log(m.log); return; }
+    const p = pending.get(m.id); pending.delete(m.id);
+    if (m.error) p.reject(new Error(m.error)); else p.resolve(m.result);
+  };
+  window.h = new Proxy({}, { get: (_, method) => (...args) => new Promise((resolve, reject) => {
+    const id = next++; pending.set(id, { resolve, reject }); w.postMessage({ id, method, args });
+  }) });
+} else {
+  window.h = makeApi(log);
+}
+out.textContent = `ready: window.h (${inWorker ? 'worker' : 'page thread'})`;
+</script>
