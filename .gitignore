@@ -12,6 +12,7 @@
 !ple-opfs.js
 !qwen3_moe_ssd.js
 !qwen35_moe_ssd.js
+!gemma4_moe_ssd.js
 !moe-expert-stream.js
 !opfs-reader.js
 !og.png

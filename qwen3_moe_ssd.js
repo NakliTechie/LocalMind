@@ -34,8 +34,10 @@ const FORMAT = 'localmind-qwen3moe-ssd/1';
 const OPFS_ROOT = 'localmind-ssd';
 
 // ── GGUF ────────────────────────────────────────────────────────────────────
-export const GGML = { F32: 0, F16: 1, Q8_0: 8 };
+export const GGML = { F32: 0, F16: 1, Q4_0: 2, Q8_0: 8, Q6_K: 14 };
 const Q8_BLOCK = 34;  // f16 scale + 32 × int8
+export const Q4_BLOCK = 18;  // f16 scale + 32 × 4-bit (16 bytes)
+export const Q6K_BLOCK = 210; // 256 values: ql[128] + qh[64] + scales[16] + f16 d
 
 // Parses a GGUF header. Throws { needBytes } when `u8` stops before the header ends.
 export function parseGguf(u8) {
@@ -85,6 +87,8 @@ export function tensorBytes(t) {
   if (t.type === GGML.F32) return n * 4;
   if (t.type === GGML.F16) return n * 2;
   if (t.type === GGML.Q8_0) return (n / 32) * Q8_BLOCK;
+  if (t.type === GGML.Q4_0) return (n / 32) * Q4_BLOCK;
+  if (t.type === GGML.Q6_K) return (n / 256) * Q6K_BLOCK;
   throw new Error(`unsupported tensor type ${t.type} (${t.name})`);
 }
 
@@ -161,6 +165,20 @@ function splitQ8(src, q, s) {
   }
 }
 
+// Q4_0 blocks → a nibble plane (16 bytes per 32 values, ggml's order: low nibbles are values 0..15,
+// high nibbles 16..31) + an f16-scale plane, bit-exact.
+export function splitQ4(src, q, s) {
+  const nb = src.byteLength / Q4_BLOCK;
+  const a = new Uint16Array(src.buffer, src.byteOffset, nb * 9);
+  const qd = new Uint16Array(q.buffer, q.byteOffset, nb * 8);
+  const sd = new Uint16Array(s.buffer, s.byteOffset, nb);
+  for (let b = 0, i = 0, o = 0; b < nb; b++, i += 9, o += 8) {
+    sd[b] = a[i];
+    qd[o] = a[i + 1]; qd[o + 1] = a[i + 2]; qd[o + 2] = a[i + 3]; qd[o + 3] = a[i + 4];
+    qd[o + 4] = a[i + 5]; qd[o + 5] = a[i + 6]; qd[o + 6] = a[i + 7]; qd[o + 7] = a[i + 8];
+  }
+}
+
 // ── Ingest: GGUF (over HTTP Range) → OPFS, in the engine layout ─────────────
 const keyOf = (file) => file.replace(/\.gguf$/i, '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
 
@@ -208,10 +226,11 @@ function planUnits(gguf, layout) {
   return units;
 }
 
-export async function ingestGguf({ url, key, fetch: fetchFn = fetch, onProgress = () => {}, signal, source = {} }) {
+// `plan` lets another architecture's engine supply its own layout and units (Gemma 4: gemma4_moe_ssd.js).
+export async function ingestGguf({ url, key, fetch: fetchFn = fetch, onProgress = () => {}, signal, source = {}, plan = { layout: planLayout, units: planUnits } }) {
   const t0 = performance.now();
   const { gguf, bytes: headerBuf } = await readHeader(url, fetchFn, signal);
-  const layout = planLayout(gguf);
+  const layout = plan.layout(gguf);
   const dir = `${OPFS_ROOT}/${key}`;
   const est = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : {};
   const persisted = navigator.storage && navigator.storage.persist ? await navigator.storage.persist().catch(() => false) : false;
@@ -224,7 +243,7 @@ export async function ingestGguf({ url, key, fetch: fetchFn = fetch, onProgress 
   await hw.write(headerBuf.subarray(0, gguf.dataStart), 0);
   await hw.close();
 
-  const units = planUnits(gguf, layout);
+  const units = plan.units(gguf, layout);
   const writers = {
     dense: await OpfsWriter.open(`${dir}/dense.bin`, { truncate: true }),
     experts: await OpfsWriter.open(`${dir}/experts.bin`, { truncate: true }),
@@ -254,12 +273,13 @@ export async function ingestGguf({ url, key, fetch: fetchFn = fetch, onProgress 
       const b = getBuf(u.len); new Uint8Array(b, 0, u.len).set(src);
       await queue(w, b, u.len, u.raw); written += u.len; return;
     }
-    const nb = u.len / Q8_BLOCK;
-    const qb = getBuf(nb * 32), sb = getBuf(nb * 2);
-    splitQ8(src, new Uint8Array(qb, 0, nb * 32), new Uint8Array(sb, 0, nb * 2));
-    await queue(w, qb, nb * 32, u.q);
+    const q4 = u.kind === 'q4', blk = q4 ? Q4_BLOCK : Q8_BLOCK, qPer = q4 ? 16 : 32;
+    const nb = u.len / blk;
+    const qb = getBuf(nb * qPer), sb = getBuf(nb * 2);
+    (q4 ? splitQ4 : splitQ8)(src, new Uint8Array(qb, 0, nb * qPer), new Uint8Array(sb, 0, nb * 2));
+    await queue(w, qb, nb * qPer, u.q);
     await queue(w, sb, nb * 2, u.s);
-    written += nb * 34;
+    written += nb * blk;
   };
   // Several sequential range requests (one per ~1 GiB) keep any one response bounded.
   const SPAN = 1 << 30;
@@ -702,6 +722,10 @@ export const STORAGE = 0x80, COPY_SRC = 0x04, COPY_DST = 0x08, UNIFORM = 0x40, M
 
 // ── Engine ──────────────────────────────────────────────────────────────────
 export class Qwen3MoeSsd {
+  // A subclass for another architecture overrides these two (gemma4_moe_ssd.js).
+  static configFrom(kv) { return configFromGguf(kv); }
+  static get ingestPlan() { return undefined; }
+
   static async load(modelId = QWEN3_30B_A3B.repo, opts = {}) {
     const { fetch: fetchFn = (u, i) => fetch(u, i), onProgress = () => {}, signal } = opts;
     const src = opts.source || (modelId === QWEN3_30B_A3B.repo || !modelId ? QWEN3_30B_A3B : { repo: modelId, file: opts.file, revision: opts.revision || 'main' });
@@ -729,6 +753,7 @@ export class Qwen3MoeSsd {
       manifest = await ingestGguf({
         url, key, fetch: fetchFn, signal, source: { repo: src.repo, file: src.file, revision: src.revision, sha256: src.sha256, size: src.size },
         onProgress: (e) => onProgress(ingestProgress(e)),
+        plan: this.ingestPlan,
       });
     }
     const headerFile = await (await (await navigator.storage.getDirectory()).getDirectoryHandle(OPFS_ROOT)).getDirectoryHandle(key);
@@ -742,7 +767,7 @@ export class Qwen3MoeSsd {
   constructor(device, manifest, gguf, opts) {
     this.device = device;
     this.manifest = manifest;
-    this.cfg = configFromGguf(gguf.kv);
+    this.cfg = this.constructor.configFrom(gguf.kv);
     this.tokenizer = new BpeTokenizer(gguf.kv);
     this.opts = opts;
     this.maxCtx = Math.min(opts.maxCtx || 4096, this.cfg.contextLength);
