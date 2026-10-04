@@ -202,6 +202,22 @@ assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',/);
   assert.match(indexSource, /\.mode-chip\.moved:not\(\.active\) \{ display: none; \}/);
 }
 
+// Settings + models (Chunk L layer 3): sections are reached by deep link, never a blocking
+// confirm(); the tab row leads the panel; the model descriptions live once, in Settings →
+// Models, and name every model in the picker.
+{
+  assert.doesNotMatch(indexSource, /confirm\([^)]*Settings/, 'a confirm() still sends the user to Settings');
+  assert.match(indexSource, /function needsSearchOrConfigure\(what\) \{\s*if \(isSearchConfigured\(\)\) return true;\s*openSettings\('tools', 'searchSettingsSection'\);/);
+  assert.match(indexSource, /<div class="settings-panel" id="settingsPanel">\s*<div class="settings-tabs" id="settingsTabs"/);
+  assert.equal(indexSource.split('About each model').length, 2);
+  const docs = /<details class="model-docs">([\s\S]*?)<\/details>/.exec(indexSource)[1];
+  const documented = new Set([...docs.matchAll(/<strong>([^<]+)<\/strong> \(/g)].map((m) => m[1].replace(/&middot;/g, '·')));
+  const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'), indexSource.indexOf('\n    };', indexSource.indexOf('const MODELS = {')));
+  const labels = [...registry.matchAll(/^\s{8}label: '([^']+)'/gm)].map((m) => m[1]);
+  assert.ok(labels.length >= 11, 'registry labels: ' + labels);
+  for (const label of labels) assert.ok(documented.has(label), `Settings → Models does not describe ${label}`);
+}
+
 // Model picker (Chunk L layer 2): the hidden select stays the source of truth, every in-tab
 // engine in the roster has a cache store to check, and the inventory tracks bytes per store.
 {

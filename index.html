@@ -1165,7 +1165,15 @@
 
     .settings-panel.open { display: block; }
     /* Settings sub-tabs — a bottom bar that reuses the .btn-icon menu style */
-    .settings-tabs { display: flex; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--gray-200); }
+    /* Settings sections — a tab row pinned to the top of the panel while it scrolls */
+    .settings-tabs { display: flex; gap: 6px; position: sticky; top: -12px; z-index: 2; margin: -12px -16px 10px; padding: 8px 16px; background: var(--gray-50); border-bottom: 1px solid var(--gray-200); }
+    .settings-panel > [data-tab] { scroll-margin-top: 52px; }   /* clear the pinned tab row */
+    .settings-flash { animation: settingsFlash 1.2s ease-out 1; border-radius: 6px; }
+    @keyframes settingsFlash { from { box-shadow: 0 0 0 3px var(--indigo-focus-ring); } to { box-shadow: 0 0 0 3px transparent; } }
+    @media (prefers-reduced-motion: reduce) { .settings-flash { animation: none; outline: 2px solid var(--indigo-500); } }
+    .model-docs summary { cursor: pointer; font-size: 0.8rem; font-weight: 600; color: var(--gray-700); }
+    .model-docs ul { margin: 8px 0 0 18px; font-size: 0.75rem; color: var(--gray-700); }
+    .model-docs li { margin-bottom: 6px; }
     .settings-tab-btn.active { background: var(--indigo-100); color: var(--indigo-600); font-weight: 600; }
     .s-tab-hidden { display: none !important; }
     .mobile-tip { display: none; }
@@ -2220,7 +2228,7 @@
           <div class="help-popover" id="helpPopover">
             <div class="help-tabs">
               <button class="help-tab active" data-tab="about">About</button>
-              <button class="help-tab" data-tab="models">Models</button>
+              <button class="help-tab" data-tab="models">Tools</button>
               <button class="help-tab" data-tab="features">Features</button>
               <button class="help-tab" data-tab="api">JS API</button>
               <button class="help-tab" data-tab="try">Things to Try</button>
@@ -2233,19 +2241,6 @@
               <div class="help-note">v2.6.0 &middot; Powered by Transformers.js &middot; models from Prism ML, Alibaba, Liquid AI, Google, Kokoro &amp; Moonshine &middot; multilingual document search via e5 &middot; auto-escalation to your local endpoint (opt-in).</div>
             </div>
             <div class="help-tab-content" data-tab="models">
-              <h4>Available Models</h4>
-              <ul>
-                <li><strong>Ternary Bonsai 4B</strong> (~1.1 GB) &mdash; text + agent (tool calling). 1.58-bit ternary weights, Qwen3 backbone, Apache-2.0 &mdash; the small ternary tier.</li>
-                <li><strong>Ternary Bonsai 2 27B</strong> (~5.9 GB) &mdash; text + agent. PrismML's Ternary Bonsai 2 27B (Sept 2026; ternary 1.75-bit weights, Qwen3.8-27B backbone, 98% of the full-precision model's benchmark score) on a from-scratch WebGPU engine: hand-written WGSL for ternary dequant + Gated-DeltaNet linear attention, reading the PTQ1_0 GGUF directly. Ported from <em>webml-community/ternary-bonsai-2-webgpu-kernels</em>; Apache-2.0 weights. WebGPU-only &mdash; the biggest in-browser model here. A reasoning model: flip <strong>Show reasoning</strong> in Settings for its chain-of-thought. Text-only here (its optional vision tower is not loaded).</li>
-                <li><strong>Qwen3.5 4B</strong> (~3 GB) &mdash; text + image + agent (tool calling). Qwen3.5 at q4f16, Apache-2.0; its native 262K context is capped to 32K to keep browser memory bounded.</li>
-                <li><strong>LFM2.5 1.2B</strong> (~760 MB) &mdash; text + agent (tool calling). Liquid AI's LFM2.5-1.2B-Instruct (Jan 2026) &mdash; same LFM2 hybrid arch as the 230M default, RL-tuned for instruction following + tool use. q4f16, 32K context.</li>
-                <li><strong>Gemini Nano</strong> (0 MB) &mdash; Google's on-device model built into Chrome, via the Prompt API. Zero download, no WebGPU. Chrome/Edge only; runs where your browser exposes <code>self.LanguageModel</code>. When Nano is already downloaded on desktop Chrome/Edge, LocalMind starts on it by default so you can chat with no model download.</li>
-                <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
-                <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only. About 4&times; the ONNX Gemma 4 E2B&rsquo;s decode speed on the same Mac (171 vs 42 tok/s, M4 Pro); text-only.</li>
-                <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
-                <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
-                <li><strong>MiniCPM5 2B &middot; GGUF</strong> (~1.6 GB) &mdash; text + agent (tool calling). OpenBMB&rsquo;s MiniCPM5-2B (Sept 2026, Apache-2.0) loaded from its first-party GGUF through wllama (llama.cpp &rarr; WebAssembly) &mdash; there is no ONNX export, so this is the only way to run it in the tab. WebGPU when your browser has it, CPU otherwise. Gets <strong>16K context</strong>, twice the other GGUF models, because its 2 KV heads make the cache unusually cheap; its native 131K is capped since wllama reserves the whole cache up front. Long-document retrieval is what it is best at. It emits tool calls in its own XML format rather than the <code>&lt;tool_call&gt;</code> JSON the other models use; LocalMind parses both. Short-horizon tool use is its strength &mdash; don&rsquo;t expect long multi-step agent runs to hold up.</li>
-              </ul>
               <h4>Agent Tools (Ternary Bonsai + Qwen3.5 + LFM2 + MiniCPM5 + Gemma 4)</h4>
               <ul>
                 <li><strong>calculate</strong> &mdash; math, percentages, conversions</li>
@@ -2475,6 +2470,12 @@
 
       <!-- Settings (system prompt + thinking toggle) -->
       <div class="settings-panel" id="settingsPanel">
+        <div class="settings-tabs" id="settingsTabs" role="tablist" aria-label="Settings sections">
+          <button class="btn-icon settings-tab-btn active" data-tab="general" type="button">General</button>
+          <button class="btn-icon settings-tab-btn" data-tab="models" type="button">Models</button>
+          <button class="btn-icon settings-tab-btn" data-tab="tools" type="button">Tools</button>
+          <button class="btn-icon settings-tab-btn" data-tab="data" type="button">Data</button>
+        </div>
         <div class="settings-group" data-tab="general">
         <label for="systemPrompt">System prompt (optional)</label>
         <textarea id="systemPrompt" placeholder="e.g. You are a helpful coding assistant."></textarea>
@@ -2538,6 +2539,24 @@
           <input type="checkbox" id="autoBackupToggle">
           Auto-download backup on New Chat
         </label>
+        <div class="settings-divider" data-tab="models" id="modelDocsSection">
+          <details class="model-docs">
+            <summary>About each model</summary>
+            <ul>
+              <li><strong>Ternary Bonsai 4B</strong> (~1.1 GB) &mdash; text + agent (tool calling). 1.58-bit ternary weights, Qwen3 backbone, Apache-2.0 &mdash; the small ternary tier.</li>
+              <li><strong>Ternary Bonsai 2 27B</strong> (~5.9 GB) &mdash; text + agent. PrismML's Ternary Bonsai 2 27B (Sept 2026; ternary 1.75-bit weights, Qwen3.8-27B backbone, 98% of the full-precision model's benchmark score) on a from-scratch WebGPU engine: hand-written WGSL for ternary dequant + Gated-DeltaNet linear attention, reading the PTQ1_0 GGUF directly. Ported from <em>webml-community/ternary-bonsai-2-webgpu-kernels</em>; Apache-2.0 weights. WebGPU-only &mdash; the biggest in-browser model here. A reasoning model: flip <strong>Show reasoning</strong> in Settings for its chain-of-thought. Text-only here (its optional vision tower is not loaded).</li>
+              <li><strong>Qwen3.5 4B</strong> (~3 GB) &mdash; text + image + agent (tool calling). Qwen3.5 at q4f16, Apache-2.0; its native 262K context is capped to 32K to keep browser memory bounded.</li>
+              <li><strong>LFM2.5 1.2B</strong> (~760 MB) &mdash; text + agent (tool calling). Liquid AI's LFM2.5-1.2B-Instruct (Jan 2026) &mdash; same LFM2 hybrid arch as the 230M default, RL-tuned for instruction following + tool use. q4f16, 32K context.</li>
+              <li><strong>Gemini Nano</strong> (0 MB) &mdash; Google's on-device model built into Chrome, via the Prompt API. Zero download, no WebGPU. Chrome/Edge only; runs where your browser exposes <code>self.LanguageModel</code>. When Nano is already downloaded on desktop Chrome/Edge, LocalMind starts on it by default so you can chat with no model download.</li>
+              <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
+              <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only. About 4&times; the ONNX Gemma 4 E2B&rsquo;s decode speed on the same Mac (171 vs 42 tok/s, M4 Pro); text-only.</li>
+              <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
+              <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
+              <li><strong>LFM2.5 230M &middot; GGUF</strong> (~170 MB) &mdash; the same LFM2.5 230M through wllama (llama.cpp &rarr; WebAssembly), reading a Q5_K_M GGUF. WebGPU when your browser has it, CPU otherwise, so it also runs where WebGPU is missing.</li>
+              <li><strong>MiniCPM5 2B &middot; GGUF</strong> (~1.6 GB) &mdash; text + agent (tool calling). OpenBMB&rsquo;s MiniCPM5-2B (Sept 2026, Apache-2.0) loaded from its first-party GGUF through wllama (llama.cpp &rarr; WebAssembly) &mdash; there is no ONNX export, so this is the only way to run it in the tab. WebGPU when your browser has it, CPU otherwise. Gets <strong>16K context</strong>, twice the other GGUF models, because its 2 KV heads make the cache unusually cheap; its native 131K is capped since wllama reserves the whole cache up front. Long-document retrieval is what it is best at. It emits tool calls in its own XML format rather than the <code>&lt;tool_call&gt;</code> JSON the other models use; LocalMind parses both. Short-horizon tool use is its strength &mdash; don&rsquo;t expect long multi-step agent runs to hold up.</li>
+            </ul>
+          </details>
+        </div>
         <div class="settings-divider" data-tab="models">
           <label>Model cache</label>
           <div id="cacheInfo" style="font-size:0.75rem;color:var(--gray-500);margin-top:4px">Loading...</div>
@@ -2711,12 +2730,6 @@
             memory access, or web search is exposed.
           </div>
           <button class="btn-icon" id="apiLogBtn" style="margin-top:8px">View activity log</button>
-        </div>
-        <div class="settings-tabs" id="settingsTabs">
-          <button class="btn-icon settings-tab-btn active" data-tab="general" type="button">General</button>
-          <button class="btn-icon settings-tab-btn" data-tab="models" type="button">Models</button>
-          <button class="btn-icon settings-tab-btn" data-tab="tools" type="button">Tools</button>
-          <button class="btn-icon settings-tab-btn" data-tab="data" type="button">Data</button>
         </div>
       </div>
 
@@ -10052,6 +10065,23 @@ self.addEventListener('message', async (e) => {
       memoryPanel.classList.remove('open');
       closeHistorySidebar();
     });
+    // Deep link into Settings: open it on `tab`, and when `sectionId` is given, reveal that
+    // section (some are hidden until a model needs them), scroll to it, flash it and focus its
+    // first control. Replaces the blocking confirm() prompts (UX review M4).
+    function openSettings(tab, sectionId) {
+      memoryPanel.classList.remove('open');
+      settingsPanel.classList.add('open');
+      closeHistorySidebar();
+      setSettingsTab(tab);
+      if (tab === 'models') refreshCacheInfo();
+      const sec = sectionId && document.getElementById(sectionId);
+      if (!sec) { settingsPanel.scrollTop = 0; return; }
+      sec.style.display = '';
+      sec.scrollIntoView({ block: 'nearest' });
+      sec.classList.remove('settings-flash'); void sec.offsetWidth; sec.classList.add('settings-flash');
+      const control = sec.querySelector('select, input, textarea, button');
+      if (control) control.focus({ preventScroll: true });
+    }
 
     // ── Model cache inventory + eviction ──────────────────────
     // Every in-tab backend caches weights somewhere different:
@@ -18360,7 +18390,7 @@ self.addEventListener('message', async (e) => {
     // finishGeneration() for the source badge + Save-as-MD + history commit.
     async function runDeepResearch(question) {
       if (!question || !modelReady || generating) return;
-      if (!isSearchConfigured()) { showToast('Configure a web search provider in Settings first'); return; }
+      if (!isSearchConfigured()) { openSettings('tools', 'searchSettingsSection'); showToast('Deep Research needs a web search provider — choose one here.'); return; }
       const m = MODELS[activeModelKey];
       if (!m || !m.agentCapable) { showToast('Deep Research needs an agent-capable model'); return; }
 
@@ -18749,10 +18779,8 @@ self.addEventListener('message', async (e) => {
     }
     function needsSearchOrConfigure(what) {
       if (isSearchConfigured()) return true;
-      if (confirm(what + ' needs a web search provider. Open Settings to set one up?')) {
-        memoryPanel.classList.remove('open');
-        settingsPanel.classList.add('open');
-      }
+      openSettings('tools', 'searchSettingsSection');
+      showToast(what + ' needs a web search provider — choose one here.');
       return false;
     }
     chipResearch.addEventListener('click', () => { if (generating) return; if (activeMode !== 'research' && !needsSearchOrConfigure('Deep Research')) return; setExclusiveMode('research'); });
@@ -18792,9 +18820,7 @@ self.addEventListener('message', async (e) => {
       if (b.dataset.mode === 'chat' && !b.dataset.click) {
         if (!generating && activeMode !== 'chat') setExclusiveMode(activeMode);
       } else if ('models' in b.dataset) {
-        if (!settingsPanel.classList.contains('open')) settingsBtn.click();
-        setSettingsTab('models');
-        settingsPanel.scrollTop = 0;
+        openSettings('models');
       } else {
         const target = document.getElementById(b.dataset.click);
         if (target && !target.disabled) target.click();
