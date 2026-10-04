@@ -210,6 +210,20 @@ assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',/);
   assert.match(indexSource, /\.mode-chip\.moved:not\(\.active\) \{ display: none; \}/);
 }
 
+// Dark theme + contrast (Chunk L layer 6, UX review A1): the dark block redefines every colour token
+// the light :root defines, no text is set in the decorative --gray-400, the accent as text uses
+// --accent-text, and the stored theme is applied in <head> before first paint.
+{
+  const root = /:root \{([\s\S]*?)\n    \}/.exec(indexSource)[1];
+  const tokens = [...root.matchAll(/(--[\w-]+):/g)].map((m) => m[1]).filter((n) => n !== '--indigo-focus-ring' || true);
+  const dark = /:root\[data-theme="dark"\] \{([\s\S]*?)\n    \}/.exec(indexSource)[1];
+  for (const tok of tokens) assert.ok(dark.includes(tok + ':'), `dark theme does not set ${tok}`);
+  assert.doesNotMatch(indexSource, /(?<![-\w])color: ?var\(--gray-400\)/, 'text set in the decorative --gray-400');
+  assert.doesNotMatch(indexSource, /(?<![-\w])color: ?var\(--indigo-(?:500|600)\)/, 'accent text must use --accent-text');
+  assert.match(indexSource, /@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-theme="light"\]\) \{/);
+  assert.ok(indexSource.indexOf("localStorage.getItem('lm_theme')") < indexSource.indexOf('<style>'), 'theme must apply before the stylesheet');
+}
+
 // Command manifest (Chunk L layer 5, hard rule 6): every sidebar item is backed by a COMMANDS
 // entry that drives the same element, the palette and window.localmind.commands read the same
 // list, and agent:false guards the destructive / gesture-only commands.

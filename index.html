@@ -30,6 +30,8 @@
        TODO: add SRI hashes alongside the transformers@4 SRI work. -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <!-- Theme before first paint: Settings → General → Appearance (System / Light / Dark). -->
+  <script>try { const th = localStorage.getItem('lm_theme'); if (th === 'light' || th === 'dark') document.documentElement.dataset.theme = th; } catch {}</script>
   <style>
     /* Rangrez · westafrica-01 · BAOBAB — Senegalese baobab bark, savanna pale dawn */
     :root {
@@ -37,7 +39,8 @@
       --gray-800: #2a2014;
       --gray-700: #4a3818;
       --gray-600: #7a5a28;
-      --gray-400: #b89a68;
+      --gray-500: #7d643b;       /* secondary text: 4.6:1 on row, 5.4:1 on panel (UX review A1) */
+      --gray-400: #b89a68;       /* decorative lines and hovers only, never text */
       --gray-200: #ddd6c0;       /* line */
       --gray-100: #f6f3ec;       /* BODY */
       --gray-50:  #ece8de;       /* row */
@@ -45,6 +48,9 @@
       --indigo-500: #08184a;     /* ACT — savanna near-black navy */
       --indigo-600: #050f30;
       --indigo-100: #d8dceb;
+      --indigo-300: #9aa4cc;
+      --accent-text: #08184a;    /* the accent when it is text, not a fill */
+      color-scheme: light;
       --indigo-focus-ring: rgba(8, 24, 74, 0.20);
       --success-bg: #dceadb;
       --success-border: #2a8a3a;
@@ -56,6 +62,39 @@
       --error-border: #b81848;   /* BRAND — hot rose */
       --error-text: #6a0a30;
     }
+
+
+    /* Dark theme (Chunk L layer 6): the same Rangrez warm ink, inverted. Values checked for contrast:
+       body text 12-13:1, secondary text >= 5.4:1, accent fill 4.9:1 under white text and 3.3:1 against
+       the panel, accent text 8:1. Applies with the OS setting unless Settings forces Light or Dark. */
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+      --gray-900: #f5efe2; --gray-800: #e8decb; --gray-700: #d6c7a8; --gray-600: #bfac88; --gray-500: #a8946f;
+      --gray-400: #5f5038; --gray-200: #3a3225; --gray-100: #14110c; --gray-50: #252017; --white: #1b1711;
+      --indigo-500: #4362f5; --indigo-600: #3651e0; --indigo-100: #28304d; --indigo-300: #5a6aa8;
+      --accent-text: #aebcff; --indigo-focus-ring: rgba(110, 140, 255, 0.35);
+      --success-bg: #17301f; --success-border: #4caf63; --success-text: #bfe8c8;
+      --loading-bg: #3a2a10; --loading-border: #d39a35; --loading-text: #f3d39a;
+      --error-bg: #3d1522; --error-border: #e0507a; --error-text: #f6c2d0;
+      color-scheme: dark;
+      }
+      :root:not([data-theme="light"]) .footer-nav { background: rgba(27, 23, 17, 0.92); }
+      :root:not([data-theme="light"]) .code-download-btn { background: rgba(27, 23, 17, 0.85); color: var(--gray-800); }
+      :root:not([data-theme="light"]) .attachment-chip .audio-name { background: rgba(27, 23, 17, 0.85); color: var(--gray-800); }
+    }
+    :root[data-theme="dark"] {
+      --gray-900: #f5efe2; --gray-800: #e8decb; --gray-700: #d6c7a8; --gray-600: #bfac88; --gray-500: #a8946f;
+      --gray-400: #5f5038; --gray-200: #3a3225; --gray-100: #14110c; --gray-50: #252017; --white: #1b1711;
+      --indigo-500: #4362f5; --indigo-600: #3651e0; --indigo-100: #28304d; --indigo-300: #5a6aa8;
+      --accent-text: #aebcff; --indigo-focus-ring: rgba(110, 140, 255, 0.35);
+      --success-bg: #17301f; --success-border: #4caf63; --success-text: #bfe8c8;
+      --loading-bg: #3a2a10; --loading-border: #d39a35; --loading-text: #f3d39a;
+      --error-bg: #3d1522; --error-border: #e0507a; --error-text: #f6c2d0;
+      color-scheme: dark;
+    }
+    :root[data-theme="dark"] .footer-nav { background: rgba(27, 23, 17, 0.92); }
+    :root[data-theme="dark"] .code-download-btn { background: rgba(27, 23, 17, 0.85); color: var(--gray-800); }
+    :root[data-theme="dark"] .attachment-chip .audio-name { background: rgba(27, 23, 17, 0.85); color: var(--gray-800); }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -119,7 +158,7 @@
 
     .help-btn:hover {
       border-color: var(--indigo-500);
-      color: var(--indigo-500);
+      color: var(--accent-text);
     }
 
     .install-btn {
@@ -127,7 +166,7 @@
       border-radius: 999px;
       border: 1.5px solid var(--indigo-500);
       background: var(--white);
-      color: var(--indigo-500);
+      color: var(--accent-text);
       font-size: 0.74rem;
       font-weight: 600;
       cursor: pointer;
@@ -190,7 +229,7 @@
     .help-tab:hover { color: var(--gray-700); }
 
     .help-tab.active {
-      color: var(--indigo-600);
+      color: var(--accent-text);
       border-bottom-color: var(--indigo-500);
     }
 
@@ -223,7 +262,7 @@
 
     .help-tab-content .help-note {
       font-size: 0.75rem;
-      color: var(--gray-400);
+      color: var(--gray-500);
       border-top: 1px solid var(--gray-200);
       padding-top: 8px;
       margin-top: 8px;
@@ -329,7 +368,7 @@
     /* Welcome message */
     .welcome {
       text-align: center;
-      color: var(--gray-400);
+      color: var(--gray-500);
       font-size: 0.88rem;
       margin: auto 0;
       padding: 40px 20px;
@@ -458,7 +497,7 @@
       margin-top: 6px;
       padding: 2px 8px;
       font-size: 0.68rem;
-      color: var(--gray-400);
+      color: var(--gray-500);
       border: 1px solid var(--gray-200);
       border-radius: 4px;
       background: none;
@@ -473,7 +512,7 @@
 
     /* 🔊 Read-aloud (Voice v1.0) */
     .speak-btn.tts-speaking {
-      color: var(--indigo-600);
+      color: var(--accent-text);
       border-color: var(--indigo-500);
     }
     .speak-btn:disabled { cursor: default; }
@@ -556,7 +595,7 @@
     .thinking-toggle {
       cursor: pointer;
       font-size: 0.75rem;
-      color: var(--indigo-500);
+      color: var(--accent-text);
       font-weight: 500;
       display: flex;
       align-items: center;
@@ -620,7 +659,7 @@
     .planner-toggle {
       cursor: pointer;
       font-size: 0.75rem;
-      color: var(--indigo-500);
+      color: var(--accent-text);
       font-weight: 500;
       display: flex;
       align-items: center;
@@ -680,7 +719,7 @@
     }
     .artifact-header strong {
       font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
-      color: var(--indigo-500);
+      color: var(--accent-text);
     }
     .artifact-frame {
       width: 100%;
@@ -751,7 +790,7 @@
       display: inline-block;
       margin-top: 4px;
       font-size: 0.72rem;
-      color: var(--indigo-500);
+      color: var(--accent-text);
       cursor: pointer;
       border: none;
       background: none;
@@ -956,11 +995,11 @@
 
     .input-bar textarea:disabled {
       background: var(--gray-100);
-      color: var(--gray-400);
+      color: var(--gray-500);
       cursor: not-allowed;
     }
 
-    .input-bar textarea::placeholder { color: var(--gray-400); }
+    .input-bar textarea::placeholder { color: var(--gray-500); }
 
     /* Input affordance buttons */
     .input-affordances {
@@ -990,7 +1029,7 @@
 
     .afford-btn:hover:not(:disabled) {
       border-color: var(--indigo-500);
-      color: var(--indigo-500);
+      color: var(--accent-text);
     }
 
     .afford-btn:disabled { opacity: 0.3; cursor: not-allowed; }
@@ -998,7 +1037,7 @@
     .afford-btn.active {
       background: var(--indigo-100);
       border-color: var(--indigo-500);
-      color: var(--indigo-600);
+      color: var(--accent-text);
     }
 
     .afford-btn.recording {
@@ -1066,7 +1105,7 @@
 
     .btn-icon.folder-open {
       background: var(--indigo-100);
-      color: var(--indigo-600);
+      color: var(--accent-text);
     }
 
     /* Model selector */
@@ -1179,7 +1218,7 @@
     .model-docs summary { cursor: pointer; font-size: 0.8rem; font-weight: 600; color: var(--gray-700); }
     .model-docs ul { margin: 8px 0 0 18px; font-size: 0.75rem; color: var(--gray-700); }
     .model-docs li { margin-bottom: 6px; }
-    .settings-tab-btn.active { background: var(--indigo-100); color: var(--indigo-600); font-weight: 600; }
+    .settings-tab-btn.active { background: var(--indigo-100); color: var(--accent-text); font-weight: 600; }
     .s-tab-hidden { display: none !important; }
     .mobile-tip { display: none; }
 
@@ -1194,7 +1233,7 @@
       font-size: 0.7rem;
       font-weight: 600;
       letter-spacing: 0.04em;
-      color: var(--indigo-600);
+      color: var(--accent-text);
       background: var(--indigo-100);
       border: 1px solid var(--indigo-500);
       border-radius: 10px;
@@ -1355,7 +1394,7 @@
       border-radius: 50%;
       border: 1.5px solid var(--indigo-400);
       background: var(--white);
-      color: var(--indigo-600);
+      color: var(--accent-text);
       font-size: 1rem;
       cursor: pointer;
       display: flex;
@@ -1402,7 +1441,7 @@
     }
 
     .source-links a {
-      color: var(--indigo-600);
+      color: var(--accent-text);
       text-decoration: none;
       display: block;
       margin-bottom: 2px;
@@ -1435,7 +1474,7 @@
 
     .memory-count {
       font-size: 0.72rem;
-      color: var(--gray-400);
+      color: var(--gray-500);
     }
 
     .memory-search-row {
@@ -1488,7 +1527,7 @@
     .memory-cat-pill.active {
       background: var(--indigo-100);
       border-color: var(--indigo-500);
-      color: var(--indigo-600);
+      color: var(--accent-text);
       font-weight: 600;
     }
 
@@ -1519,13 +1558,13 @@
     }
 
     .memory-source-count {
-      color: var(--gray-400);
+      color: var(--gray-500);
       flex-shrink: 0;
     }
 
     .memory-source-del {
       font-size: 0.68rem;
-      color: var(--gray-400);
+      color: var(--gray-500);
       background: none;
       border: 1px solid var(--gray-200);
       border-radius: 4px;
@@ -1566,13 +1605,13 @@
       flex-wrap: wrap;
       gap: 4px;
       font-size: 0.68rem;
-      color: var(--gray-400);
+      color: var(--gray-500);
       margin-top: 2px;
     }
 
     .memory-item-del {
       cursor: pointer;
-      color: var(--gray-400);
+      color: var(--gray-500);
       font-size: 0.8rem;
       padding: 0 4px;
       border: none;
@@ -1602,7 +1641,7 @@
 
     .memory-empty {
       text-align: center;
-      color: var(--gray-400);
+      color: var(--gray-500);
       font-size: 0.78rem;
       padding: 16px 0;
     }
@@ -1670,13 +1709,13 @@
 
     .history-item-meta {
       font-size: 0.68rem;
-      color: var(--gray-400);
+      color: var(--gray-500);
       margin-top: 1px;
     }
 
     .history-item-del {
       cursor: pointer;
-      color: var(--gray-400);
+      color: var(--gray-500);
       font-size: 0.8rem;
       padding: 0 4px;
       border: none;
@@ -1738,7 +1777,7 @@
       gap: 4px;
     }
 
-    .btn-danger-text { color: var(--gray-400); }
+    .btn-danger-text { color: var(--gray-500); }
     .btn-danger-text:hover { color: var(--error-border); }
 
     /* Camera overlay */
@@ -1807,9 +1846,9 @@
       background: var(--white); color: var(--gray-600); font-size: 0.74rem; font-weight: 600;
       cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s;
     }
-    .mode-chip:hover { border-color: var(--indigo-500); color: var(--indigo-500); }
+    .mode-chip:hover { border-color: var(--indigo-500); color: var(--accent-text); }
     .mode-chip.active { background: var(--indigo-500); color: #fff; border-color: var(--indigo-500); }
-    .mode-hint { font-size: 0.72rem; color: var(--gray-400); margin-left: 4px; }
+    .mode-hint { font-size: 0.72rem; color: var(--gray-500); margin-left: 4px; }
     /* Separates input modes (Search/Research/Compare/Batch) from on-device
        generation engines (Image/Diffuse) — different kinds of thing. */
     /* Model picker (Chunk L layer 2). #modelSelect stays the source of truth, hidden. */
@@ -1890,7 +1929,7 @@
     .gen-image { max-width: 100%; border-radius: 10px; display: block; }
     .gen-image-meta { font-size: 0.7rem; color: var(--gray-600); margin-top: 5px; font-family: ui-monospace, 'SF Mono', monospace; }
     .image-btn { font: inherit; font-size: 0.78rem; padding: 4px 12px; border: 1px solid var(--gray-200); border-radius: 9999px; background: var(--white); color: var(--gray-800); cursor: pointer; }
-    .image-btn:hover:not(:disabled) { border-color: var(--indigo-500); color: var(--indigo-500); }
+    .image-btn:hover:not(:disabled) { border-color: var(--indigo-500); color: var(--accent-text); }
     .image-btn:disabled { opacity: 0.45; cursor: not-allowed; }
     /* OCR mode — file-driven document recognition */
     .ocr-controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 8px; }
@@ -1899,7 +1938,7 @@
     .ocr-mode-btn + .ocr-mode-btn { border-left: 1px solid var(--gray-200); }
     .ocr-mode-btn.active { background: var(--indigo-500); color: #fff; }
     .ocr-dropzone { border: 1.5px dashed var(--gray-300); border-radius: 10px; padding: 16px; text-align: center; font-size: 0.8rem; color: var(--gray-500); cursor: pointer; transition: border-color .12s, background .12s; }
-    .ocr-dropzone:hover, .ocr-dropzone:focus-visible, .ocr-dropzone.dragover { border-color: var(--indigo-500); color: var(--indigo-500); background: rgba(8,24,74,0.04); outline: none; }
+    .ocr-dropzone:hover, .ocr-dropzone:focus-visible, .ocr-dropzone.dragover { border-color: var(--indigo-500); color: var(--accent-text); background: rgba(8,24,74,0.04); outline: none; }
     .ocr-selected { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 0.8rem; color: var(--gray-700); }
     .ocr-file-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
     .ocr-run-btn { background: var(--indigo-500); color: #fff; border-color: var(--indigo-500); }
@@ -1912,8 +1951,8 @@
     .ocr-live { color: var(--gray-500); }
     /* Diffuse mode — the "fog lifting" reveal */
     .fog { font-family: ui-monospace, 'SF Mono', monospace; font-size: 0.92rem; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
-    .fog .tok-mask { color: var(--gray-400); opacity: 0.5; }
-    .fog .tok-fresh { color: var(--indigo-500); background: rgba(8,24,74,0.10); border-radius: 3px; }
+    .fog .tok-mask { color: var(--gray-500); opacity: 0.5; }
+    .fog .tok-fresh { color: var(--accent-text); background: rgba(8,24,74,0.10); border-radius: 3px; }
 
     .batch-textarea {
       width: 100%;
@@ -2083,7 +2122,7 @@
     }
     .import-banner button {
       background: var(--white);
-      color: var(--indigo-600);
+      color: var(--accent-text);
       border: none;
       border-radius: 6px;
       padding: 5px 14px;
@@ -2124,7 +2163,7 @@
       align-items: center;
       justify-content: center;
       font-size: 0.9rem;
-      color: var(--indigo-500);
+      color: var(--accent-text);
       font-weight: 500;
       pointer-events: none;
     }
@@ -2167,7 +2206,7 @@
     }
 
     .footer-nav a {
-      color: #0366d6;
+      color: var(--accent-text);
       text-decoration: none;
       transition: opacity 0.2s;
     }
@@ -2441,7 +2480,7 @@
             <button type="button" class="try-prompt" data-prompt="Remember that I prefer metric units">Remember that I prefer metric units</button>
             <button type="button" class="try-prompt" data-prompt="Translate 'Good morning, how are you?' to Japanese, French, and Hindi">Translate &ldquo;Good morning&rdquo; into Japanese, French and Hindi</button>
           </div>
-          <p class="mobile-tip" style="font-size:0.8rem;color:var(--indigo-600);margin:10px auto 0;max-width:340px;padding:9px 12px;background:var(--indigo-100);border-radius:8px;line-height:1.5">&#128241; On a phone, big models won&rsquo;t fit. Point LocalMind at your computer&rsquo;s <strong>Ollama / LM&nbsp;Studio</strong> (Settings &rarr; Models &rarr; Local endpoint) and use any model over your network.</p>
+          <p class="mobile-tip" style="font-size:0.8rem;color:var(--accent-text);margin:10px auto 0;max-width:340px;padding:9px 12px;background:var(--indigo-100);border-radius:8px;line-height:1.5">&#128241; On a phone, big models won&rsquo;t fit. Point LocalMind at your computer&rsquo;s <strong>Ollama / LM&nbsp;Studio</strong> (Settings &rarr; Models &rarr; Local endpoint) and use any model over your network.</p>
         </div>
       </div>
 
@@ -2480,6 +2519,12 @@
           <button class="btn-icon settings-tab-btn" data-tab="data" type="button">Data</button>
         </div>
         <div class="settings-group" data-tab="general">
+        <label for="themeSelect">Appearance</label>
+        <select id="themeSelect" class="settings-select" style="margin-bottom:10px">
+          <option value="system">System (follows your device)</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
         <label for="systemPrompt">System prompt (optional)</label>
         <textarea id="systemPrompt" placeholder="e.g. You are a helpful coding assistant."></textarea>
         <label class="toggle-row hidden" id="thinkingRow">
@@ -9639,7 +9684,7 @@ self.addEventListener('message', async (e) => {
     const SYNC_DB = 'localmind_sync';
     // Non-secret settings to mirror — API keys (lm_search_key, lm_hf_token) deliberately excluded.
     const SYNC_SETTINGS_KEYS = ['lm_search_provider', 'lm_searxng_url', 'lm_planner_enabled',
-      'lm_resumable_downloads', 'lm_auto_backup', 'lm_sam_model', 'lm_voice_language', 'lm_api_enabled',
+      'lm_resumable_downloads', 'lm_auto_backup', 'lm_sam_model', 'lm_voice_language', 'lm_api_enabled', 'lm_theme',
       'lm_tts_voice', 'lm_tts_speed', 'lm_tts_autoplay', 'lm_auto_escalation',
       'lm_rag_rerank', 'lm_rag_rerank_model'];
 
@@ -10078,6 +10123,17 @@ self.addEventListener('message', async (e) => {
       }
     });
 
+    // ── Appearance: System / Light / Dark (Chunk L layer 6) ───
+    // A <head> script applies the stored choice before first paint; this keeps the select in step.
+    const themeSelect = document.getElementById('themeSelect');
+    try { themeSelect.value = localStorage.getItem('lm_theme') || 'system'; } catch { themeSelect.value = 'system'; }
+    themeSelect.addEventListener('change', () => {
+      const th = themeSelect.value;
+      if (th === 'light' || th === 'dark') document.documentElement.dataset.theme = th;
+      else delete document.documentElement.dataset.theme;
+      try { localStorage.setItem('lm_theme', th); } catch {}
+    });
+
     // ── Settings panel ──────────────────────────────────────────
     settingsBtn.addEventListener('click', () => {
       settingsPanel.classList.toggle('open');
@@ -10269,7 +10325,7 @@ self.addEventListener('message', async (e) => {
         html += '<div style="margin-top:6px;display:grid;grid-template-columns:1fr auto auto;gap:2px 10px;align-items:center">';
         rows.forEach((g, i) => {
           const name = g.label ? escapeHtml(g.label) : `<code style="font-size:0.68rem">${escapeHtml(g.repo)}</code>`;
-          const tag = g.retired ? ' <span style="color:var(--error-text)">retired</span>' : (g.label ? '' : ' <span style="color:var(--gray-400)">not in the picker</span>');
+          const tag = g.retired ? ' <span style="color:var(--error-text)">retired</span>' : (g.label ? '' : ' <span style="color:var(--gray-500)">not in the picker</span>');
           html += `<span title="${escapeHtml([...g.stores].join(', '))}">${name}${tag}</span><span>${fmtBytes(g.bytes)}</span><button class="btn-icon btn-danger-text" style="font-size:0.68rem" data-cache-row="${i}">Delete</button>`;
         });
         html += '</div>';
@@ -13171,7 +13227,7 @@ self.addEventListener('message', async (e) => {
         const header = document.createElement('div');
         header.className = 'artifact-header';
         const badge = document.createElement('span');
-        badge.innerHTML = 'Preview \u2014 <strong>' + escapeHtml(lang) + '</strong> <span style="color:var(--gray-400)">(sandboxed)</span>';
+        badge.innerHTML = 'Preview \u2014 <strong>' + escapeHtml(lang) + '</strong> <span style="color:var(--gray-500)">(sandboxed)</span>';
         header.appendChild(badge);
         const frame = document.createElement('iframe');
         frame.className = 'artifact-frame';
@@ -13256,7 +13312,7 @@ self.addEventListener('message', async (e) => {
         </div>`;
       }
 
-      if (!mainContent) return html || '<span style="color:var(--gray-400)">...</span>';
+      if (!mainContent) return html || '<span style="color:var(--gray-500)">...</span>';
 
       const cbNonce = Math.random().toString(36).slice(2, 12);
       mainContent = mainContent.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
@@ -17847,7 +17903,7 @@ self.addEventListener('message', async (e) => {
 
           if (traceContainer) {
             const stepLabel = document.createElement('div');
-            stepLabel.style.cssText = 'font-size:0.68rem;color:var(--gray-400);margin:6px 0 2px;font-weight:500';
+            stepLabel.style.cssText = 'font-size:0.68rem;color:var(--gray-500);margin:6px 0 2px;font-weight:500';
             const stepSuffix = turn.toolCalls.length > 1 ? ` \u00B7 Call ${tcIdx + 1}/${turn.toolCalls.length}` : '';
             stepLabel.textContent = `Step ${iter + 1}/${MAX_TOOL_ITERATIONS}${stepSuffix}`;
             traceContainer.appendChild(stepLabel);
@@ -18395,7 +18451,7 @@ self.addEventListener('message', async (e) => {
           linksDiv.innerHTML = sources.map(s => `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title || s.url)}</a>`).join('');
           bubble.appendChild(linksDiv);
         } else if (usedTools) {
-          badge.innerHTML = `<span class="msg-source-badge" style="background:rgba(102,126,234,0.1);color:var(--indigo-600)">Agent</span>`;
+          badge.innerHTML = `<span class="msg-source-badge" style="background:rgba(102,126,234,0.1);color:var(--accent-text)">Agent</span>`;
         } else {
           badge.innerHTML = `<span class="msg-source-badge on-device">On-device</span>`;
         }
@@ -18514,7 +18570,7 @@ self.addEventListener('message', async (e) => {
       const renderTrace = (status) => {
         bubble.innerHTML =
           '<div style="font-size:0.85rem">' +
-          '<div style="font-weight:600;color:var(--indigo-500);margin-bottom:6px">' + escapeHtml(status) + '</div>' +
+          '<div style="font-weight:600;color:var(--accent-text);margin-bottom:6px">' + escapeHtml(status) + '</div>' +
           (trace.length ? '<ul style="margin:0;padding-left:18px;color:var(--gray-700);line-height:1.7">' +
             trace.map(t => '<li>' + t + '</li>').join('') + '</ul>' : '') +
           '</div>';
@@ -18555,7 +18611,7 @@ self.addEventListener('message', async (e) => {
           renderTrace('Searching the web…');
           let results = [];
           try { results = await executeWebSearch(q); }
-          catch (e) { trace[trace.length - 1] += ' <span style="color:var(--gray-400)">· failed</span>'; renderTrace('Searching the web…'); continue; }
+          catch (e) { trace[trace.length - 1] += ' <span style="color:var(--gray-500)">· failed</span>'; renderTrace('Searching the web…'); continue; }
           let added = 0;
           for (const r of results) {
             if (added >= PER_QUERY || sources.length >= MAX_SOURCES) break;
@@ -18565,7 +18621,7 @@ self.addEventListener('message', async (e) => {
             added++;
           }
           trace[trace.length - 1] = '🔍 ' + escapeHtml(q) +
-            ' <span style="color:var(--gray-400)">· ' + added + ' result' + (added !== 1 ? 's' : '') + '</span>';
+            ' <span style="color:var(--gray-500)">· ' + added + ' result' + (added !== 1 ? 's' : '') + '</span>';
           renderTrace('Searching the web…');
         }
         if (sources.length === 0) {
@@ -20215,7 +20271,7 @@ self.addEventListener('message', async (e) => {
         cb.type = 'checkbox'; cb.value = key; cb.className = 'compare-cb';
         cb.addEventListener('change', onCompareSelectionChange);
         const span = document.createElement('span');
-        span.innerHTML = escapeHtml(mdl.label) + ' <span style="color:var(--gray-400)">· ' + escapeHtml(mdl.size) + (mdl.agentCapable ? '' : ' · no tools') + '</span>';
+        span.innerHTML = escapeHtml(mdl.label) + ' <span style="color:var(--gray-500)">· ' + escapeHtml(mdl.size) + (mdl.agentCapable ? '' : ' · no tools') + '</span>';
         lab.appendChild(cb); lab.appendChild(span);
         compareModelList.appendChild(lab);
       }
@@ -20261,10 +20317,10 @@ self.addEventListener('message', async (e) => {
         '<div style="border:1px solid ' + (accent ? 'var(--indigo-500)' : 'var(--gray-200)') +
         ';border-radius:8px;padding:8px 10px;margin-bottom:8px;background:' + (accent ? 'var(--indigo-100)' : 'var(--white)') + '">' +
         '<div style="font-weight:600;color:' + (accent ? 'var(--indigo-600)' : 'var(--gray-700)') + ';margin-bottom:4px">' + label + '</div>' +
-        '<div>' + (text ? renderMarkdown(text) : '<span style="color:var(--gray-400)">…</span>') + '</div></div>';
+        '<div>' + (text ? renderMarkdown(text) : '<span style="color:var(--gray-500)">…</span>') + '</div></div>';
       const render = (status, verdict) => {
         let html = '<div style="font-size:0.85rem">';
-        if (status) html += '<div style="font-weight:600;color:var(--indigo-500);margin-bottom:8px">' + escapeHtml(status) + '</div>';
+        if (status) html += '<div style="font-weight:600;color:var(--accent-text);margin-bottom:8px">' + escapeHtml(status) + '</div>';
         for (const a of answers) html += card(escapeHtml(a.label), a.text, false);
         if (verdict) html += card('⚖️ Judge · ' + escapeHtml(labelOf(activeModelKey)), verdict, true);
         html += '</div>';
