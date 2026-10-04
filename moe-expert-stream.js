@@ -20,8 +20,15 @@
  */
 
 export class ExpertStreamer {
-  constructor({ device, reader, recordBytes, recordOffset, parts, slots, numLayers, numExperts, maxStaging = 32, uploadRing = 16 }) {
-    Object.assign(this, { device, reader, recordBytes, recordOffset, parts, slots, numLayers, numExperts, maxStaging });
+  constructor({ device, reader, recordBytes, recordOffset, parts, slots, numLayers, numExperts, maxStaging = 32, uploadRing = 16, evict = 'lru', hotHalfLife = 8 }) {
+    Object.assign(this, { device, reader, recordBytes, recordOffset, parts, slots, numLayers, numExperts, maxStaging, evict });
+    // evict 'hot': drop the unpinned expert with the lowest decaying route count, oldest first
+    // on ties (llama.cpp PR #25294's policy). One tick per ensure() call, so the half-life is in
+    // tokens × layers. 'lru' (default): plain least recently used.
+    this.heat = new Float32Array(numLayers * numExperts);
+    this.heatTick = new Float64Array(numLayers * numExperts);
+    this.tick = 0;
+    this.decayPerTick = Math.pow(0.5, 1 / Math.max(1, hotHalfLife * numLayers));
     // Uploads go through a ring of mapped MAP_WRITE buffers + copyBufferToBuffer: measured
     // 2026-10-04 on an M4 Pro (Chrome 154) at 27.5 GB/s for 5 MB records with depth 4, against
     // 1.88 GB/s for queue.writeBuffer. uploadRing = 0 keeps writeBuffer (A/B measurement only).
@@ -59,8 +66,24 @@ export class ExpertStreamer {
   takeStaging() { return this.staging.pop() || new ArrayBuffer(this.recordBytes); }
   giveStaging(buf) { if (this.staging.length < this.maxStaging && buf.byteLength >= this.recordBytes) this.staging.push(buf); }
 
+  heatOf(key) { return this.heat[key] * Math.pow(this.decayPerTick, this.tick - this.heatTick[key]); }
+  touch(key) { this.heat[key] = this.heatOf(key) + 1; this.heatTick[key] = this.tick; }
+
   allocSlot() {
     if (this.free.length) return this.free.pop();
+    if (this.evict === 'hot') {
+      let bestK = -1, bestS = -1, bestH = Infinity;
+      for (const [k, s] of this.lru) {          // LRU order, so the first minimum is the oldest
+        if (this.pinCount[s] !== 0) continue;
+        const h = this.heatOf(k);
+        if (h < bestH) { bestH = h; bestK = k; bestS = s; }
+      }
+      if (bestS >= 0) {
+        this.lru.delete(bestK); this.prefetched.delete(bestK); this.slotKey[bestS] = -1; this.stats.evictions++;
+        return bestS;
+      }
+      throw new Error(`expert pool exhausted: all ${this.slots} slots pinned — raise the pool size`);
+    }
     for (const [k, s] of this.lru) {
       if (this.pinCount[s] === 0) {
         this.lru.delete(k);
@@ -133,11 +156,13 @@ export class ExpertStreamer {
   // Makes every expert in `ids` resident for `layer` and pins its slot. Returns the slots in
   // the same order as `ids`. The caller must release() them after submitting the GPU work.
   async ensure(layer, ids) {
+    this.tick++;
     const out = new Uint32Array(ids.length);
     const waits = [];
     const st = this.stats;
     for (let i = 0; i < ids.length; i++) {
       const key = this.key(layer, ids[i]);
+      this.touch(key);
       if (this.prefetched.delete(key)) st.prefetchUsed++;
       const s = this.lru.get(key);
       if (s !== undefined) {

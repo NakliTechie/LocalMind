@@ -92,6 +92,17 @@ writes.length = 0;
   assert.equal(xs.pinCount[s[0]], 0);
 }
 
+{ // evict 'hot': a frequently routed expert outlives a more recent one-off (LRU would drop it)
+  const xs = new ExpertStreamer({ device, reader, recordBytes: REC, recordOffset: (l, e) => (l * E + e) * REC, parts, slots: 3, numLayers: L, numExperts: E, uploadRing, evict: 'hot', hotHalfLife: 100 });
+  for (let i = 0; i < 4; i++) xs.release(await xs.ensure(0, [0]));   // expert 0: hot
+  xs.release(await xs.ensure(0, [1]));
+  xs.release(await xs.ensure(0, [2]));                                // LRU order now 0, 1, 2
+  xs.release(await xs.ensure(1, [5]));                                // must evict 1 (cold, oldest), not 0
+  assert.ok(xs.lru.has(xs.key(0, 0)), 'hot expert kept');
+  assert.ok(!xs.lru.has(xs.key(0, 1)), 'oldest cold expert evicted');
+  assert.ok(xs.lru.has(xs.key(0, 2)));
+}
+
 { // exhausted pool: demanding more experts than slots fails loudly
   const xs = mk(2);
   await assert.rejects(async () => xs.ensure(0, [0, 1, 2]), /pool exhausted/);

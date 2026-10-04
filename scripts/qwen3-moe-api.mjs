@@ -6,12 +6,12 @@ import { Qwen3MoeSsd, removeIngest } from '../qwen3_moe_ssd.js';
 export function makeApi(log = () => {}) {
   let m = null;
   const api = {
-    async load({ url, key, poolGB = 4, readers = 4, prefetch = false, maxCtx = 4096, reingest = false, uploadRing } = {}) {
+    async load({ url, key, poolGB = 4, readers = 4, prefetch = false, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife } = {}) {
       if (m) { await m.dispose(); m = null; }
       const t0 = performance.now();
       let last = 0;
       m = await Qwen3MoeSsd.load(null, {
-        url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing,
+        url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife,
         onProgress: (e) => {
           if (e.status === 'weights' && e.kind !== 'tensors' && performance.now() - last > 2000) { last = performance.now(); log({ ingest: e.loaded, total: e.total, secs: e.secs }); }
           else if (e.status === 'ingest-plan') log(e);
