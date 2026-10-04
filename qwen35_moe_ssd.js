@@ -355,6 +355,13 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     this.device.queue.writeBuffer(this.a.rope, 0, r);
   }
 
+  // Qwen3.5/3.6's template opens the reasoning block in the generation prompt when thinking is on.
+  chatPrompt(messages, { enableThinking = true } = {}) {
+    let p = '';
+    for (const m of messages) p += `<|im_start|>${m.role}\n${m.content}<|im_end|>\n`;
+    return p + '<|im_start|>assistant\n' + (enableThinking ? '<think>\n' : '<think>\n\n</think>\n\n');
+  }
+
   // The recurrent state cannot rewind to an earlier position, so any change before the cached
   // end restarts from token 0.
   reset() {

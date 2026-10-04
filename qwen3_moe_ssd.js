@@ -1111,7 +1111,7 @@ export class Qwen3MoeSsd {
   }
 
   async *generate(messages, { maxNewTokens = 512, signal, enableThinking = true } = {}) {
-    const ids = this.tokenizer.encode(chatPrompt(messages, { enableThinking }));
+    const ids = this.tokenizer.encode(this.chatPrompt(messages, { enableThinking }));
     const stops = new Set([this.cfg.eos, this.tokenizer.ids.get('<|im_end|>'), this.tokenizer.ids.get('<|endoftext|>')]);
     let next = await this.prefill(ids, 'argmax');
     const outIds = [];
@@ -1124,6 +1124,8 @@ export class Qwen3MoeSsd {
       next = await this.step(next, 'argmax');
     }
   }
+
+  chatPrompt(messages, opts) { return chatPrompt(messages, opts); }
 
   // Raw ids of the reasoning delimiters, for hosts that re-mark the thought block.
   get thinkOpenTokenId() { return this.tokenizer.ids.get('<think>') ?? null; }
