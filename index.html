@@ -2637,6 +2637,7 @@
               <li><strong>LFM2.5 230M &middot; GGUF</strong> (~170 MB) &mdash; the same LFM2.5 230M through wllama (llama.cpp &rarr; WebAssembly), reading a Q5_K_M GGUF. WebGPU when your browser has it, CPU otherwise, so it also runs where WebGPU is missing.</li>
               <li><strong>MiniCPM5 2B &middot; GGUF</strong> (~1.6 GB) &mdash; text + agent (tool calling). OpenBMB&rsquo;s MiniCPM5-2B (Sept 2026, Apache-2.0) loaded from its first-party GGUF through wllama (llama.cpp &rarr; WebAssembly) &mdash; there is no ONNX export, so this is the only way to run it in the tab. WebGPU when your browser has it, CPU otherwise. Gets <strong>16K context</strong>, twice the other GGUF models, because its 2 KV heads make the cache unusually cheap; its native 131K is capped since wllama reserves the whole cache up front. Long-document retrieval is what it is best at. It emits tool calls in its own XML format rather than the <code>&lt;tool_call&gt;</code> JSON the other models use; LocalMind parses both. Short-horizon tool use is its strength &mdash; don&rsquo;t expect long multi-step agent runs to hold up.</li>
               <li><strong>Qwen3.6 35B-A3B &middot; SSD-streamed (experimental)</strong> (~37 GB) &mdash; text, with reasoning. Alibaba's Qwen3.6-35B-A3B mixture-of-experts at Q8_0 (36.9 GB, more than most laptops' RAM) on a from-scratch WebGPU engine: the dense layers, router, KV cache and Gated-DeltaNet state stay on the GPU while the 10,240 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~37 GB of disk; a Hugging Face token in Settings speeds the download). About 9 tokens/s on an M4 Pro with 24 GB; prompts are read one token at a time for now. Greedy output matches llama.cpp. Flip <strong>Show reasoning</strong> for its chain-of-thought.</li>
+              <li><strong>Gemma 4 26B-A4B &middot; SSD-streamed (experimental)</strong> (~14 GB) &mdash; text, with reasoning. Google's Gemma 4 26B-A4B mixture-of-experts (128 experts, 8 active per token) from its official 4-bit QAT GGUF (14.4 GB) on the same from-scratch WebGPU engine family: attention, the dense MLP, routers and KV cache stay on the GPU (~1.6 GB plus a 4 GB expert pool) while the 3,840 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~14 GB of disk). About 20 tokens/s on an M4 Pro with 24 GB; prompts are read one token at a time for now. Greedy output matches llama.cpp. Flip <strong>Show reasoning</strong> for its thinking.</li>
             </ul>
           </details>
         </div>
@@ -2894,6 +2895,7 @@
           <option value="gemma4-e4b-webgpu">Gemma 4 E4B &middot; WebGPU kernels (~3.6 GB)</option>
           <option value="minicpm5-2b-gguf">MiniCPM5 2B &middot; GGUF (~1.6 GB)</option>
           <option value="qwen36-35b-a3b-ssd">Qwen3.6 35B-A3B &middot; SSD-streamed, experimental (~37 GB)</option>
+          <option value="gemma4-26b-a4b-ssd">Gemma 4 26B-A4B &middot; SSD-streamed, experimental (~14 GB)</option>
         </select>
         <!-- Model picker (Chunk L layer 2): renders #modelSelect's options grouped by what is
              already in this browser; picking sets the select's value and fires its change event. -->
@@ -8239,23 +8241,27 @@ async function attachDFlash() {
   post({ type: 'dflash', status: 'ready', block: DFLASH_BLOCK, drafterBytes: runner.dr.stats.weightBytes });
 }
   </script>
-  <!-- Qwen3.6-35B-A3B (Q8_0, ~37 GB) SSD-streamed custom-WGSL engine worker (qwen35_moe_ssd.js,
-       exporting `Qwen35MoeSsd`, built on qwen3_moe_ssd.js): larger than RAM. The dense weights,
-       routers, KV cache and Gated DeltaNet state stay on the GPU; the 10,240 routed experts stream
-       from OPFS into a GPU slot pool as the router picks them (moe-expert-stream.js +
-       opfs-reader.js). The first load ingests the GGUF into OPFS once, in the engine's layout.
-       Same shared chat protocol as the other engine workers. -->
-  <script type="text/worker" id="qwen35MoeSsdWorkerSrc">
-// The factory replaces __QWEN35_MOE_SSD_ENGINE_URL__ with the engine's absolute same-origin URL.
-const ENGINE_URL = '__QWEN35_MOE_SSD_ENGINE_URL__';
+  <!-- SSD-streamed MoE engine worker, one source for every custom-WGSL engine built on qwen3_moe_ssd.js:
+       Qwen3.6-35B-A3B (Q8_0, ~37 GB; qwen35_moe_ssd.js → Qwen35MoeSsd) and Gemma 4 26B-A4B (Q4_0, ~14 GB;
+       gemma4_moe_ssd.js → Gemma4MoeSsd). The dense weights, routers and KV cache stay on the GPU; the routed
+       experts stream from OPFS into a GPU slot pool as the router picks them (moe-expert-stream.js +
+       opfs-reader.js). The first load ingests the GGUF into OPFS once, in the engine's layout. The factory
+       (createMoeSsdWorker) injects the engine URL, its export and its display name. Same shared chat
+       protocol as the other engine workers. -->
+  <script type="text/worker" id="moeSsdWorkerSrc">
+// The factory replaces __MOE_SSD_ENGINE_URL__ (the engine's absolute same-origin URL), __MOE_SSD_EXPORT__
+// (its class) and __MOE_SSD_LABEL__ (the model's display name).
+const ENGINE_URL = '__MOE_SSD_ENGINE_URL__';
+const ENGINE_EXPORT = '__MOE_SSD_EXPORT__';
+const MODEL_NAME = '__MOE_SSD_LABEL__';
 
-let Qwen35MoeSsd = null;
+let Engine = null;
 let model = null;
 let abortController = null;
 let stopFlag = false;
 let lastHistoryLen = 0; // tracks conversation length to restart the state on a fresh chat
 
-const WEIGHTS_LABEL = 'Qwen3.6 35B-A3B (Q8_0) into on-device storage';
+const WEIGHTS_LABEL = `${MODEL_NAME} into on-device storage`;
 const post = (m) => self.postMessage(m);
 // The hidden-tab rAF shim, `hfToken` and `engineFetch` come from the shared
 // prelude (#engineWorkerPreludeSrc) that the factory prepends to this source.
@@ -8264,12 +8270,12 @@ self.onmessage = async (e) => {
   const d = e.data || {};
   try {
     if (d.type === 'load') {
-      if (!Qwen35MoeSsd) ({ Qwen35MoeSsd } = await import(ENGINE_URL));
+      if (!Engine) Engine = (await import(ENGINE_URL))[ENGINE_EXPORT];
       hfToken = (typeof d.hfToken === 'string' && d.hfToken.trim()) || null;
       post({ type: 'progress', data: { status: 'initiate', file: WEIGHTS_LABEL } });
-      // The first load streams the 36.9 GB GGUF once into OPFS (localmind-ssd/<file>/); later
-      // loads read only the ~2.7 GB dense part from OPFS. contextSize sizes the f16 KV cache.
-      model = await Qwen35MoeSsd.load(null, {
+      // The first load streams the GGUF once into OPFS (localmind-ssd/<file>/); later loads read
+      // only the dense part from OPFS. contextSize sizes the f16 KV cache.
+      model = await Engine.load(null, {
         fetch: engineFetch,
         maxCtx: d.contextSize > 0 ? d.contextSize : undefined,
         onProgress: (ev) => {
@@ -8289,14 +8295,16 @@ self.onmessage = async (e) => {
       lastHistoryLen = 0;
       post({ type: 'ready', backend: 'webgpu' });
     } else if (d.type === 'generate') {
-      if (!model) { post({ type: 'error', message: 'Qwen3.6 35B-A3B model not loaded' }); return; }
+      if (!model) { post({ type: 'error', message: `${MODEL_NAME} model not loaded` }); return; }
       stopFlag = false;
       const cfg = d.generationConfig || {};
-      // "Show reasoning" toggle. With thinking on, Qwen3.6's template opens <think> in the
-      // prompt, so the reply starts inside the thought: open LocalMind's <|think|> marker
-      // first and close it on the </think> token (whose literal text is dropped).
+      // "Show reasoning" toggle. With thinking on, Qwen3.6's template opens <think> in the prompt, so
+      // the reply starts inside the thought: open LocalMind's <|think|> marker first. Gemma 4 opens its
+      // own thought channel (<|channel>thought\n … ; the engine's thinkInPrompt is false and
+      // thinkPreamble names the text to drop). Either way the close token ends it and its literal
+      // text is dropped.
       const wantThink = d.enableThinking === true;
-      // Qwen3.6 has a real system role; the engine applies the chat template itself.
+      // Both models have a real system role; the engine applies the chat template itself.
       const msgs = (d.messages || []).map((m) => {
         const content = typeof m.content === 'string' ? m.content
           : Array.isArray(m.content) ? m.content.filter((b) => b && b.type === 'text').map((b) => b.text).join('\n')
@@ -8309,10 +8317,10 @@ self.onmessage = async (e) => {
       }
       lastHistoryLen = msgs.length;
       abortController = new AbortController();
-      const close = model.thinkCloseTokenId;
-      let inThink = wantThink;
+      const open = model.thinkOpenTokenId, close = model.thinkCloseTokenId;
+      let inThink = wantThink && model.thinkInPrompt !== false;
       if (inThink) post({ type: 'token', token: '<|think|>' });
-      let prev = '';
+      let prev = '', skip = '';
       try {
         const stream = model.generate(msgs, {
           maxNewTokens: cfg.max_new_tokens || cfg.max_tokens || 1024,
@@ -8322,9 +8330,15 @@ self.onmessage = async (e) => {
         for await (const out of stream) {
           if (stopFlag) break;
           const full = out && typeof out.text === 'string' ? out.text : '';
-          const delta = full.length > prev.length ? full.slice(prev.length) : '';
+          let delta = full.length > prev.length ? full.slice(prev.length) : '';
           prev = full;
+          if (!inThink && open != null && out && out.token === open) { post({ type: 'token', token: '<|think|>' }); inThink = true; skip = model.thinkPreamble || ''; continue; }
           if (inThink && out && out.token === close) { post({ type: 'token', token: '<|/think|>\n' }); inThink = false; continue; }
+          if (skip && delta) {
+            if (delta.startsWith(skip)) { delta = delta.slice(skip.length); skip = ''; }
+            else if (skip.startsWith(delta)) { skip = skip.slice(delta.length); delta = ''; }
+            else skip = '';
+          }
           if (delta) post({ type: 'token', token: delta });
         }
       } catch (err) {
@@ -8889,6 +8903,23 @@ self.addEventListener('message', async (e) => {
         multimodal: false,
         agentCapable: false,
         thinking: true,   // Qwen3.6 reasoning model — shows the "Show reasoning" toggle
+        contextSize: 4096,
+        genConfig: { max_new_tokens: 1024 },
+      },
+      // backend:'gemma4moe-ssd' → the custom-WGSL Gemma4MoeSsd engine (gemma4_moe_ssd.js, on the same base
+      // as Qwen3.6's): Gemma 4 26B-A4B from Google's QAT Q4_0 GGUF (14.4 GB, not gated). Attention, the dense
+      // MLP, routers and KV stay on the GPU (~1.6 GB + a 4 GB expert pool); the 3,840 routed experts (3.3 MB
+      // each) stream from OPFS. Experimental: rung 2c of the SSD-streaming ladder, ~20 tok/s decode on an
+      // M4 Pro, prompts read one token at a time. Greedy output matches llama.cpp Metal 8/8 on the full model.
+      'gemma4-26b-a4b-ssd': {
+        id: 'google/gemma-4-26B-A4B-it-qat-q4_0-gguf',
+        label: 'Gemma 4 26B-A4B · SSD-streamed (experimental)',
+        backend: 'gemma4moe-ssd',
+        size: '~14 GB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: false,
+        thinking: true,   // Gemma 4 thinks in a <|channel>thought … <channel|> block when asked
         contextSize: 4096,
         genConfig: { max_new_tokens: 1024 },
       },
@@ -9576,6 +9607,7 @@ self.addEventListener('message', async (e) => {
       'qwen35-4b': 'qwen',
       'ternary-bonsai-2-27b-webgpu': 'qwen',
       'qwen36-35b-a3b-ssd': 'qwen',
+      'gemma4-26b-a4b-ssd': 'gemma',
       'bonsai-ternary-4b': 'bonsai4b',
       'lfm2-1.2b': 'lfm2',
       'lfm2-230m-gguf': 'lfm2',
@@ -14517,11 +14549,11 @@ ${JSON.stringify({ name, result })}
         const isLfm2Webgpu = options.backend === 'lfm2-webgpu';
         const isGemma4Webgpu = options.backend === 'gemma4-webgpu';
         const isBonsai2Webgpu = options.backend === 'bonsai2-webgpu';
-        const isQwen35MoeSsd = options.backend === 'qwen35moe-ssd';
+        const moeSsd = moeSsdEngine(options.backend);
         const w = isLfm2Webgpu ? createLfm2WebgpuWorker()
           : isGemma4Webgpu ? createGemma4WebgpuWorker()
           : isBonsai2Webgpu ? createTernaryBonsai2WebgpuWorker()
-          : isQwen35MoeSsd ? createQwen35MoeSsdWorker()
+          : moeSsd ? createMoeSsdWorker(moeSsd)
           : isWllama ? createWllamaWorker()
           : createWorker();
         this._worker = w;
@@ -14557,7 +14589,7 @@ ${JSON.stringify({ name, result })}
             cleanup();
             reject(new Error(ev.message || 'Worker startup failed'));
           });
-          if (isWllama || isLfm2Webgpu || isGemma4Webgpu || isBonsai2Webgpu || isQwen35MoeSsd) {
+          if (isWllama || isLfm2Webgpu || isGemma4Webgpu || isBonsai2Webgpu || moeSsd) {
             // The LFM2/Gemma engines ignore contextSize (they read it from the
             // model metadata); the Bonsai 2 worker passes it to the engine as
             // maxLength. The shared load message shape is harmless either way.
@@ -15462,19 +15494,28 @@ self.addEventListener('message', async (e) => {
       return code;
     }
 
-    // ── Qwen3.6 35B-A3B SSD-streamed worker factory (custom-WGSL Qwen35MoeSsd engine) ──
-    // Twin of createGemma4WebgpuWorker(): prepends the shared prelude, reads #qwen35MoeSsdWorkerSrc,
-    // injects qwen35_moe_ssd.js's absolute same-origin URL (its siblings qwen3_moe_ssd.js,
-    // opfs-reader.js and moe-expert-stream.js resolve relative to it) and builds a blob module worker.
-    function createQwen35MoeSsdWorker() {
-      const src = document.getElementById('qwen35MoeSsdWorkerSrc');
+    // ── SSD-streamed MoE worker factory (custom-WGSL engines on qwen3_moe_ssd.js) ──
+    // Twin of createGemma4WebgpuWorker(): prepends the shared prelude, reads #moeSsdWorkerSrc, injects the
+    // engine's absolute same-origin URL (its siblings qwen3_moe_ssd.js, opfs-reader.js and
+    // moe-expert-stream.js resolve relative to it), its export name and display name, and builds a blob
+    // module worker. One worker source serves every engine moeSsdEngine() names (a function, so it is
+    // hoisted: a model load at boot can reach it before this line runs).
+    function moeSsdEngine(backend) {
+      return ({
+        'qwen35moe-ssd': { engine: 'qwen35_moe_ssd.js', exportName: 'Qwen35MoeSsd', label: 'Qwen3.6 35B-A3B (Q8_0)' },
+        'gemma4moe-ssd': { engine: 'gemma4_moe_ssd.js', exportName: 'Gemma4MoeSsd', label: 'Gemma 4 26B-A4B (Q4_0)' },
+      })[backend] || null;
+    }
+    function createMoeSsdWorker({ engine, exportName, label }) {
+      const src = document.getElementById('moeSsdWorkerSrc');
       let code = src ? src.textContent : '';
-      if (!code) throw new Error('Qwen3.6 35B-A3B worker source missing');
-      const engineUrl = new URL('qwen35_moe_ssd.js', document.baseURI).href;
-      code = engineWorkerPrelude() + code.replaceAll('__QWEN35_MOE_SSD_ENGINE_URL__', engineUrl);
+      if (!code) throw new Error(`${label} worker source missing`);
+      const engineUrl = new URL(engine, document.baseURI).href;
+      code = engineWorkerPrelude() + code.replaceAll('__MOE_SSD_ENGINE_URL__', engineUrl)
+        .replaceAll('__MOE_SSD_EXPORT__', exportName).replaceAll('__MOE_SSD_LABEL__', label);
       const blob = new Blob([code], { type: 'application/javascript' });
       const w = new Worker(URL.createObjectURL(blob), { type: 'module' });
-      w.addEventListener('error', (e) => { console.error('Qwen3.6 35B-A3B worker error:', e.message); });
+      w.addEventListener('error', (e) => { console.error(`${label} worker error:`, e.message); });
       return w;
     }
 
@@ -17007,7 +17048,7 @@ self.addEventListener('message', async (e) => {
     const ENGINE_STORES = {
       'transformers': ['transformers-cache'], 'wllama': ['wllama'], 'lfm2-webgpu': ['gguf-v1'],
       'bonsai2-webgpu': ['gguf-cache-v1'], 'gemma4-webgpu': ['safetensors-cache-v1', 'bonsai-pipeline-v1'],
-      'qwen35moe-ssd': ['on disk (OPFS)'],
+      'qwen35moe-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'],
     };
     function parseSizeBytes(size) {
       const m = /([\d.]+)\s*(GB|MB)/i.exec(String(size || ''));

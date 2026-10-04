@@ -116,9 +116,116 @@ export const GEMMA4_INGEST_PLAN = { layout: planLayoutGemma4, units: planUnitsGe
 export const GEMMA4_26B_A4B = {
   repo: 'google/gemma-4-26B-A4B-it-qat-q4_0-gguf',
   file: 'gemma-4-26B_q4_0-it.gguf',
-  revision: 'main',
+  revision: 'd1c082be9cf3c8a514acf63b8761f4b41935842e',
+  sha256: '3eca3b8f6d7baf218a7dd6bba5fb59a56ee25fe2d567b6f5f589b4f697eca51d',
   size: 14439363584,
 };
+
+// The GGUF's chat template (text turns): <bos>, a system turn when there is a system message or thinking is on
+// (<|think|> first), then <|turn>user|model … <turn|> per message, and the model turn opened. With thinking off
+// the model turn starts with an empty thought channel. Earlier model turns lose their thought channels.
+const stripThinking = (t) => t.split('<channel|>').map((p) => (p.includes('<|channel>') ? p.split('<|channel>')[0] : p)).join('').trim();
+export function gemmaChatPrompt(messages, { enableThinking = false } = {}) {
+  let s = '<bos>', msgs = messages;
+  const sys = msgs.length && msgs[0].role === 'system' ? String(msgs[0].content).trim() : null;
+  if (enableThinking || sys !== null) {
+    s += '<|turn>system\n' + (enableThinking ? '<|think|>\n' : '') + (sys ?? '') + '<turn|>\n';
+    if (sys !== null) msgs = msgs.slice(1);
+  }
+  for (const m of msgs) {
+    const role = m.role === 'assistant' ? 'model' : m.role;
+    s += `<|turn>${role}\n${role === 'model' ? stripThinking(String(m.content)) : String(m.content).trim()}<turn|>\n`;
+  }
+  return s + '<|turn>model\n' + (enableThinking ? '' : '<|channel>thought\n<channel|>');
+}
+
+// ── Tokenizer: SentencePiece-style BPE (GGUF tokenizer.ggml.model = gemma4) ──
+// As llama.cpp's LLAMA_VOCAB_PRE_TYPE_GEMMA4: spaces become ▁, the text splits only into runs of newlines and
+// runs of everything else, merges run on raw UTF-8 characters in rank order (leftmost first on equal ranks),
+// and a run made only of newlines that is itself a token stays whole. A character with no token falls back
+// to <0xXX> byte tokens (SentencePiece byte fallback; llama.cpp drops it instead).
+export class GemmaTokenizer {
+  constructor(kv) {
+    this.tokens = kv['tokenizer.ggml.tokens'];
+    const types = kv['tokenizer.ggml.token_type'] || [];
+    const n = this.tokens.length;
+    // Three strings appear twice in the vocab ('#', '//', '<?'); llama.cpp's map keeps the later id.
+    this.ids = new Map();
+    for (let i = 0; i < n; i++) this.ids.set(this.tokens[i], i);
+    this.ranks = new Map((kv['tokenizer.ggml.merges'] || []).map((m, i) => [m, i]));
+    this.isSpecial = new Uint8Array(n); this.byteOf = new Int16Array(n).fill(-1); this.byteTok = new Int32Array(256).fill(-1);
+    const special = [];
+    for (let i = 0; i < n; i++) {
+      if (types[i] === 3 || types[i] === 4) { special.push(this.tokens[i]); this.isSpecial[i] = 1; }
+      const m = types[i] === 6 && /^<0x([0-9A-Fa-f]{2})>$/.exec(this.tokens[i]);
+      if (m) { const b = parseInt(m[1], 16); this.byteOf[i] = b; this.byteTok[b] = i; }
+    }
+    special.sort((a, b) => b.length - a.length);
+    const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    this.specialRe = special.length ? new RegExp(`(${special.map(esc).join('|')})`) : null;
+    this.utf8 = new TextEncoder();
+  }
+  encode(text, { parseSpecial = true } = {}) {
+    const out = [];
+    const pieces = parseSpecial && this.specialRe ? text.split(this.specialRe) : [text];
+    for (let i = 0; i < pieces.length; i++) {
+      const piece = pieces[i];
+      if (!piece) continue;
+      if (parseSpecial && i % 2 === 1) { out.push(this.ids.get(piece)); continue; }
+      for (const [run] of piece.replaceAll(' ', '▁').matchAll(/[^\n]+|\n+/g)) {
+        const whole = run[0] === '\n' ? this.ids.get(run) : undefined;
+        if (whole !== undefined) out.push(whole); else this.bpe(run, out);
+      }
+    }
+    return out;
+  }
+  // Rank-ordered merges over a linked list of symbols, with a binary heap of candidate pairs.
+  bpe(word, out) {
+    const text = Array.from(word), n = text.length;
+    const prev = Int32Array.from({ length: n }, (_, i) => i - 1), next = Int32Array.from({ length: n }, (_, i) => (i + 1 < n ? i + 1 : -1));
+    const heap = [];
+    const less = (a, b) => a.rank < b.rank || (a.rank === b.rank && a.left < b.left);
+    const push = (e) => { heap.push(e); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (!less(heap[i], heap[p])) break; [heap[i], heap[p]] = [heap[p], heap[i]]; i = p; } };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && less(heap[l], heap[m])) m = l; if (r < heap.length && less(heap[r], heap[m])) m = r; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } }
+      return top;
+    };
+    const pair = (left, right) => {
+      if (left < 0 || right < 0) return;
+      const t = text[left] + text[right], rank = this.ranks.get(text[left] + ' ' + text[right]);
+      if (rank !== undefined) push({ rank, left, right, t });
+    };
+    for (let i = 1; i < n; i++) pair(i - 1, i);
+    while (heap.length) {
+      const b = pop();
+      if (!text[b.left] || !text[b.right] || text[b.left] + text[b.right] !== b.t) continue;
+      text[b.left] = b.t; text[b.right] = '';
+      next[b.left] = next[b.right];
+      if (next[b.right] >= 0) prev[next[b.right]] = b.left;
+      pair(prev[b.left], b.left);
+      pair(b.left, next[b.left]);
+    }
+    for (let i = 0; i >= 0 && i < n; i = next[i]) {
+      if (!text[i]) continue;
+      const id = this.ids.get(text[i]);
+      if (id !== undefined) { out.push(id); continue; }
+      for (const byte of this.utf8.encode(text[i])) if (this.byteTok[byte] >= 0) out.push(this.byteTok[byte]);
+    }
+    return out;
+  }
+  tokenBytes(id) {
+    if (this.byteOf[id] >= 0) return Uint8Array.of(this.byteOf[id]);
+    const t = this.tokens[id];
+    return this.utf8.encode(this.isSpecial[id] ? t : t.replaceAll('▁', ' '));
+  }
+  decode(ids) {
+    const chunks = ids.map((id) => this.tokenBytes(id));
+    const all = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
+    let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
+    return new TextDecoder().decode(all);
+  }
+}
 
 // ── WGSL ────────────────────────────────────────────────────────────────────
 // Q4_0 as two planes (ingest's splitQ4): nibbles, 16 bytes per 32 values (byte j holds values j and j + 16),
@@ -432,7 +539,16 @@ struct P { n: u32, off: u32 }
 export class Gemma4MoeSsd extends Qwen3MoeSsd {
   static configFrom(kv) { return configFromGgufGemma4(kv); }
   static get ingestPlan() { return GEMMA4_INGEST_PLAN; }
+  static tokenizerFrom(kv) { return new GemmaTokenizer(kv); }
   static load(modelId, opts = {}) { return super.load(modelId, { ...opts, source: opts.source || GEMMA4_26B_A4B }); }
+
+  chatPrompt(messages, opts) { return gemmaChatPrompt(messages, opts); }
+  get stopTokenIds() { return [this.cfg.eos, this.tokenizer.ids.get('<turn|>')].filter((t) => t !== undefined); }
+  // Thinking: the model writes <|channel>thought\n … <channel|> itself (nothing opens it in the prompt).
+  get thinkOpenTokenId() { return this.tokenizer.ids.get('<|channel>') ?? null; }
+  get thinkCloseTokenId() { return this.tokenizer.ids.get('<channel|>') ?? null; }
+  get thinkInPrompt() { return false; }
+  get thinkPreamble() { return 'thought\n'; }
 
   get kernels() { return (this._kernels ||= { ...super.kernels, ...G4 }); }
 

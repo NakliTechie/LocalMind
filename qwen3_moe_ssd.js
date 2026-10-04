@@ -722,9 +722,10 @@ export const STORAGE = 0x80, COPY_SRC = 0x04, COPY_DST = 0x08, UNIFORM = 0x40, M
 
 // ── Engine ──────────────────────────────────────────────────────────────────
 export class Qwen3MoeSsd {
-  // A subclass for another architecture overrides these two (gemma4_moe_ssd.js).
+  // A subclass for another architecture overrides these (gemma4_moe_ssd.js).
   static configFrom(kv) { return configFromGguf(kv); }
   static get ingestPlan() { return undefined; }
+  static tokenizerFrom(kv) { return new BpeTokenizer(kv); }
 
   static async load(modelId = QWEN3_30B_A3B.repo, opts = {}) {
     const { fetch: fetchFn = (u, i) => fetch(u, i), onProgress = () => {}, signal } = opts;
@@ -768,7 +769,7 @@ export class Qwen3MoeSsd {
     this.device = device;
     this.manifest = manifest;
     this.cfg = this.constructor.configFrom(gguf.kv);
-    this.tokenizer = new BpeTokenizer(gguf.kv);
+    this.tokenizer = this.constructor.tokenizerFrom(gguf.kv);
     this.opts = opts;
     this.maxCtx = Math.min(opts.maxCtx || 4096, this.cfg.contextLength);
     this.gpuBytes = { dense: 0, pool: 0, kv: 0, act: 0 };
@@ -1143,7 +1144,7 @@ export class Qwen3MoeSsd {
 
   async *generate(messages, { maxNewTokens = 512, signal, enableThinking = true } = {}) {
     const ids = this.tokenizer.encode(this.chatPrompt(messages, { enableThinking }));
-    const stops = new Set([this.cfg.eos, this.tokenizer.ids.get('<|im_end|>'), this.tokenizer.ids.get('<|endoftext|>')]);
+    const stops = new Set(this.stopTokenIds);
     let next = await this.prefill(ids, 'argmax');
     const outIds = [];
     for (let i = 0; i < maxNewTokens; i++) {
@@ -1157,6 +1158,7 @@ export class Qwen3MoeSsd {
   }
 
   chatPrompt(messages, opts) { return chatPrompt(messages, opts); }
+  get stopTokenIds() { return [this.cfg.eos, this.tokenizer.ids.get('<|im_end|>'), this.tokenizer.ids.get('<|endoftext|>')].filter((t) => t !== undefined); }
 
   // Raw ids of the reasoning delimiters, for hosts that re-mark the thought block.
   get thinkOpenTokenId() { return this.tokenizer.ids.get('<think>') ?? null; }
