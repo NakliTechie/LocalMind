@@ -240,19 +240,24 @@ fn q4dot(wd: u32, d: f32, xb: u32) -> f32 {
          + (f32((wd >> 20u) & 15u) - 8.0) * xin[xb + 18u] + (f32((wd >> 28u) & 15u) - 8.0) * xin[xb + 19u];
   return d * (lo + hi);
 }`;
-// Q6_K (ggml block_q6_K, 210 bytes per 256 values: ql[128], qh[64], int8 scales[16], f16 d), read in place
-// from the GGUF bytes. Value t of the block at byte `blk`, exactly as dequantize_row_q6_K forms it.
-const Q6K = `
-fn byteAt(i: u32) -> u32 { return (qk[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu; }
-fn q6k(blk: u32, t: u32) -> f32 {
+// Q6_K (ggml block_q6_K: ql[128], qh[64], int8 scales[16], f16 d per 256 values). The GGUF's 210-byte blocks
+// sit at 2-byte alignment, so at load q6kPlanes splits the table on the GPU into aligned planes: ql (32 words
+// per block), qh (16), scales (4) and d as f32. q6v reads value t of block bi exactly as dequantize_row_q6_K
+// forms it: (d · scale) · (q − 32).
+const Q6P = `
+@group(0) @binding(0) var<storage, read> ql: array<u32>;
+@group(0) @binding(1) var<storage, read> qh: array<u32>;
+@group(0) @binding(2) var<storage, read> sc: array<u32>;
+@group(0) @binding(3) var<storage, read> dd: array<f32>;
+fn sc8(bi: u32, si: u32) -> f32 { let s8 = (sc[bi * 4u + (si >> 2u)] >> ((si & 3u) * 8u)) & 0xffu; return f32(select(i32(s8), i32(s8) - 256, s8 >= 128u)); }
+fn q6v(bi: u32, t: u32) -> f32 {
   let n = t >> 7u; let r = t & 127u; let qd = r >> 5u; let l = r & 31u;
-  let lo = byteAt(blk + n * 64u + l + (qd & 1u) * 32u);
+  let qb = n * 64u + l + (qd & 1u) * 32u;
+  let lo = (ql[bi * 32u + (qb >> 2u)] >> ((qb & 3u) * 8u)) & 0xffu;
   let q4 = select(lo & 15u, lo >> 4u, qd >= 2u);
-  let h = (byteAt(blk + 128u + n * 32u + l) >> (qd * 2u)) & 3u;
-  let s8 = byteAt(blk + 192u + n * 8u + (l >> 4u) + qd * 2u);
-  let sc = f32(select(i32(s8), i32(s8) - 256, s8 >= 128u));
-  let d = unpack2x16float(byteAt(blk + 208u) | (byteAt(blk + 209u) << 8u)).x;
-  return d * sc * f32(i32(q4 | (h << 4u)) - 32);
+  let hb = n * 32u + l;
+  let h = (qh[bi * 16u + (hb >> 2u)] >> ((hb & 3u) * 8u + qd * 2u)) & 3u;
+  return dd[bi] * sc8(bi, n * 8u + (l >> 4u) + qd * 2u) * f32(i32(q4 | (h << 4u)) - 32);
 }`;
 // tanh with its argument clamped: tanh(±10) is ±1 in f32, and a naive exp-based tanh would give NaN past ~44.
 const TANH = 'fn tanhc(a: f32) -> f32 { return tanh(clamp(a, -10.0, 10.0)); }';
@@ -262,43 +267,60 @@ fn gelu(x: f32) -> f32 { return 0.5 * x * (1.0 + tanhc(0.7978845608 * x * (1.0 +
 const WIN = 'fn winStart(n: u32, win: u32) -> u32 { return select(0u, n - win, win > 0u && n > win); }';
 
 const G4 = {
+  // The GGUF's Q6_K bytes (raw) → aligned planes; one thread per block.
+  q6kPlanes: `
+struct P { blocks: u32 }
+@group(0) @binding(0) var<storage, read> raw: array<u32>;
+@group(0) @binding(1) var<storage, read_write> ql: array<u32>;
+@group(0) @binding(2) var<storage, read_write> qh: array<u32>;
+@group(0) @binding(3) var<storage, read_write> sc: array<u32>;
+@group(0) @binding(4) var<storage, read_write> dd: array<f32>;
+@group(0) @binding(5) var<uniform> p: P;
+fn byteAt(i: u32) -> u32 { return (raw[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu; }
+fn wordAt(i: u32) -> u32 { return byteAt(i) | (byteAt(i + 1u) << 8u) | (byteAt(i + 2u) << 16u) | (byteAt(i + 3u) << 24u); }
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>) {
+  let b = g.y * ng.x * 256u + g.x; if (b >= p.blocks) { return; }
+  let o = b * 210u;
+  for (var i = 0u; i < 32u; i++) { ql[b * 32u + i] = wordAt(o + 4u * i); }
+  for (var i = 0u; i < 16u; i++) { qh[b * 16u + i] = wordAt(o + 128u + 4u * i); }
+  for (var i = 0u; i < 4u; i++) { sc[b * 4u + i] = wordAt(o + 192u + 4u * i); }
+  dd[b] = unpack2x16float(byteAt(o + 208u) | (byteAt(o + 209u) << 8u)).x;
+}`,
   embedQ6K: `
 ${TOK}
-struct P { n: u32, rowBytes: u32, scale: f32 }
-@group(0) @binding(0) var<storage, read> qk: array<u32>;
-@group(0) @binding(1) var<storage, read_write> y: array<f32>;
-@group(0) @binding(2) var<uniform> tok: Tok;
-@group(0) @binding(3) var<uniform> p: P;
-${Q6K}
+struct P { n: u32, nb: u32, scale: f32 }
+${Q6P}
+@group(0) @binding(4) var<storage, read_write> y: array<f32>;
+@group(0) @binding(5) var<uniform> tok: Tok;
+@group(0) @binding(6) var<uniform> p: P;
 @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
   let i = g.x; if (i >= p.n) { return; }
-  y[i] = q6k(tok.token * p.rowBytes + (i >> 8u) * 210u, i & 255u) * p.scale;
+  y[i] = q6v(tok.token * p.nb + (i >> 8u), i & 255u) * p.scale;
 }`,
-  // Logits over the Q6_K table, 4 rows per workgroup; thread t takes value t of every block.
+  // Logits over the Q6_K planes: 4 rows per 256-thread workgroup, 64 threads per row; thread j takes quad j
+  // (4 consecutive values: one ql word, one qh word, one scale) of every block of the row.
   matmulQ6K: `
 struct P { M: u32, N: u32 }
-@group(0) @binding(0) var<storage, read> x: array<f32>;
-@group(0) @binding(1) var<storage, read> qk: array<u32>;
-@group(0) @binding(2) var<storage, read_write> y: array<f32>;
-@group(0) @binding(3) var<uniform> p: P;
-${Q6K}
-var<workgroup> part: array<f32, 1024>;
+${Q6P}
+@group(0) @binding(4) var<storage, read> x: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read_write> y: array<f32>;
+@group(0) @binding(6) var<uniform> p: P;
+var<workgroup> part: array<f32, 256>;
 @compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
-  let m0 = (wg.y * ng.x + wg.x) * 4u; let t = l.x; let M = p.M; let nb = p.N / 256u; let rb = nb * 210u;
-  if (m0 >= M) { return; }
-  let r0 = min(m0, M - 1u) * rb; let r1 = min(m0 + 1u, M - 1u) * rb; let r2 = min(m0 + 2u, M - 1u) * rb; let r3 = min(m0 + 3u, M - 1u) * rb;
-  var a0 = 0.0; var a1 = 0.0; var a2 = 0.0; var a3 = 0.0;
-  for (var b = 0u; b < nb; b++) {
-    let xv = x[b * 256u + t]; let o = b * 210u;
-    a0 += q6k(r0 + o, t) * xv; a1 += q6k(r1 + o, t) * xv; a2 += q6k(r2 + o, t) * xv; a3 += q6k(r3 + o, t) * xv;
+  let j = l.x & 63u; let m = (wg.y * ng.x + wg.x) * 4u + (l.x >> 6u); let mr = min(m, p.M - 1u);
+  let nb = p.N / 256u; let n = j >> 5u; let w = j & 31u; let qd = w >> 3u; let k = w & 7u;
+  var acc = 0.0;
+  for (var bb = 0u; bb < nb; bb++) {
+    let bi = mr * nb + bb;
+    let lo = unpack4xU8(ql[bi * 32u + n * 16u + (qd & 1u) * 8u + k]);
+    let q4 = select(lo & vec4<u32>(15u), lo >> vec4<u32>(4u), qd >= 2u);
+    let h = (unpack4xU8(qh[bi * 16u + n * 8u + k]) >> vec4<u32>(qd * 2u)) & vec4<u32>(3u);
+    let q = vec4<f32>(vec4<i32>(q4 | (h << vec4<u32>(4u))) - vec4<i32>(32));
+    acc += (dd[bi] * sc8(bi, n * 8u + (k >> 2u) + qd * 2u)) * dot(q, x[bb * 64u + j]);
   }
-  part[t] = a0; part[256u + t] = a1; part[512u + t] = a2; part[768u + t] = a3;
-  workgroupBarrier();
-  for (var s = 128u; s > 0u; s >>= 1u) {
-    if (t < s) { part[t] += part[t + s]; part[256u + t] += part[256u + t + s]; part[512u + t] += part[512u + t + s]; part[768u + t] += part[768u + t + s]; }
-    workgroupBarrier();
-  }
-  if (t < 4u && m0 + t < M) { y[m0 + t] = part[t * 256u]; }
+  part[l.x] = acc; workgroupBarrier();
+  for (var s = 32u; s > 0u; s >>= 1u) { if (j < s) { part[l.x] += part[l.x + s]; } workgroupBarrier(); }
+  if (j == 0u && m < p.M) { y[m] = part[l.x]; }
 }`,
   // Dense Q4_0 GEMV, 4 output rows per workgroup (2-D dispatch ok).
   matmulQ4: `enable f16;
@@ -594,17 +616,16 @@ ${Q4BLK}
 const QB = 'struct Q { T: u32, pos0: u32, S: u32, pad: u32 }';
 const G4B = {
   embedQ6KB: `
-struct P { n: u32, rowBytes: u32, scale: f32 }
+struct P { n: u32, nb: u32, scale: f32 }
 ${QB}
-@group(0) @binding(0) var<storage, read> qk: array<u32>;
-@group(0) @binding(1) var<storage, read> ids: array<u32>;
-@group(0) @binding(2) var<storage, read_write> y: array<f32>;
-@group(0) @binding(3) var<uniform> p: P;
-@group(0) @binding(4) var<uniform> qd: Q;
-${Q6K}
+${Q6P}
+@group(0) @binding(4) var<storage, read> ids: array<u32>;
+@group(0) @binding(5) var<storage, read_write> y: array<f32>;
+@group(0) @binding(6) var<uniform> p: P;
+@group(0) @binding(7) var<uniform> qd: Q;
 @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
   let i = g.x; let t = g.y; if (i >= p.n || t >= qd.T) { return; }
-  y[t * p.n + i] = q6k(ids[t] * p.rowBytes + (i >> 8u) * 210u, i & 255u) * p.scale;
+  y[t * p.n + i] = q6v(ids[t] * p.nb + (i >> 8u), i & 255u) * p.scale;
 }`,
   // Tiled Q4_0 GEMM: y[t·M + m] = Σ_k x[t·N + k]·W[m][k]. 16 rows × 16 tokens per workgroup; each 32-wide
   // block of W (decoded from its nibbles) and of x goes through shared memory, so a weight serves 16 tokens.
@@ -860,9 +881,18 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
     });
   }
 
-  // Dense upload, then the full-attention layers' RoPE frequency factors on the CPU side.
+  // Dense upload; the Q6_K token table split into aligned planes on the GPU (the raw copy is then freed);
+  // the full-attention layers' RoPE frequency factors on the CPU side.
   async uploadDense(onProgress) {
     await super.uploadDense(onProgress);
+    const dev = this.device, raw = this.w['token_embd.weight'].raw, blocks = raw.size / Q6K_BLOCK | 0;
+    const P = (n) => this.buffer(n, STORAGE, 'dense');
+    this.q6 = { ql: P(blocks * 128), qh: P(blocks * 64), sc: P(blocks * 16), dd: P(blocks * 4) };
+    const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
+    this.dispatch(pass, 'q6kPlanes', this.bind('q6kPlanes', [raw, this.q6.ql, this.q6.qh, this.q6.sc, this.q6.dd, this.uniform([blocks])]), Math.ceil(blocks / 256));
+    pass.end(); dev.queue.submit([enc.finish()]);
+    await dev.queue.onSubmittedWorkDone();
+    this.gpuBytes.dense -= raw.size; raw.destroy(); this.w['token_embd.weight'].raw = null;
     const d = this.manifest.dense.tensors['rope_freqs.weight'];
     this.ropeFreqs = null;
     if (d) {
@@ -904,7 +934,7 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
     const f = (v) => ({ f: v });
     const eps = f(c.eps);
     const u = {
-      embed: this.uniform([H, (H / 256) * Q6K_BLOCK, f(Math.fround(Math.sqrt(H)))]),
+      embed: this.uniform([H, H / 256, f(Math.fround(Math.sqrt(H)))]),
       rmsH: this.uniform([H, eps]), routerK: this.uniform([H, eps, f(Math.fround(1 / Math.fround(Math.sqrt(H))))]),
       mmG: this.uniform([DF, H]), mmD: this.uniform([H, DF]), gegluD: this.uniform([DF, 1]),
       router: this.uniform([E, H]), topk: this.uniform([E, K]),
@@ -923,7 +953,8 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
       return shape.get(key);
     };
     const a = this.a, W = this.w;
-    this.g = { embed: this.bind('embedQ6K', [W['token_embd.weight'].raw, a.x, this.tok, u.embed]) };
+    const q6 = [this.q6.ql, this.q6.qh, this.q6.sc, this.q6.dd];
+    this.g = { embed: this.bind('embedQ6K', [...q6, a.x, this.tok, u.embed]) };
     this.layers = [];
     for (let l = 0; l < Lc; l++) {
       const p = (n) => W[`blk.${l}.${n}`], s = shapeOf(l), rope = c.swa[l] ? a.ropeS : a.ropeF;
@@ -976,7 +1007,7 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
       this.layers.push(ly);
     }
     this.g.rmsOut = this.bind('rmsnorm', [a.x, W['output_norm.weight'].raw, a.xn, u.rmsH]);
-    this.g.lm = this.bind('matmulQ6K', [a.xn, W['token_embd.weight'].raw, a.logits, u.lm]);
+    this.g.lm = this.bind('matmulQ6K', [...q6, a.xn, a.logits, u.lm]);
     this.g.cap = this.bind('softcap', [a.logits, u.cap]);
     this.g.am = this.bind('argmax', [a.logits, a.am, u.am]);
     if (this.batchPrefill) this.initBatch();
@@ -997,7 +1028,7 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
     this.rbSelB = this.buffer(B * 2 * K * 4, MAP_READ | COPY_DST, 'batch');
     const U = (w) => this.uniform(w), eps = { f: c.eps }, qb = this.qb;
     const u = {
-      embed: U([H, (H / 256) * Q6K_BLOCK, { f: Math.fround(Math.sqrt(H)) }]), rmsH: U([H, eps]),
+      embed: U([H, H / 256, { f: Math.fround(Math.sqrt(H)) }]), rmsH: U([H, eps]),
       routerK: U([H, eps, { f: Math.fround(1 / Math.fround(Math.sqrt(H))) }]), router: U([E, H]), topk: U([E, K]),
       mg: U([DF, H]), md: U([H, DF]), geglu: U([DF]), gu: U([2 * F, H, 2 * F, 0, K]), dn: U([H, F, H, 1, K]), gegluE: U([F, B * K]), sum: U([H, K]),
     };
@@ -1011,7 +1042,7 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
       return shape.get(key);
     };
     const q4 = (name, x, y, uni) => this.bind('matmulQ4T', [x, W[name].q, W[name].s, y, uni, qb]);
-    this.gB = { embed: this.bind('embedQ6KB', [W['token_embd.weight'].raw, b.ids, b.x, u.embed, qb]) };
+    this.gB = { embed: this.bind('embedQ6KB', [this.q6.ql, this.q6.qh, this.q6.sc, this.q6.dd, b.ids, b.x, u.embed, qb]) };
     for (let l = 0; l < c.layers; l++) {
       const n = (t) => `blk.${l}.${t}`, raw = (t) => W[n(t)].raw, sh = shapeOf(l), hasV = !!W[n('attn_v.weight')];
       const rope = c.swa[l] ? b.ropeS : b.ropeF;
