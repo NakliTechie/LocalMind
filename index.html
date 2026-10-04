@@ -2735,6 +2735,17 @@
           </div>
         </div>
         <div class="settings-divider" data-tab="models">
+          <label class="toggle-row">
+            <input type="checkbox" id="gemma4PleToggle">
+            Gemma 4 E2B (WebGPU kernels): per-layer embeddings from disk
+          </label>
+          <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
+            Keeps the model's 1.2 GB per-layer embedding table in this browser's private storage and only
+            its ~33K most-used rows on the GPU: ~1 GB less GPU memory, unchanged output, decoding within a
+            few percent. The first load writes the table to disk once (~1 s). Applies to the next model load.
+          </div>
+        </div>
+        <div class="settings-divider" data-tab="models">
           <label for="hfTokenInput">Hugging Face token <span style="font-weight:400;color:var(--gray-500)">(optional)</span></label>
           <input type="password" id="hfTokenInput" class="settings-input" placeholder="hf_… (read access is enough)" autocomplete="off" spellcheck="false">
           <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
@@ -7835,6 +7846,7 @@ const engineFetch = async (url, init = {}) => {
   <script type="text/worker" id="gemma4WebgpuWorkerSrc">
 // The factory replaces __GEMMA4_ENGINE_URL__ with the engine's absolute same-origin URL.
 const ENGINE_URL = '__GEMMA4_ENGINE_URL__';
+const PLE_URL = '__GEMMA4_PLE_URL__'; // ple-opfs.js: the per-layer embedding table served from OPFS
 
 let Gemma4Mobile = null;
 let model = null;
@@ -7854,9 +7866,24 @@ self.onmessage = async (e) => {
       if (!Gemma4Mobile) ({ Gemma4Mobile } = await import(ENGINE_URL));
       hfToken = (typeof d.hfToken === 'string' && d.hfToken.trim()) || null;
       post({ type: 'progress', data: { status: 'initiate', file: WEIGHTS_LABEL } });
+      // Settings → Models "per-layer embeddings from disk": the engine writes the
+      // 1.2 GB PLE table to OPFS once and keeps only a row cache on the GPU. When
+      // OPFS is unusable, attach() returns null and the table stays resident.
+      let ple;
+      if (d.ple) {
+        const { createGemmaPle } = await import(PLE_URL);
+        ple = createGemmaPle({
+          source: { repo: d.modelId || Gemma4Mobile.DEFAULT_MODEL_ID },
+          onStatus: (s) => {
+            if (s.phase === 'write') post({ type: 'progress', data: { status: 'loading', file: 'per-layer embeddings to disk (1.2 GB, once)' } });
+            else if (s.phase === 'fallback') console.warn('Gemma 4 PLE from disk unavailable, keeping it on the GPU:', s.error);
+          },
+        });
+      }
       // load(modelId, opts): a repo id resolves the QAT-mobile weight root;
       // null falls back to the engine's DEFAULT_MODEL_ID (the same repo).
       model = await Gemma4Mobile.load(d.modelId || null, {
+        ple,
         fetch: engineFetch,
         onProgress: (ev) => {
           if (!ev) return;
@@ -7888,7 +7915,8 @@ self.onmessage = async (e) => {
       });
       lastHistoryLen = 0;
       try { if (typeof model.warmup === 'function') await model.warmup(); } catch (_) {}
-      post({ type: 'ready', backend: 'webgpu' });
+      // ple: where the per-layer embedding table lives ('opfs' or 'resident'), for diagnostics.
+      post({ type: 'ready', backend: 'webgpu', ple: model.pleMode || 'resident' });
     } else if (d.type === 'generate') {
       if (!model) { post({ type: 'error', message: 'Gemma 4 WebGPU model not loaded' }); return; }
       stopFlag = false;
@@ -10352,7 +10380,21 @@ self.addEventListener('message', async (e) => {
           }
         } catch (e) { console.warn('cache inventory (webgpu-prefix-snapshots):', e); }
       }
-      // 3. OPFS (wllama)
+      // 3. OPFS: tables and experts the SSD-streaming engines keep on disk, one directory per model
+      // under localmind-ssd/ with a manifest naming its source (Gemma 4's PLE table, Qwen3-MoE experts).
+      try {
+        const ssd = await (await navigator.storage.getDirectory()).getDirectoryHandle('localmind-ssd');
+        for await (const [key, dir] of ssd.entries()) {
+          if (dir.kind !== 'directory') continue;
+          let manifest = null, bytes = 0;
+          try { manifest = JSON.parse(await (await (await dir.getFileHandle('manifest.json')).getFile()).text()); } catch {}
+          if (measure) for await (const [, f] of dir.entries()) if (f.kind === 'file') { try { bytes += (await f.getFile()).size; } catch {} }
+          const src = manifest && manifest.source;
+          const repo = (src && (src.repo || (src.url && repoOfUrl(src.url)))) || `localmind-ssd/${key}`;
+          add(repo, 'on disk (OPFS)', bytes, () => ssd.removeEntry(key, { recursive: true }));
+        }
+      } catch {}
+      // 4. OPFS (wllama)
       try {
         const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('cache');
         const metas = [];
@@ -11913,6 +11955,13 @@ self.addEventListener('message', async (e) => {
     if (dflashToggle) {
       dflashToggle.checked = dflashEnabled();
       dflashToggle.addEventListener('change', () => { try { localStorage.setItem('lm_dflash', dflashToggle.checked ? '1' : '0'); } catch {} });
+    }
+    // Gemma 4 E2B kernels: the per-layer embedding table served from OPFS (default off; read at load time).
+    function gemma4PleEnabled() { try { return localStorage.getItem('lm_gemma4_ple') === '1'; } catch { return false; } }
+    const gemma4PleToggle = document.getElementById('gemma4PleToggle');
+    if (gemma4PleToggle) {
+      gemma4PleToggle.checked = gemma4PleEnabled();
+      gemma4PleToggle.addEventListener('change', () => { try { localStorage.setItem('lm_gemma4_ple', gemma4PleToggle.checked ? '1' : '0'); } catch {} });
     }
     // Authorization header for huggingface.co requests made from the main thread
     // (the custom-model probe); empty when no token is set.
@@ -14350,7 +14399,7 @@ ${JSON.stringify({ name, result })}
             // maxLength. The shared load message shape is harmless either way.
             // hfToken (Settings → Models) rides along for the three custom-WGSL
             // engines, which send it as Authorization: Bearer to huggingface.co.
-            w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0, localFile: (isWllama && MODELS[modelId]) ? (MODELS[modelId].localFile || null) : null, hfToken: isWllama ? null : hfToken(), dflash: isBonsai2Webgpu ? dflashEnabled() : false });
+            w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0, localFile: (isWllama && MODELS[modelId]) ? (MODELS[modelId].localFile || null) : null, hfToken: isWllama ? null : hfToken(), dflash: isBonsai2Webgpu ? dflashEnabled() : false, ple: isGemma4Webgpu ? gemma4PleEnabled() : false });
           } else {
             const resumable = localStorage.getItem('lm_resumable_downloads') !== '0';
             w.postMessage({ type: 'load', modelId, dtype, modelType, modelClass, resumable });
@@ -15259,7 +15308,8 @@ self.addEventListener('message', async (e) => {
       let code = src ? src.textContent : '';
       if (!code) throw new Error('Gemma 4 WebGPU worker source missing');
       const engineUrl = new URL('gemma-4-e2b.js', document.baseURI).href;
-      code = engineWorkerPrelude() + code.replaceAll('__GEMMA4_ENGINE_URL__', engineUrl);
+      const pleUrl = new URL('ple-opfs.js', document.baseURI).href;
+      code = engineWorkerPrelude() + code.replaceAll('__GEMMA4_ENGINE_URL__', engineUrl).replaceAll('__GEMMA4_PLE_URL__', pleUrl);
       const blob = new Blob([code], { type: 'application/javascript' });
       const url = URL.createObjectURL(blob);
       const w = new Worker(url, { type: 'module' });

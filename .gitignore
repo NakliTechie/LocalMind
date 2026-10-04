@@ -9,6 +9,7 @@
 !host-model-catalog.js
 !INFERENCE-PROTOCOL.md
 !gemma-4-e2b.js
+!ple-opfs.js
 !qwen3_moe_ssd.js
 !moe-expert-stream.js
 !opfs-reader.js
