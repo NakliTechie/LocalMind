@@ -4,7 +4,8 @@
 //
 //   node scripts/llama-ref.mjs <server-url> <out.json> [n=32] [label]
 import { writeFileSync } from 'node:fs';
-import { PROMPTS } from './qwen3-moe-prompts.mjs';
+// PROMPTS_MODULE picks the prompt set (default: the Qwen3 MoE gate's); e.g. ./gemma4-prompts.mjs
+const { PROMPTS } = await import(process.env.PROMPTS_MODULE || './qwen3-moe-prompts.mjs');
 
 const [server = 'http://127.0.0.1:8191', outPath, nStr = '32', label = ''] = process.argv.slice(2);
 if (!outPath) { console.error('usage: llama-ref.mjs <server-url> <out.json> [n] [label]'); process.exit(2); }

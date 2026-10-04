@@ -32,12 +32,17 @@ p = 4;
 const version = u32(), nTensors = u64(), nKv = u64();
 const kvStart = p;
 let arch = null, blockCountAt = -1, align = 32;
+const entries = [];   // each KV entry's byte range, so per-layer arrays can be trimmed
 for (let i = 0; i < nKv; i++) {
+  const s0 = p;
   const k = str(), t = u32();
-  if (k === 'general.architecture') { const s0 = p; arch = str(); p = s0; }
-  if (k === 'general.alignment') { const s0 = p; align = u32(); p = s0; }
+  const vStart = p;
+  if (k === 'general.architecture') { const s1 = p; arch = str(); p = s1; }
+  if (k === 'general.alignment') { const s1 = p; align = u32(); p = s1; }
   if (arch && k === `${arch}.block_count`) blockCountAt = p;
+  const arr = t === 9 ? { at: head.readUInt32LE(p), n: Number(head.readBigUInt64LE(p + 4)) } : null;
   skipValue(t);
+  entries.push({ s0, vStart, end: p, k, arr });
 }
 const kvEnd = p;
 const tensors = [];
@@ -53,7 +58,9 @@ if (p > got) throw new Error('header larger than the 32 MB read');
 const keep = tensors.filter((t) => { const m = /^blk\.(\d+)\./.exec(t.name); return !m || Number(m[1]) < N; });
 const byteSize = (t) => {
   const n = t.dims.reduce((a, b) => a * b, 1);
-  if (t.type === 0) return n * 4; if (t.type === 1) return n * 2; if (t.type === 8) return n / 32 * 34;
+  // ggml block sizes: F32, F16, Q4_0 (32 values in 18 bytes), Q8_0 (32 in 34), Q6_K (256 in 210)
+  if (t.type === 0) return n * 4; if (t.type === 1) return n * 2;
+  if (t.type === 2) return n / 32 * 18; if (t.type === 8) return n / 32 * 34; if (t.type === 14) return n / 256 * 210;
   throw new Error(`type ${t.type}`);
 };
 const dataEnd = Math.max(...keep.map((t) => t.offset + byteSize(t)));
@@ -63,9 +70,19 @@ if (dropped.some((t) => t.offset < dataEnd)) throw new Error('kept tensors are n
 const st = fstatSync(fd);
 if (dataStart + dataEnd > st.size) throw new Error(`input has ${st.size} bytes; need ${dataStart + dataEnd}`);
 
-// New header: fixed part + KV verbatim (block_count patched) + filtered tensor table.
-const kv = Buffer.from(head.subarray(kvStart, kvEnd));
-kv.writeUInt32LE(N, blockCountAt - kvStart);
+// New header: fixed part + KV (block_count patched to N, and every per-layer array of the arch — one fixed-size
+// element per layer, e.g. Gemma 4's head_count_kv and sliding_window_pattern — trimmed to N) + filtered tensors.
+const L0 = head.readUInt32LE(blockCountAt);
+const kvParts = [];
+for (const e of entries) {
+  if (arch && e.k.startsWith(arch + '.') && e.arr && e.arr.n === L0 && SZ[e.arr.at]) {
+    const h = Buffer.alloc(12); h.writeUInt32LE(e.arr.at, 0); h.writeBigUInt64LE(BigInt(N), 4);
+    kvParts.push(head.subarray(e.s0, e.vStart), h, head.subarray(e.vStart + 12, e.vStart + 12 + N * SZ[e.arr.at]));
+  } else if (e.vStart === blockCountAt) {
+    const b = Buffer.from(head.subarray(e.s0, e.end)); b.writeUInt32LE(N, e.vStart - e.s0); kvParts.push(b);
+  } else kvParts.push(head.subarray(e.s0, e.end));
+}
+const kv = Buffer.concat(kvParts);
 const parts = [];
 const fixed = Buffer.alloc(24);
 fixed.write('GGUF', 0, 'latin1'); fixed.writeUInt32LE(version, 4);
