@@ -1,13 +1,28 @@
 // Unit test for moe-expert-stream.js with a fake GPU queue and a fake OPFS reader:
 // residency, LRU eviction order, pins (a prefetch never evicts a slot the current layer holds),
-// late hits on in-flight loads, and the bytes that land in each pool part.
+// late hits on in-flight loads, and the bytes that land in each pool part — once through the
+// mapped staging ring (the default upload path) and once through queue.writeBuffer.
 //   node scripts/test-moe-expert-stream.mjs
 import assert from 'node:assert/strict';
 import { ExpertStreamer } from '../moe-expert-stream.js';
 
 const REC = 16, E = 8, L = 4;
 const writes = [];
-const device = { queue: { writeBuffer: (buffer, offset, data, dataOffset, size) => writes.push({ buffer, offset, bytes: new Uint8Array(data, dataOffset, size).slice() }) } };
+const device = {
+  queue: {
+    writeBuffer: (buffer, offset, data, dataOffset, size) => writes.push({ buffer, offset, bytes: new Uint8Array(data, dataOffset, size).slice() }),
+    submit: (cmds) => { for (const list of cmds) for (const c of list) writes.push(c()); },
+  },
+  // Staging-ring fakes: a mapped buffer is plain memory; mapAsync resolves after a tick.
+  createBuffer: ({ size }) => { const data = new Uint8Array(size); return { size, data, getMappedRange: () => data.buffer, unmap() {}, mapAsync: () => new Promise((r) => setTimeout(r, 1)) }; },
+  createCommandEncoder: () => {
+    const cmds = [];
+    return {
+      copyBufferToBuffer: (src, so, dst, doff, n) => { const bytes = src.data.slice(so, so + n); cmds.push(() => ({ buffer: dst, offset: doff, bytes })); },
+      finish: () => cmds,
+    };
+  },
+};
 let reads = 0;
 const reader = {
   // Record (layer, expert) is filled with the byte value layer*E + expert.
@@ -19,7 +34,12 @@ const reader = {
   }, 2)),
 };
 const parts = [{ buffer: 'A', srcOffset: 0, bytes: 10 }, { buffer: 'B', srcOffset: 10, bytes: 6 }];
-const mk = (slots) => new ExpertStreamer({ device, reader, recordBytes: REC, recordOffset: (l, e) => (l * E + e) * REC, parts, slots, numLayers: L, numExperts: E });
+let uploadRing = 0;
+const mk = (slots) => new ExpertStreamer({ device, reader, recordBytes: REC, recordOffset: (l, e) => (l * E + e) * REC, parts, slots, numLayers: L, numExperts: E, uploadRing });
+
+for (uploadRing of [0, 2]) {
+await new Promise((r) => setTimeout(r, 50));   // loads left in flight by the previous pass land first
+writes.length = 0;
 
 { // misses then hits; uploads land at slot × part.bytes with the record's bytes
   const xs = mk(4);
@@ -76,4 +96,5 @@ const mk = (slots) => new ExpertStreamer({ device, reader, recordBytes: REC, rec
   const xs = mk(2);
   await assert.rejects(async () => xs.ensure(0, [0, 1, 2]), /pool exhausted/);
 }
-console.log('moe-expert-stream: ok');
+}
+console.log('moe-expert-stream: ok (writeBuffer and staging ring)');

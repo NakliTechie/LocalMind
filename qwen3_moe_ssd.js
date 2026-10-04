@@ -811,7 +811,9 @@ export class Qwen3MoeSsd {
       recordOffset: (layer, e) => (layer * xp.perLayer + e) * xp.record,
       parts: ['guQ', 'guS', 'dQ', 'dS'].map((k) => ({ buffer: this.pool[k], srcOffset: xp.parts[k].off, bytes: xp.parts[k].bytes })),
       slots: this.poolSlots, numLayers: c.layers, numExperts: c.experts,
+      ...(this.opts.uploadRing !== undefined ? { uploadRing: this.opts.uploadRing } : {}),
     });
+    this.gpuBytes.staging = this.xs.ringBytes();
 
     // KV cache (f16) and activations.
     const kvn = c.kvHeads * c.headDim;

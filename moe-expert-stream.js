@@ -13,14 +13,23 @@
  * `parts`: [{ buffer: GPUBuffer, srcOffset, bytes }]. Slot s of a part lives at s × bytes in
  * that part's buffer, so a kernel finds expert row r of slot s at s × rowsPerExpert + r.
  *
- * Safety of reuse: queue.writeBuffer is ordered after every earlier queue.submit, so a slot
- * may be overwritten as soon as the work that reads it has been submitted, even if the GPU
- * has not run it yet. Until then the slot is pinned and never chosen for eviction.
+ * Safety of reuse: an upload (a staging-ring copy, or queue.writeBuffer) is ordered after every
+ * earlier queue.submit, so a slot may be overwritten as soon as the work that reads it has been
+ * submitted, even if the GPU has not run it yet. Until then the slot is pinned and never chosen
+ * for eviction.
  */
 
 export class ExpertStreamer {
-  constructor({ device, reader, recordBytes, recordOffset, parts, slots, numLayers, numExperts, maxStaging = 32 }) {
+  constructor({ device, reader, recordBytes, recordOffset, parts, slots, numLayers, numExperts, maxStaging = 32, uploadRing = 16 }) {
     Object.assign(this, { device, reader, recordBytes, recordOffset, parts, slots, numLayers, numExperts, maxStaging });
+    // Uploads go through a ring of mapped MAP_WRITE buffers + copyBufferToBuffer: measured
+    // 2026-10-04 on an M4 Pro (Chrome 154) at 27.5 GB/s for 5 MB records with depth 4, against
+    // 1.88 GB/s for queue.writeBuffer. uploadRing = 0 keeps writeBuffer (A/B measurement only).
+    this.ring = [];
+    for (let i = 0; i < uploadRing; i++) {
+      this.ring.push({ buf: device.createBuffer({ size: Math.ceil(recordBytes / 4) * 4, usage: 0x02 | 0x04, mappedAtCreation: true }), ready: null });
+    }
+    this.ringNext = 0;
     this.slotKey = new Int32Array(slots).fill(-1);
     this.pinCount = new Int32Array(slots);
     this.free = [];
@@ -81,9 +90,7 @@ export class ExpertStreamer {
         this.stats.readMs += r.ms;
         this.stats.bytesRead += r.got;
         const t0 = performance.now();
-        for (const part of this.parts) {
-          this.device.queue.writeBuffer(part.buffer, s * part.bytes, r.buf, part.srcOffset, part.bytes);
-        }
+        await this.upload(r.buf, s);
         this.stats.uploadMs += performance.now() - t0;
         this.giveStaging(r.buf);
         this.slotKey[s] = key;
@@ -102,6 +109,25 @@ export class ExpertStreamer {
     })();
     this.inflight.set(key, entry);
     return entry;
+  }
+
+  // Copies one record into slot `s` of every part. Queue order makes this as safe as
+  // writeBuffer: the copy is submitted after the work that last read the slot and before the
+  // work that will read the new expert.
+  async upload(buf, s) {
+    if (!this.ring.length) {
+      for (const part of this.parts) this.device.queue.writeBuffer(part.buffer, s * part.bytes, buf, part.srcOffset, part.bytes);
+      return;
+    }
+    const r = this.ring[this.ringNext];
+    this.ringNext = (this.ringNext + 1) % this.ring.length;
+    while (r.ready) { const p = r.ready; await p; if (r.ready === p) r.ready = null; }
+    new Uint8Array(r.buf.getMappedRange(0, r.buf.size)).set(new Uint8Array(buf, 0, this.recordBytes));
+    r.buf.unmap();
+    const enc = this.device.createCommandEncoder();
+    for (const part of this.parts) enc.copyBufferToBuffer(r.buf, part.srcOffset, part.buffer, s * part.bytes, part.bytes);
+    this.device.queue.submit([enc.finish()]);
+    r.ready = r.buf.mapAsync(2);
   }
 
   // Makes every expert in `ids` resident for `layer` and pins its slot. Returns the slots in
@@ -156,8 +182,12 @@ export class ExpertStreamer {
     return started;
   }
 
-  // Waits for every in-flight load (used before teardown and between measured runs).
-  async drain() { await Promise.allSettled([...this.inflight.values()].map((f) => f.p)); }
+  // Waits for every in-flight load and staging-ring map (before teardown and between runs).
+  async drain() {
+    await Promise.allSettled([...this.inflight.values()].map((f) => f.p));
+    await Promise.allSettled(this.ring.map((r) => r.ready).filter(Boolean));
+  }
+  ringBytes() { return this.ring.reduce((a, r) => a + r.buf.size, 0); }
 
   clear() {
     this.lru.clear();
