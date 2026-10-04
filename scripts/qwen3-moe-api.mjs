@@ -8,12 +8,12 @@ export function makeApi(log = () => {}) {
   let m = null;
   const api = {
     // engine: 'qwen3' (rung 2a, qwen3moe GGUFs) or 'qwen35' (rung 2b, qwen35moe GGUFs).
-    async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead } = {}) {
+    async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk } = {}) {
       if (m) { await m.dispose(); m = null; }
       const t0 = performance.now();
       let last = 0;
       m = await (engine === 'qwen35' ? Qwen35MoeSsd : Qwen3MoeSsd).load(null, {
-        url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead,
+        url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk,
         onProgress: (e) => {
           if (e.status === 'weights' && e.kind !== 'tensors' && performance.now() - last > 2000) { last = performance.now(); log({ ingest: e.loaded, total: e.total, secs: e.secs }); }
           else if (e.status === 'ingest-plan') log(e);
@@ -104,6 +104,8 @@ export function makeApi(log = () => {}) {
       return { msPerToken: times[Math.floor(n / 2)], min: times[0], max: times[n - 1] };
     },
     setPrefetch(on) { m.prefetch = !!on; return m.prefetch; },
+    // rung 2b: switch between chunked and one-token prefill (the batch buffers stay allocated).
+    setBatchPrefill(on) { m.batchPrefill = !!on && !!m.b; return m.batchPrefill; },
     async clearPool() { await m.xs.clear(); m.resetCounters(); return true; },
     stats() { return m.stats(); },
     encode(text) { return m.tokenizer.encode(text); },
