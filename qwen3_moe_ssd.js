@@ -728,7 +728,7 @@ export class Qwen3MoeSsd {
     if (opts.reingest || !manifest || !manifest.complete || manifest.format !== FORMAT) {
       manifest = await ingestGguf({
         url, key, fetch: fetchFn, signal, source: { repo: src.repo, file: src.file, revision: src.revision, sha256: src.sha256, size: src.size },
-        onProgress: (e) => onProgress(e.status === 'ingest' ? { status: 'weights', loaded: e.loaded, total: e.total, ...e } : e),
+        onProgress: (e) => onProgress(ingestProgress(e)),
       });
     }
     const headerFile = await (await (await navigator.storage.getDirectory()).getDirectoryHandle(OPFS_ROOT)).getDirectoryHandle(key);
@@ -1168,6 +1168,13 @@ export function topN(logits, n) {
     }
   }
   return best;
+}
+
+// Ingest progress as hosts read it: a 'weights' event with byte counts. The spread goes first, so the
+// event's own status ('ingest') cannot overwrite 'weights' — it did until 2026-10-04, and LocalMind's
+// load watchdog, seeing no download progress, killed every first-time Qwen3.6 download after 3 minutes.
+export function ingestProgress(e) {
+  return e && e.status === 'ingest' ? { ...e, status: 'weights', loaded: e.loaded, total: e.total } : e;
 }
 
 export async function removeIngest(key) { await removeOpfs(`${OPFS_ROOT}/${key}`); }

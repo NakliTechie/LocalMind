@@ -5,6 +5,15 @@
 //   node scripts/test-moe-expert-stream.mjs
 import assert from 'node:assert/strict';
 import { ExpertStreamer } from '../moe-expert-stream.js';
+import { ingestProgress } from '../qwen3_moe_ssd.js';
+
+// Ingest progress reaches the host as 'weights' with byte counts (the 2026-10-04 bug: the event's own
+// status overwrote it, the worker posted nothing, and the load watchdog killed a 37 GB download).
+{
+  const p = ingestProgress({ status: 'ingest', loaded: 5, total: 9, written: 5, secs: 1 });
+  assert.equal(p.status, 'weights'); assert.equal(p.loaded, 5); assert.equal(p.total, 9);
+  assert.deepEqual(ingestProgress({ status: 'init' }), { status: 'init' });
+}
 
 const REC = 16, E = 8, L = 4;
 const writes = [];
