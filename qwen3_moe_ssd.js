@@ -566,16 +566,22 @@ struct P { n: u32 }
 @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
   let i = g.x; if (i < p.n) { x[i] = x[i] + y[i]; }
 }`,
-  // Router: softmax over n logits, greedy top-k (ties → lowest index), weights renormalized to
-  // sum 1 (Qwen3-MoE norm_topk_prob). sel = k ids then k f32 weights (bitcast). One workgroup.
+  // Router: softmax over n logits (n ≤ 256), greedy top-k (ties → lowest index), weights
+  // renormalized to sum 1 (Qwen3-MoE norm_topk_prob). sel = k ids then k f32 weights (bitcast).
+  // One workgroup; each of the k picks is a parallel argmax over the per-thread probabilities.
+  // Every probability is the same f32 expression the serial version evaluated, so the picks and
+  // weights are the same; the serial version cost ~0.1 ms per call on an M4 Pro.
   topk: `
 struct P { n: u32, k: u32 }
 @group(0) @binding(0) var<storage, read> lg: array<f32>;
 @group(0) @binding(1) var<storage, read_write> sel: array<u32>;
 @group(0) @binding(2) var<uniform> p: P;
 var<workgroup> red: array<f32, 256>;
+var<workgroup> bi: array<u32, 256>;
 var<workgroup> gmax: f32;
 var<workgroup> gsum: f32;
+var<workgroup> picks: array<u32, 32>;
+var<workgroup> probs: array<f32, 32>;
 @compute @workgroup_size(256) fn main(@builtin(local_invocation_id) l: vec3<u32>) {
   let t = l.x; let n = p.n;
   red[t] = select(-3.4e38, lg[min(t, n - 1u)], t < n); workgroupBarrier();
@@ -584,16 +590,22 @@ var<workgroup> gsum: f32;
   red[t] = select(0.0, exp(lg[min(t, n - 1u)] - gmax), t < n); workgroupBarrier();
   for (var s = 128u; s > 0u; s >>= 1u) { if (t < s) { red[t] += red[t + s]; } workgroupBarrier(); }
   if (t == 0u) { gsum = red[0]; } workgroupBarrier();
-  if (t == 0u) {
-    var taken: array<bool, 256>;
-    for (var i = 0u; i < n; i++) { taken[i] = false; }
-    var wsum = 0.0;
-    for (var j = 0u; j < p.k; j++) {
-      var best = -1.0; var bi = 0u;
-      for (var i = 0u; i < n; i++) { if (!taken[i]) { let pr = exp(lg[i] - gmax) / gsum; if (pr > best) { best = pr; bi = i; } } }
-      taken[bi] = true; sel[j] = bi; sel[p.k + j] = bitcast<u32>(best); wsum += best;
+  var mine = select(-1.0, exp(lg[min(t, n - 1u)] - gmax) / gsum, t < n);
+  for (var j = 0u; j < p.k; j++) {
+    red[t] = mine; bi[t] = t; workgroupBarrier();
+    for (var s = 128u; s > 0u; s >>= 1u) {
+      if (t < s) { let o = red[t + s]; if (o > red[t] || (o == red[t] && bi[t + s] < bi[t])) { red[t] = o; bi[t] = bi[t + s]; } }
+      workgroupBarrier();
     }
-    for (var j = 0u; j < p.k; j++) { sel[p.k + j] = bitcast<u32>(bitcast<f32>(sel[p.k + j]) / wsum); }
+    if (t == 0u) { picks[j] = bi[0]; probs[j] = red[0]; }
+    workgroupBarrier();
+    if (t == picks[j]) { mine = -1.0; }
+    workgroupBarrier();
+  }
+  if (t == 0u) {
+    var wsum = 0.0;
+    for (var j = 0u; j < p.k; j++) { wsum += probs[j]; }
+    for (var j = 0u; j < p.k; j++) { sel[j] = picks[j]; sel[p.k + j] = bitcast<u32>(probs[j] / wsum); }
   }
 }`,
   // Routed experts, all k at once: workgroup z = top-k position, slot = slots[z] picks the
@@ -829,6 +841,7 @@ export class Qwen3MoeSsd {
     }
     const H = c.hidden, QN = c.heads * c.headDim, F = c.expertFf, K = c.topK;
     if (2 * K * 4 > 256) throw new Error(`top-k ${K} > 32: selections would overlap their 256-byte readback regions`);
+    if (c.experts > 256) throw new Error(`${c.experts} experts: the router top-k kernel handles at most 256`);
     const A = (n) => this.buffer(n * 4, STORAGE | COPY_SRC | COPY_DST);
     this.a = {
       x: A(H), xn: A(H), q: A(QN), k: A(kvn), v: A(kvn), att: A(QN), o: A(H), sc: A(c.heads * this.maxCtx),

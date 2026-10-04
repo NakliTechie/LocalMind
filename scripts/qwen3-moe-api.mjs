@@ -80,6 +80,27 @@ export function makeApi(log = () => {}) {
       const decode = { ...m.stats(), secs: (performance.now() - t1) / 1000 };
       return { prefetch: m.prefetch, poolSlots: m.poolSlots, promptTokens: ids.length, ids: out, text: m.tokenizer.decode(out), prefill, decode };
     },
+    // Diagnostic: GPU time for one token's forward pass with no router readbacks — every layer
+    // uses pool slots 0..k-1 whatever the router picks, all 48 layers in one submit. Output is
+    // meaningless; the time is the compute floor that per-layer readbacks and loads sit on top of.
+    async gpuFloor(n = 16, { attention = true, experts = true, head = true } = {}) {
+      const c = m.cfg, dev = m.device, K = c.topK;
+      dev.queue.writeBuffer(m.a.slots, 0, Uint32Array.from({ length: K }, (_, i) => i));
+      const times = [];
+      for (let t = 0; t < n; t++) {
+        m.writeTokenUniforms(1000, 0);
+        const t0 = performance.now();
+        const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
+        m.dispatch(pass, 'embedQ8', m.g.embed, Math.ceil(c.hidden / 256));
+        for (let l = 0; l < c.layers; l++) { if (attention) m.encodeAttention(pass, l, 1); if (experts) m.encodeExperts(pass, l); }
+        if (head) { m.dispatch(pass, 'rmsnorm', m.g.rmsOut, 1); m.dispatch(pass, 'matmulQ8', m.g.lm, Math.ceil(c.vocab / 4)); m.dispatch(pass, 'argmax', m.g.am, 1); }
+        pass.end(); dev.queue.submit([enc.finish()]);
+        await dev.queue.onSubmittedWorkDone();
+        times.push(performance.now() - t0);
+      }
+      times.sort((a, b) => a - b);
+      return { msPerToken: times[Math.floor(n / 2)], min: times[0], max: times[n - 1] };
+    },
     setPrefetch(on) { m.prefetch = !!on; return m.prefetch; },
     async clearPool() { await m.xs.clear(); m.resetCounters(); return true; },
     stats() { return m.stats(); },
