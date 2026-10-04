@@ -625,6 +625,41 @@ struct P { M: u32, N: u32, rowsPerExpert: u32, inputPerSlot: u32 }
 }`,
 };
 
+// Routing on the GPU (decode): after layer l's top-k, look each pick up in the pool's residency
+// map. All resident → write the slots and carry on; any absent → record l+1 in `st`, after which
+// every guarded kernel returns at once, so the rest of the token costs dispatches, not math.
+const ROUTE_KERNEL = `
+struct P { l: u32, E: u32, K: u32, pad: u32 }
+@group(0) @binding(0) var<storage, read> sel: array<u32>;
+@group(0) @binding(1) var<storage, read> rmap: array<u32>;
+@group(0) @binding(2) var<storage, read_write> slots: array<u32>;
+@group(0) @binding(3) var<storage, read_write> st: array<u32>;
+@group(0) @binding(4) var<storage, read_write> used: array<u32>;
+@group(0) @binding(5) var<uniform> p: P;
+@compute @workgroup_size(1) fn main() {
+  if (st[0] != 0u) { return; }
+  var miss = false;
+  for (var j = 0u; j < p.K; j++) {
+    let e = sel[j]; let s = rmap[p.l * p.E + e];
+    used[p.l * p.K + j] = e;
+    if (s == 0xffffffffu) { miss = true; } else { slots[j] = s; }
+  }
+  if (miss) { st[0] = p.l + 1u; }
+}`;
+const ABSENT = 0xffffffff;
+
+// Adds a read-only `stopF` binding after a kernel's last binding and an early return while it is
+// set. A read-only storage value is uniform, so the return keeps barriers and subgroup ops legal.
+function guarded(src) {
+  let last = -1;
+  for (const m of src.matchAll(/@binding\((\d+)\)/g)) last = Math.max(last, +m[1]);
+  const at = src.indexOf('@compute');
+  const out = `${src.slice(0, at)}@group(0) @binding(${last + 1}) var<storage, read> stopF: array<u32>;\n${src.slice(at)}`;
+  const withReturn = out.replace(/(@compute[^{]*?\bfn main\([\s\S]*?\)\s*\{)/, '$1\n  if (stopF[0] != 0u) { return; }');
+  if (withReturn === out) throw new Error('guarded(): no compute entry point');
+  return withReturn;
+}
+
 export class Qwen35MoeSsd extends Qwen3MoeSsd {
   // Without a url, the pinned Hugging Face file; with one (a local serve, a layer cut), the OPFS
   // directory is named after the file, never after rung 2a's model.
@@ -644,6 +679,17 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     // layer per chunk); decode stays one token at a time.
     this.batchPrefill = opts.batchPrefill ?? true;
     this.chunkTokens = Math.max(2, Math.floor(opts.prefillChunk || 256));
+    // gpuRouting: decode syncs with the CPU only at a layer whose experts are not all in the pool
+    // (and every routeWindow layers), instead of after every layer's routing. Opt-in at load: it
+    // compiles every one-token kernel with a stop guard. Off by default until it is timed on a
+    // quiet machine; at 2026-10-04's miss rate (~18 of 40 layers per token need a load) the counts
+    // put the gain near 5%. Output is token-identical either way.
+    this.routeGuards = !!opts.gpuRouting;
+    this.gpuRouting = this.routeGuards;
+    // A submit runs at most this many layers' experts. After a stop every kernel left in it still
+    // dispatches (about 7 ms for a whole token's worth), so a long submit mostly runs no-ops.
+    // Full model, 48 tokens: window 2 → 29.1 syncs and 17.6 no-op layers per token; 3 → 26.2, 36.6.
+    this.routeWindow = Math.max(1, Math.floor(opts.routeWindow ?? 2));
   }
 
   // Subgroup GEMVs replace the scalar ones when subgroups are exactly 32 wide (Apple, most others).
@@ -651,13 +697,24 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     const i = this.device.adapterInfo || this.opts.adapterInfo || {};
     return this.opts.subgroups !== false && this.device.features.has('subgroups') && i.subgroupMinSize === 32 && i.subgroupMaxSize === 32;
   }
-  get kernels() { return { ...super.kernels, ...KERNELS, ...BATCH_KERNELS, ...(this.subgroupKernels ? SG_KERNELS : {}) }; }
+  // With gpuRouting, every one-token kernel carries the stop guard (chunked prefill's do not).
+  get kernels() {
+    if (!this._kernels) {
+      const k = { ...super.kernels, ...KERNELS, ...(this.subgroupKernels ? SG_KERNELS : {}) };
+      if (this.routeGuards) for (const n of Object.keys(k)) k[n] = guarded(k[n]);
+      this._kernels = { ...k, ...BATCH_KERNELS, route: ROUTE_KERNEL };
+    }
+    return this._kernels;
+  }
+  isGuarded(name) { return this.routeGuards && name !== 'route' && !(name in BATCH_KERNELS); }
 
+  bind(name, buffers) { return super.bind(name, this.isGuarded(name) ? [...buffers, this.a.stop] : buffers); }
   // Like bind(), but a resource may be { buffer, offset, size }.
   bindR(name, resources) {
+    const all = this.isGuarded(name) ? [...resources, this.a.stop] : resources;
     return this.device.createBindGroup({
       layout: this.pipeline(name).getBindGroupLayout(0),
-      entries: resources.map((r, i) => ({ binding: i, resource: r instanceof GPUBuffer ? { buffer: r } : r })),
+      entries: all.map((r, i) => ({ binding: i, resource: r instanceof GPUBuffer ? { buffer: r } : r })),
     });
   }
 
@@ -688,11 +745,18 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
       rl: A(c.experts), sel: A(2 * K), pxn: A(H), prl: A(c.experts), psel: A(64 * this.lookahead), slots: A(K),
       gu: A(K * 2 * F), act: A(K * F), dn: A(K * H), shgu: A(2 * SF), shact: A(SF), sh: A(H), sg: A(4),
       logits: A(c.vocab), am: A(4), rope: A(c.ropeDims),
+      stop: A(4), used: A(c.layers * K), rmap: A(c.layers * c.experts),
     };
     this.tok = this.buffer(16, UNIFORM | COPY_DST);
     this.rbSel = this.buffer(256 * (1 + this.lookahead), MAP_READ | COPY_DST);
     this.rbLogits = this.buffer(c.vocab * 4, MAP_READ | COPY_DST);
     this.rbArg = this.buffer(16, MAP_READ | COPY_DST);
+    // One readback per decode sync: [stop | layer's sel | guesses | every layer's picks | argmax].
+    this.seg = { sel: 256, psel: 512, used: 512 + 256 * this.lookahead };
+    this.seg.am = this.seg.used + Math.ceil(c.layers * K * 4 / 16) * 16;
+    this.seg.bytes = this.seg.am + 16;
+    this.rbSeg = this.buffer(this.seg.bytes, MAP_READ | COPY_DST);
+    this.routeMap = new Uint32Array(c.layers * c.experts);
 
     const U = (w) => this.uniform(w), eps = { f: c.eps };
     const u = {
@@ -764,6 +828,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
         silu: this.bind('siluMulMoe', [a.gu, a.act, u.silu]),
         dn: this.bind('expertQ8', [a.act, this.pool.dQ, this.pool.dS, a.dn, u.dn, a.slots]),
         acc: this.bind('moeAccumShared', [a.dn, a.sel, a.sh, a.sg, a.x, u.acc]),
+        route: this.bind('route', [a.sel, a.rmap, a.slots, a.stop, a.used, U([l, c.experts, K, 0])]),
       });
       this.layers.push(g);
     }
@@ -895,6 +960,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     if (T > this.chunkTokens) throw new Error(`chunk of ${T} > ${this.chunkTokens}`);
     if (S > this.maxCtx) throw new Error(`context full (${this.maxCtx} tokens)`);
     const tStart = performance.now();
+    dev.queue.writeBuffer(this.a.stop, 0, new Uint32Array(4));   // the head below uses guarded kernels
     dev.queue.writeBuffer(this.b.ids, 0, Uint32Array.from(ids));
     dev.queue.writeBuffer(this.qb, 0, new Uint32Array([T, pos0, S, 0]));
     const nRot = c.ropeDims, half = nRot / 2, r = new Float32Array(T * nRot), stepR = Math.fround(Math.pow(c.ropeTheta, -2 / nRot));
@@ -1006,6 +1072,111 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     d('siluMulMoe', g.silu, Math.ceil(c.topK * c.expertFf / 256));
     d('expertQ8', g.dn, Math.ceil(c.hidden / 4), 1, c.topK);
     d('moeAccumShared', g.acc, Math.ceil(c.hidden / 256));
+  }
+
+  // The pool's residency as the route kernel reads it: slot of (layer, expert), or ABSENT. Built
+  // from the streamer's slot keys, which are set only once an expert's upload has been submitted.
+  // Queue order keeps it safe: an upload into a slot runs after every submit made before it.
+  writeRouteMap() {
+    const map = this.routeMap, key = this.xs.slotKey;
+    map.fill(ABSENT);
+    for (let s = 0; s < key.length; s++) if (key[s] >= 0) map[key[s]] = s;
+    this.device.queue.writeBuffer(this.a.rmap, 0, map);
+  }
+
+  // One token with routing on the GPU. Each submit runs up to routeWindow layers and routes the
+  // layer after them; the route kernel stops it early at the first layer with an expert outside
+  // the pool. Either way the CPU then ensures the next layer's experts (loading any absent ones and
+  // prefetching the guesses for the layers after it) and resumes at that layer's experts:
+  // everything it computed before routing (x, xn, sel, shared expert) is still in place, since
+  // every kernel after a stop returns without writing.
+  async step(token, want = 'argmax') {
+    if (!this.gpuRouting) return super.step(token, want);
+    const c = this.cfg, dev = this.device, K = c.topK, L = c.layers, seg = this.seg;
+    if (this.position >= this.maxCtx) throw new Error(`context full (${this.maxCtx} tokens)`);
+    const tStart = performance.now();
+    const pos = this.position, seqLen = pos + 1;
+    this.writeTokenUniforms(token, pos);
+    // resume: -1 starts at the embedding; l ≥ 0 resumes at layer l's experts (its trunk already ran,
+    // and a DeltaNet trunk must not run twice: it advances the recurrent state).
+    let resume = -1, slots = null, result = null;
+    for (;;) {
+      const te = performance.now();
+      this.writeRouteMap();
+      dev.queue.writeBuffer(this.a.stop, 0, new Uint32Array(4));
+      if (slots) dev.queue.writeBuffer(this.a.slots, 0, slots);
+      const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
+      if (resume < 0) {
+        this.dispatch(pass, 'embedQ8', this.g.embed, Math.ceil(c.hidden / 256));
+        this.encodeAttention(pass, 0, seqLen);
+        this.dispatch(pass, 'route', this.layers[0].route, 1);
+      }
+      const first = Math.max(0, resume), last = Math.min(L - 1, first + this.routeWindow - 1);
+      for (let l = first; l <= last; l++) {
+        this.encodeExperts(pass, l);
+        if (l + 1 < L) { this.encodeAttention(pass, l + 1, seqLen); this.dispatch(pass, 'route', this.layers[l + 1].route, 1); }
+      }
+      if (last === L - 1 && want !== 'none') {
+        this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);
+        this.dispatch(pass, 'matmulQ8', this.g.lm, Math.ceil(c.vocab / 4));
+        if (want === 'argmax') this.dispatch(pass, 'argmax', this.g.am, 1);
+      }
+      pass.end();
+      enc.copyBufferToBuffer(this.a.stop, 0, this.rbSeg, 0, 16);
+      enc.copyBufferToBuffer(this.a.sel, 0, this.rbSeg, seg.sel, 8 * K);
+      if (this.prefetch) enc.copyBufferToBuffer(this.a.psel, 0, this.rbSeg, seg.psel, 256 * this.lookahead);
+      enc.copyBufferToBuffer(this.a.used, 0, this.rbSeg, seg.used, L * K * 4);
+      if (last === L - 1 && want === 'argmax') enc.copyBufferToBuffer(this.a.am, 0, this.rbSeg, seg.am, 4);
+      if (last === L - 1 && want === 'logits') enc.copyBufferToBuffer(this.a.logits, 0, this.rbLogits, 0, c.vocab * 4);
+      dev.queue.submit([enc.finish()]);
+      if (slots) { this.xs.release(slots); slots = null; }
+      this.counters.encodeMs += performance.now() - te;
+      this.counters.syncs++;
+      this.counters.layersEncoded += last - first + 1;
+
+      const tw = performance.now();
+      await this.rbSeg.mapAsync(1, 0, seg.bytes);
+      this.counters.gpuWaitMs += performance.now() - tw;
+      const u = new Uint32Array(this.rbSeg.getMappedRange(0, seg.bytes).slice(0));
+      this.rbSeg.unmap();
+      const stopL = u[0] ? u[0] - 1 : last + 1;
+      // Layers this submit routed and ran on the GPU: refresh them in the LRU. (A resumed layer went
+      // through ensure() already.)
+      for (let l = resume + 1; l < stopL; l++) this.xs.touchUsed(l, u.subarray(seg.used / 4 + l * K, seg.used / 4 + (l + 1) * K));
+      if (stopL === L) {
+        if (want === 'argmax') result = u[seg.am / 4];
+        break;
+      }
+      const ids = u.slice(seg.sel / 4, seg.sel / 4 + K);
+      const tq = performance.now();
+      const ensuring = this.xs.ensure(stopL, ids);
+      if (this.prefetch) {
+        const n = this.layers[stopL].pf.length;
+        for (let i = 0; i < n; i++) this.xs.prefetch(stopL + 1 + i, u.subarray(seg.psel / 4 + 64 * i, seg.psel / 4 + 64 * i + K));
+      }
+      slots = await ensuring;
+      this.counters.ensureMs += performance.now() - tq;
+      resume = stopL;
+    }
+    if (want === 'logits') {
+      const tw = performance.now();
+      await this.rbLogits.mapAsync(1);
+      this.counters.gpuWaitMs += performance.now() - tw;
+      result = new Float32Array(this.rbLogits.getMappedRange().slice(0));
+      this.rbLogits.unmap();
+    }
+    this.position++;
+    this.cached.push(token);
+    this.counters.tokens++;
+    this.counters.wallMs += performance.now() - tStart;
+    return result;
+  }
+
+  resetCounters() { super.resetCounters(); this.counters.syncs = 0; this.counters.layersEncoded = 0; }
+  // layersEncodedPerToken − layers = expert blocks dispatched after a stop (no-ops).
+  stats() {
+    const n = Math.max(1, this.counters.tokens);
+    return { ...super.stats(), gpuRouting: this.gpuRouting, routeWindow: this.routeWindow, syncsPerToken: this.counters.syncs / n, layersEncodedPerToken: this.counters.layersEncoded / n };
   }
 
   // RoPE angles as ggml's CPU rope cache forms them for text positions (all M-RoPE sections at

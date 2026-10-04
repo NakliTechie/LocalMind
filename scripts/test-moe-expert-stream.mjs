@@ -66,6 +66,19 @@ writes.length = 0;
   assert.equal(xs.stats.evictions, 1);
 }
 
+{ // touchUsed (routing on the GPU): refreshes recency and counts hits, skips absent experts, never pins
+  const xs = mk(3);
+  xs.release(await xs.ensure(0, [0]));
+  xs.release(await xs.ensure(0, [1]));
+  xs.release(await xs.ensure(0, [2]));         // LRU order 0, 1, 2
+  const hits = xs.stats.hits;
+  xs.touchUsed(0, [0, 4]);                     // 0 used on the GPU; 4 is not resident: skipped
+  assert.equal(xs.stats.hits, hits + 1);
+  assert.ok([...xs.pinCount].every((n) => n === 0), 'touchUsed pins nothing');
+  xs.release(await xs.ensure(1, [5]));         // evicts 1, the least recent after the touch
+  assert.ok(!xs.lru.has(xs.key(0, 1)) && xs.lru.has(xs.key(0, 0)));
+}
+
 { // pins: while layer 0's slots are held, a prefetch may only use the rest of the pool
   const xs = mk(3);
   const held = await xs.ensure(0, [0, 1]);

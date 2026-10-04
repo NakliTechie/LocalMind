@@ -195,6 +195,23 @@ export class ExpertStreamer {
     return out;
   }
 
+  // For an engine that routes on the GPU against a residency map: `ids` of `layer` were found
+  // resident and used without an ensure(). Refreshes their recency and counts them as hits; an
+  // expert evicted since (its slot was reused after that work was submitted) is skipped.
+  touchUsed(layer, ids) {
+    this.tick++;
+    const st = this.stats;
+    for (const e of ids) {
+      const key = this.key(layer, e);
+      const s = this.lru.get(key);
+      if (s === undefined) continue;
+      this.touch(key);
+      if (this.prefetched.delete(key)) st.prefetchUsed++;
+      this.lru.delete(key); this.lru.set(key, s);
+      st.hits++; st.hitsByLayer[layer]++;
+    }
+  }
+
   // Queues loads for experts that are neither resident, in flight nor queued; never awaits.
   // Call with the nearest layer first: the queue is served in order, and entries for a layer
   // are dropped once that layer's demand (ensure) arrives. Returns how many loads it started.

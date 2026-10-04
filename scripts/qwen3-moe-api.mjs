@@ -8,19 +8,19 @@ export function makeApi(log = () => {}) {
   let m = null;
   const api = {
     // engine: 'qwen3' (rung 2a, qwen3moe GGUFs) or 'qwen35' (rung 2b, qwen35moe GGUFs).
-    async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups } = {}) {
+    async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow } = {}) {
       if (m) { await m.dispose(); m = null; }
       const t0 = performance.now();
       let last = 0;
       m = await (engine === 'qwen35' ? Qwen35MoeSsd : Qwen3MoeSsd).load(null, {
-        url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups,
+        url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow,
         onProgress: (e) => {
           if (e.status === 'weights' && e.kind !== 'tensors' && performance.now() - last > 2000) { last = performance.now(); log({ ingest: e.loaded, total: e.total, secs: e.secs }); }
           else if (e.status === 'ingest-plan') log(e);
         },
       });
       globalThis.engine = m;
-      return log({ subgroupKernels: !!m.subgroupKernels, loaded: key, secs: (performance.now() - t0) / 1000, ingestSecs: m.manifest.ingestSecs, denseUploadSecs: m.denseUploadSecs, poolSlots: m.poolSlots, gpuBytes: m.gpuBytes, cfg: m.cfg });
+      return log({ subgroupKernels: !!m.subgroupKernels, gpuRouting: m.gpuRouting, loaded: key, secs: (performance.now() - t0) / 1000, ingestSecs: m.manifest.ingestSecs, denseUploadSecs: m.denseUploadSecs, poolSlots: m.poolSlots, gpuBytes: m.gpuBytes, cfg: m.cfg });
     },
     async greedy(ids, n = 16, { top = 5, resetStats = true } = {}) {
       if (resetStats) m.resetCounters();
@@ -83,11 +83,14 @@ export function makeApi(log = () => {}) {
       return { prefetch: m.prefetch, poolSlots: m.poolSlots, promptTokens: ids.length, ids: out, text: m.tokenizer.decode(out), prefill, decode };
     },
     // Diagnostic: GPU time for one token's forward pass with no router readbacks — every layer
-    // uses pool slots 0..k-1 whatever the router picks, all 48 layers in one submit. Output is
+    // uses pool slots 0..k-1 whatever the router picks, all layers in one submit. Output is
     // meaningless; the time is the compute floor that per-layer readbacks and loads sit on top of.
-    async gpuFloor(n = 16, { attention = true, experts = true, head = true } = {}) {
+    // stopped (rung 2b): the stop flag is set first, so every guarded kernel returns at once —
+    // the cost of the rest of a token after the GPU router stops it.
+    async gpuFloor(n = 16, { attention = true, experts = true, head = true, stopped = false } = {}) {
       const c = m.cfg, dev = m.device, K = c.topK;
       dev.queue.writeBuffer(m.a.slots, 0, Uint32Array.from({ length: K }, (_, i) => i));
+      if (m.a.stop) dev.queue.writeBuffer(m.a.stop, 0, new Uint32Array([stopped ? 1 : 0, 0, 0, 0]));
       const times = [];
       for (let t = 0; t < n; t++) {
         m.writeTokenUniforms(1000, 0);
@@ -100,12 +103,16 @@ export function makeApi(log = () => {}) {
         await dev.queue.onSubmittedWorkDone();
         times.push(performance.now() - t0);
       }
+      if (m.a.stop) dev.queue.writeBuffer(m.a.stop, 0, new Uint32Array(4));
       times.sort((a, b) => a - b);
       return { msPerToken: times[Math.floor(n / 2)], min: times[0], max: times[n - 1] };
     },
     setPrefetch(on) { m.prefetch = !!on; return m.prefetch; },
     // rung 2b: switch between chunked and one-token prefill (the batch buffers stay allocated).
     setBatchPrefill(on) { m.batchPrefill = !!on && !!m.b; return m.batchPrefill; },
+    // rung 2b: routing on the GPU (sync only at a layer with an absent expert) or after every layer.
+    // Needs load({ gpuRouting: true }), which compiles the guarded kernels.
+    setGpuRouting(on, window) { if (m.routeGuards) { m.gpuRouting = !!on; if (window) m.routeWindow = window; } return m.gpuRouting; },
     async clearPool() { await m.xs.clear(); m.resetCounters(); return true; },
     stats() { return m.stats(); },
     encode(text) { return m.tokenizer.encode(text); },
