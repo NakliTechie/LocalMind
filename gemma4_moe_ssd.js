@@ -19,6 +19,7 @@
 
 import { Qwen3MoeSsd, GGML, Q4_BLOCK, Q6K_BLOCK, tensorBytes, TOK, STORAGE, COPY_SRC, COPY_DST, MAP_READ } from './qwen3_moe_ssd.js';
 import { OpfsReaderPool } from './opfs-reader.js';
+import { QWEN35_BATCH_KERNELS } from './qwen35_moe_ssd.js';
 
 export function configFromGgufGemma4(kv) {
   const a = kv['general.architecture'];
@@ -535,6 +536,287 @@ struct P { n: u32, off: u32 }
 }`,
 };
 
+// ── Subgroup Q4_0 GEMVs (decode) ─────────────────────────────────────────────────
+// One 32-lane subgroup per output row, 4 rows per 128-thread workgroup (the scalar kernels' dispatch
+// geometry). A lane takes whole blocks: one vec4<u32> of nibbles, unpack4xU8 of the low and high nibble
+// masks, vec4 dot products against the activations, the block scale once; subgroupAdd reduces the row.
+// Used only when the adapter's subgroups are exactly 32 wide.
+const Q4BLK = `
+fn q4blk(w: vec4<u32>, xb: u32) -> f32 {
+  let m = 0x0f0f0f0fu;
+  return dot(vec4<f32>(unpack4xU8(w.x & m)) - 8.0, x[xb]) + dot(vec4<f32>(unpack4xU8((w.x >> 4u) & m)) - 8.0, x[xb + 4u])
+       + dot(vec4<f32>(unpack4xU8(w.y & m)) - 8.0, x[xb + 1u]) + dot(vec4<f32>(unpack4xU8((w.y >> 4u) & m)) - 8.0, x[xb + 5u])
+       + dot(vec4<f32>(unpack4xU8(w.z & m)) - 8.0, x[xb + 2u]) + dot(vec4<f32>(unpack4xU8((w.z >> 4u) & m)) - 8.0, x[xb + 6u])
+       + dot(vec4<f32>(unpack4xU8(w.w & m)) - 8.0, x[xb + 3u]) + dot(vec4<f32>(unpack4xU8((w.w >> 4u) & m)) - 8.0, x[xb + 7u]);
+}`;
+const G4SG = {
+  matmulQ4: `enable f16;
+enable subgroups;
+struct P { M: u32, N: u32 }
+@group(0) @binding(0) var<storage, read> x: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> qw: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read> qs: array<f16>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+${Q4BLK}
+@compute @workgroup_size(128) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let m = (wg.y * ng.x + wg.x) * 4u + l.x / 32u; let lane = l.x % 32u;
+  let nb = p.N / 32u; let rb = min(m, p.M - 1u) * nb;
+  var acc = 0.0;
+  for (var b = lane; b < nb; b += 32u) { acc += q4blk(qw[rb + b], b * 8u) * f32(qs[rb + b]); }
+  let total = subgroupAdd(acc);
+  if (lane == 0u && m < p.M) { y[m] = total; }
+}`,
+  expertQ4: `enable f16;
+enable subgroups;
+struct P { M: u32, N: u32, rowsPerExpert: u32, inputPerSlot: u32 }
+@group(0) @binding(0) var<storage, read> x: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> qw: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read> qs: array<f16>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@group(0) @binding(5) var<storage, read> slots: array<u32>;
+${Q4BLK}
+@compute @workgroup_size(128) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let z = wg.z; let m = (wg.y * ng.x + wg.x) * 4u + l.x / 32u; let lane = l.x % 32u;
+  let nb = p.N / 32u; let rb = (slots[z] * p.rowsPerExpert + min(m, p.M - 1u)) * nb;
+  let xo = select(0u, z * p.N / 4u, p.inputPerSlot == 1u);
+  var acc = 0.0;
+  for (var b = lane; b < nb; b += 32u) { acc += q4blk(qw[rb + b], xo + b * 8u) * f32(qs[rb + b]); }
+  let total = subgroupAdd(acc);
+  if (lane == 0u && m < p.M) { y[z * p.M + m] = total; }
+}`,
+};
+
+// ── Chunked prefill: T tokens per layer pass (rung 2b's pattern) ────────────────
+// Rows are tokens, token-major. Generic kernels come from rung 2b (rmsnormB, matmulF32T, topkB, kvStoreB,
+// softmaxB, attnOutB); these are Gemma's.
+const QB = 'struct Q { T: u32, pos0: u32, S: u32, pad: u32 }';
+const G4B = {
+  embedQ6KB: `
+struct P { n: u32, rowBytes: u32, scale: f32 }
+${QB}
+@group(0) @binding(0) var<storage, read> qk: array<u32>;
+@group(0) @binding(1) var<storage, read> ids: array<u32>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+@group(0) @binding(4) var<uniform> qd: Q;
+${Q6K}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let i = g.x; let t = g.y; if (i >= p.n || t >= qd.T) { return; }
+  y[t * p.n + i] = q6k(ids[t] * p.rowBytes + (i >> 8u) * 210u, i & 255u) * p.scale;
+}`,
+  // Tiled Q4_0 GEMM: y[t·M + m] = Σ_k x[t·N + k]·W[m][k]. 16 rows × 16 tokens per workgroup; each 32-wide
+  // block of W (decoded from its nibbles) and of x goes through shared memory, so a weight serves 16 tokens.
+  // Dispatch (ceil(M/16), ceil(T/16)).
+  matmulQ4T: `enable f16;
+struct P { M: u32, N: u32 }
+${QB}
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read> qw: array<u32>;
+@group(0) @binding(2) var<storage, read> qs: array<f16>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@group(0) @binding(5) var<uniform> qd: Q;
+var<workgroup> ws: array<f32, 512>;
+var<workgroup> xs: array<f32, 512>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let m0 = wg.x * 16u; let t0 = wg.y * 16u; let r = l.x / 16u; let c = l.x % 16u;
+  let nb = p.N / 32u; let nw = p.N / 8u; var acc = 0.0;
+  for (var b = 0u; b < nb; b++) {
+    for (var i = l.x; i < 512u; i += 256u) {
+      let rr = i / 32u; let kk = i % 32u;
+      let m = m0 + rr; var wv = 0.0;
+      if (m < p.M) {
+        let wd = qw[m * nw + b * 4u + ((kk & 15u) >> 2u)];
+        wv = (f32((wd >> ((kk & 3u) * 8u + (kk >> 4u) * 4u)) & 15u) - 8.0) * f32(qs[m * nb + b]);
+      }
+      ws[i] = wv;
+      let t = t0 + rr; var xv = 0.0;
+      if (t < qd.T) { xv = x[t * p.N + b * 32u + kk]; }
+      xs[i] = xv;
+    }
+    workgroupBarrier();
+    for (var kk = 0u; kk < 32u; kk++) { acc += ws[r * 32u + kk] * xs[c * 32u + kk]; }
+    workgroupBarrier();
+  }
+  let m = m0 + r; let t = t0 + c;
+  if (m < p.M && t < qd.T) { y[t * p.M + m] = acc; }
+}`,
+  // Routed experts for every (token, pick) pair: z = t·K + j, slots[z] its pool slot. Input: the token's row
+  // (gate/up, inputMode 0) or the pair's own row (down, inputMode 1).
+  expertQ4B: `enable f16;
+struct P { M: u32, N: u32, rowsPerExpert: u32, inputMode: u32, K: u32 }
+@group(0) @binding(0) var<storage, read> xin: array<f32>;
+@group(0) @binding(1) var<storage, read> qw: array<u32>;
+@group(0) @binding(2) var<storage, read> qs: array<f16>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@group(0) @binding(5) var<storage, read> slots: array<u32>;
+${Q4DOT}
+var<workgroup> part: array<f32, 1024>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let z = wg.z; let m0 = (wg.y * ng.x + wg.x) * 4u; let t = l.x; let M = p.M; let nw = p.N / 8u; let nb = p.N / 32u;
+  if (m0 >= M) { return; }
+  let rb = slots[z] * p.rowsPerExpert;
+  let xo = select((z / p.K) * p.N, z * p.N, p.inputMode == 1u);
+  let r0 = rb + min(m0, M - 1u); let r1 = rb + min(m0 + 1u, M - 1u); let r2 = rb + min(m0 + 2u, M - 1u); let r3 = rb + min(m0 + 3u, M - 1u);
+  var a0 = 0.0; var a1 = 0.0; var a2 = 0.0; var a3 = 0.0;
+  for (var w = t; w < nw; w += 256u) {
+    let b = w >> 2u; let xb = xo + b * 32u + (w & 3u) * 4u;
+    a0 += q4dot(qw[r0 * nw + w], f32(qs[r0 * nb + b]), xb);
+    a1 += q4dot(qw[r1 * nw + w], f32(qs[r1 * nb + b]), xb);
+    a2 += q4dot(qw[r2 * nw + w], f32(qs[r2 * nb + b]), xb);
+    a3 += q4dot(qw[r3 * nw + w], f32(qs[r3 * nb + b]), xb);
+  }
+  part[t] = a0; part[256u + t] = a1; part[512u + t] = a2; part[768u + t] = a3;
+  workgroupBarrier();
+  for (var s = 128u; s > 0u; s >>= 1u) {
+    if (t < s) { part[t] += part[t + s]; part[256u + t] += part[256u + t + s]; part[512u + t] += part[512u + t + s]; part[768u + t] += part[768u + t + s]; }
+    workgroupBarrier();
+  }
+  if (t < 4u && m0 + t < M) { y[z * M + m0 + t] = part[t * 256u]; }
+}`,
+  // Per-head RMS norm and NeoX RoPE in place for (head wg.x, token wg.y); rope holds hd values per token.
+  qkNormRopeB: `
+struct P { hd: u32, row: u32, eps: f32 }
+@group(0) @binding(0) var<storage, read_write> x: array<f32>;
+@group(0) @binding(1) var<storage, read> w: array<f32>;
+@group(0) @binding(2) var<storage, read> rope: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+var<workgroup> red: array<f32, 64>;
+@compute @workgroup_size(64) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let base = wg.y * p.row + wg.x * p.hd; let rb = wg.y * p.hd; let t = l.x; let half = p.hd / 2u;
+  var acc = 0.0;
+  for (var i = t; i < p.hd; i += 64u) { let v = x[base + i]; acc += v * v; }
+  red[t] = acc; workgroupBarrier();
+  for (var s = 32u; s > 0u; s >>= 1u) { if (t < s) { red[t] += red[t + s]; } workgroupBarrier(); }
+  let scale = 1.0 / sqrt(red[0] / f32(p.hd) + p.eps);
+  for (var i = t; i < half; i += 64u) {
+    let a = (x[base + i] * scale) * w[i];
+    let b = (x[base + i + half] * scale) * w[i + half];
+    let c = rope[rb + i]; let sn = rope[rb + half + i];
+    x[base + i] = a * c - b * sn;
+    x[base + i + half] = a * sn + b * c;
+  }
+}`,
+  vNormB: `
+struct P { hd: u32, row: u32, eps: f32 }
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read_write> y: array<f32>;
+@group(0) @binding(2) var<uniform> p: P;
+var<workgroup> red: array<f32, 64>;
+@compute @workgroup_size(64) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let base = wg.y * p.row + wg.x * p.hd; let t = l.x;
+  var acc = 0.0;
+  for (var i = t; i < p.hd; i += 64u) { let v = x[base + i]; acc += v * v; }
+  red[t] = acc; workgroupBarrier();
+  for (var s = 32u; s > 0u; s >>= 1u) { if (t < s) { red[t] += red[t + s]; } workgroupBarrier(); }
+  let scale = 1.0 / sqrt(red[0] / f32(p.hd) + p.eps);
+  for (var i = t; i < p.hd; i += 64u) { y[base + i] = x[base + i] * scale; }
+}`,
+  // Causal (and, on sliding layers, windowed) scores for T queries over S = pos0 + T keys; scale 1.0.
+  attnScoreWB: `enable f16;
+struct P { heads: u32, kvHeads: u32, hd: u32, win: u32 }
+${QB}
+@group(0) @binding(0) var<storage, read> q: array<f32>;
+@group(0) @binding(1) var<storage, read> kc: array<f16>;
+@group(0) @binding(2) var<storage, read_write> sc: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+@group(0) @binding(4) var<uniform> qd: Q;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>) {
+  let idx = g.y * ng.x * 256u + g.x; let S = qd.S; let T = qd.T;
+  if (idx >= p.heads * T * S) { return; }
+  let h = idx / (T * S); let rem = idx % (T * S); let t = rem / S; let pos = rem % S; let qp = qd.pos0 + t;
+  if (pos > qp || (p.win > 0u && qp - pos >= p.win)) { sc[idx] = -3.4e38; return; }
+  let kvh = h / (p.heads / p.kvHeads);
+  let qo = t * p.heads * p.hd + h * p.hd; let ko = pos * p.kvHeads * p.hd + kvh * p.hd;
+  var acc = 0.0;
+  for (var d = 0u; d < p.hd; d++) { acc += q[qo + d] * f32(kc[ko + d]); }
+  sc[idx] = acc;
+}`,
+  // x += rms_norm(y) · w per token row (one workgroup per token).
+  rmsnormAddB: `
+struct P { n: u32, eps: f32 }
+@group(0) @binding(0) var<storage, read> y: array<f32>;
+@group(0) @binding(1) var<storage, read> w: array<f32>;
+@group(0) @binding(2) var<storage, read_write> x: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+var<workgroup> red: array<f32, 256>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let b = wg.x * p.n; let t = l.x; var acc = 0.0;
+  for (var i = t; i < p.n; i += 256u) { let v = y[b + i]; acc += v * v; }
+  red[t] = acc; workgroupBarrier();
+  for (var s = 128u; s > 0u; s >>= 1u) { if (t < s) { red[t] += red[t + s]; } workgroupBarrier(); }
+  let scale = 1.0 / sqrt(red[0] / f32(p.n) + p.eps);
+  for (var i = t; i < p.n; i += 256u) { x[b + i] = (y[b + i] * scale) * w[i] + x[b + i]; }
+}`,
+  rmsnormKB: `
+struct P { n: u32, eps: f32, k: f32 }
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read> w: array<f32>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+var<workgroup> red: array<f32, 256>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let b = wg.x * p.n; let t = l.x; var acc = 0.0;
+  for (var i = t; i < p.n; i += 256u) { let v = x[b + i]; acc += v * v; }
+  red[t] = acc; workgroupBarrier();
+  for (var s = 128u; s > 0u; s >>= 1u) { if (t < s) { red[t] += red[t + s]; } workgroupBarrier(); }
+  let scale = 1.0 / sqrt(red[0] / f32(p.n) + p.eps);
+  for (var i = t; i < p.n; i += 256u) { y[b + i] = ((x[b + i] * scale) * p.k) * w[i]; }
+}`,
+  // act = GELU(g) · u over T × n (the dense MLP's separate gate and up).
+  gegluSplitB: `
+struct P { n: u32 }
+${QB}
+@group(0) @binding(0) var<storage, read> g: array<f32>;
+@group(0) @binding(1) var<storage, read> u: array<f32>;
+@group(0) @binding(2) var<storage, read_write> act: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+@group(0) @binding(4) var<uniform> qd: Q;
+${GELU}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) gi: vec3<u32>) {
+  let i = gi.x; let t = gi.y; if (i >= p.n || t >= qd.T) { return; }
+  let k = t * p.n + i; act[k] = gelu(g[k]) * u[k];
+}`,
+  moeSumB: `
+struct P { H: u32, k: u32 }
+${QB}
+@group(0) @binding(0) var<storage, read> dn: array<f32>;
+@group(0) @binding(1) var<storage, read> sel: array<u32>;
+@group(0) @binding(2) var<storage, read> ds: array<f32>;
+@group(0) @binding(3) var<storage, read_write> moe: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@group(0) @binding(5) var<uniform> qd: Q;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) gi: vec3<u32>) {
+  let h = gi.x; let t = gi.y; if (h >= p.H || t >= qd.T) { return; }
+  let sb = t * 2u * p.k; let ob = t * p.k * p.H + h;
+  var acc = (dn[ob] * ds[sel[sb]]) * bitcast<f32>(sel[sb + p.k]);
+  for (var j = 1u; j < p.k; j++) { acc = acc + (dn[ob + j * p.H] * ds[sel[sb + j]]) * bitcast<f32>(sel[sb + p.k + j]); }
+  moe[t * p.H + h] = acc;
+}`,
+  postFfnB: `
+struct P { n: u32, eps: f32 }
+@group(0) @binding(0) var<storage, read> mlp: array<f32>;
+@group(0) @binding(1) var<storage, read> moe: array<f32>;
+@group(0) @binding(2) var<storage, read> w: array<f32>;
+@group(0) @binding(3) var<storage, read> os: array<f32>;
+@group(0) @binding(4) var<storage, read_write> x: array<f32>;
+@group(0) @binding(5) var<uniform> p: P;
+var<workgroup> red: array<f32, 256>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let b = wg.x * p.n; let t = l.x; var acc = 0.0;
+  for (var i = t; i < p.n; i += 256u) { let v = mlp[b + i] + moe[b + i]; acc += v * v; }
+  red[t] = acc; workgroupBarrier();
+  for (var s = 128u; s > 0u; s >>= 1u) { if (t < s) { red[t] += red[t + s]; } workgroupBarrier(); }
+  let scale = 1.0 / sqrt(red[0] / f32(p.n) + p.eps);
+  let k = os[0];
+  for (var i = t; i < p.n; i += 256u) { x[b + i] = (((mlp[b + i] + moe[b + i]) * scale) * w[i] + x[b + i]) * k; }
+}`,
+};
+const REUSED_B = ['rmsnormB', 'matmulF32T', 'topkB', 'kvStoreB', 'softmaxB', 'attnOutB'];
+
 // ── Engine ──────────────────────────────────────────────────────────────────
 export class Gemma4MoeSsd extends Qwen3MoeSsd {
   static configFrom(kv) { return configFromGgufGemma4(kv); }
@@ -550,7 +832,25 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
   get thinkInPrompt() { return false; }
   get thinkPreamble() { return 'thought\n'; }
 
-  get kernels() { return (this._kernels ||= { ...super.kernels, ...G4 }); }
+  get kernels() {
+    return (this._kernels ||= {
+      ...super.kernels, ...G4, ...(this.subgroupKernels ? G4SG : {}),
+      ...(this.batchPrefill ? { ...Object.fromEntries(REUSED_B.map((k) => [k, QWEN35_BATCH_KERNELS[k]])), ...G4B } : {}),
+    });
+  }
+  // Subgroup GEMVs replace the scalar Q4_0 ones when subgroups are exactly 32 wide (Apple, most others).
+  get subgroupKernels() {
+    const i = this.device.adapterInfo || this.opts.adapterInfo || {};
+    return this.opts.subgroups !== false && this.device.features.has('subgroups') && i.subgroupMinSize === 32 && i.subgroupMaxSize === 32;
+  }
+
+  // batchPrefill (default on): prompts go through in chunks of up to prefillChunk tokens, one routing
+  // readback per layer per chunk. capture (debug) records one-token steps, so it turns chunking off.
+  constructor(device, manifest, gguf, opts) {
+    super(device, manifest, gguf, opts);
+    this.batchPrefill = (opts.batchPrefill ?? true) && !opts.capture;
+    this.chunkTokens = Math.max(2, Math.floor(opts.prefillChunk || 256));
+  }
 
   // A bind group whose entries are buffers or { buffer, offset, size } ranges.
   bindR(name, entries) {
@@ -679,6 +979,200 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
     this.g.lm = this.bind('matmulQ6K', [a.xn, W['token_embd.weight'].raw, a.logits, u.lm]);
     this.g.cap = this.bind('softcap', [a.logits, u.cap]);
     this.g.am = this.bind('argmax', [a.logits, a.am, u.am]);
+    if (this.batchPrefill) this.initBatch();
+  }
+
+  // Buffers and bind groups for chunked prefill (rows = the chunk's tokens).
+  initBatch() {
+    const c = this.cfg, B = this.chunkTokens, W = this.w, H = c.hidden, K = c.topK, E = c.experts, F = c.expertFf, DF = c.denseFf;
+    const QN = Math.max(...c.headDim.map((d) => c.heads * d)), KVN = Math.max(...c.headDim.map((d, l) => c.kvHeads[l] * d)), HD = Math.max(...c.headDim);
+    const A = (n) => this.buffer(n * 4, STORAGE | COPY_SRC | COPY_DST, 'batch');
+    const b = this.b = {
+      ids: A(B), x: A(B * H), xn: A(B * H), q: A(B * QN), k: A(B * KVN), v: A(B * KVN), vr: A(B * KVN), att: A(B * QN), o: A(B * H),
+      sc: A(c.heads * B * this.maxCtx), mg: A(B * DF), mu: A(B * DF), ma: A(B * DF), md: A(B * H), mlp: A(B * H), xm: A(B * H), rt: A(B * H),
+      rl: A(B * E), sel: A(B * 2 * K), slots: A(B * K), gu: A(B * K * 2 * F), act: A(B * K * F), dn: A(B * K * H), moe: A(B * H), moe2: A(B * H),
+      ropeS: A(B * HD), ropeF: A(B * HD),
+    };
+    this.qb = this.buffer(16, 0x40 | COPY_DST, 'batch');
+    this.rbSelB = this.buffer(B * 2 * K * 4, MAP_READ | COPY_DST, 'batch');
+    const U = (w) => this.uniform(w), eps = { f: c.eps }, qb = this.qb;
+    const u = {
+      embed: U([H, (H / 256) * Q6K_BLOCK, { f: Math.fround(Math.sqrt(H)) }]), rmsH: U([H, eps]),
+      routerK: U([H, eps, { f: Math.fround(1 / Math.fround(Math.sqrt(H))) }]), router: U([E, H]), topk: U([E, K]),
+      mg: U([DF, H]), md: U([H, DF]), geglu: U([DF]), gu: U([2 * F, H, 2 * F, 0, K]), dn: U([H, F, H, 1, K]), gegluE: U([F, B * K]), sum: U([H, K]),
+    };
+    const shape = new Map();
+    const shapeOf = (l) => {
+      const hd = c.headDim[l], qn = c.heads * hd, kvn = c.kvHeads[l] * hd, key = `${hd}/${c.kvHeads[l]}/${c.swa[l]}`;
+      if (!shape.has(key)) shape.set(key, {
+        q: U([qn, H]), kv: U([kvn, H]), o: U([H, qn]), ropeQ: U([hd, qn, eps]), ropeK: U([hd, kvn, eps]), kvn: U([kvn]),
+        att: U([c.heads, c.kvHeads[l], hd, c.swa[l] ? c.window : 0]),
+      });
+      return shape.get(key);
+    };
+    const q4 = (name, x, y, uni) => this.bind('matmulQ4T', [x, W[name].q, W[name].s, y, uni, qb]);
+    this.gB = { embed: this.bind('embedQ6KB', [W['token_embd.weight'].raw, b.ids, b.x, u.embed, qb]) };
+    for (let l = 0; l < c.layers; l++) {
+      const n = (t) => `blk.${l}.${t}`, raw = (t) => W[n(t)].raw, sh = shapeOf(l), hasV = !!W[n('attn_v.weight')];
+      const rope = c.swa[l] ? b.ropeS : b.ropeF;
+      this.layers[l].B = {
+        rmsA: this.bind('rmsnormB', [b.x, raw('attn_norm.weight'), b.xn, u.rmsH]),
+        q: q4(n('attn_q.weight'), b.xn, b.q, sh.q), k: q4(n('attn_k.weight'), b.xn, b.k, sh.kv),
+        v: hasV ? q4(n('attn_v.weight'), b.xn, b.vr, sh.kv) : null,
+        vn: this.bind('vNormB', [hasV ? b.vr : b.k, b.v, sh.ropeK]),
+        ropeQ: this.bind('qkNormRopeB', [b.q, raw('attn_q_norm.weight'), rope, sh.ropeQ]),
+        ropeK: this.bind('qkNormRopeB', [b.k, raw('attn_k_norm.weight'), rope, sh.ropeK]),
+        kv: this.bind('kvStoreB', [b.k, b.v, this.kc[l], this.vc[l], sh.kvn, qb]),
+        score: this.bind('attnScoreWB', [b.q, this.kc[l], b.sc, sh.att, qb]),
+        soft: this.bind('softmaxB', [b.sc, qb]),
+        attOut: this.bind('attnOutB', [b.sc, this.vc[l], b.att, sh.att, qb]),
+        o: q4(n('attn_output.weight'), b.att, b.o, sh.o),
+        postA: this.bind('rmsnormAddB', [b.o, raw('post_attention_norm.weight'), b.x, u.rmsH]),
+        rmsF: this.bind('rmsnormB', [b.x, raw('ffn_norm.weight'), b.xn, u.rmsH]),
+        mg: q4(n('ffn_gate.weight'), b.xn, b.mg, u.mg), mu: q4(n('ffn_up.weight'), b.xn, b.mu, u.mg),
+        mact: this.bind('gegluSplitB', [b.mg, b.mu, b.ma, u.geglu, qb]),
+        md: q4(n('ffn_down.weight'), b.ma, b.md, u.md),
+        mpost: this.bind('rmsnormB', [b.md, raw('post_ffw_norm_1.weight'), b.mlp, u.rmsH]),
+        xm: this.bind('rmsnormB', [b.x, raw('pre_ffw_norm_2.weight'), b.xm, u.rmsH]),
+        rp: this.bind('rmsnormKB', [b.x, raw('ffn_gate_inp.scale'), b.rt, u.routerK]),
+        router: this.bind('matmulF32T', [b.rt, raw('ffn_gate_inp.weight'), b.rl, u.router]),
+        topk: this.bind('topkB', [b.rl, b.sel, u.topk]),
+        gu: this.bind('expertQ4B', [b.xm, this.pool.guQ, this.pool.guS, b.gu, u.gu, b.slots]),
+        act: this.bind('geglu', [b.gu, b.act, u.gegluE]),
+        dn: this.bind('expertQ4B', [b.act, this.pool.dQ, this.pool.dS, b.dn, u.dn, b.slots]),
+        sum: this.bind('moeSumB', [b.dn, b.sel, raw('ffn_down_exps.scale'), b.moe, u.sum, qb]),
+        mpost2: this.bind('rmsnormB', [b.moe, raw('post_ffw_norm_2.weight'), b.moe2, u.rmsH]),
+        post: this.bind('postFfnB', [b.mlp, b.moe2, raw('post_ffw_norm.weight'), raw('layer_output_scale.weight'), b.x, u.rmsH]),
+      };
+    }
+  }
+
+  // Layer l over the chunk's T tokens up to its routing (the batched twin of encodeAttention).
+  encodeTrunkB(pass, l, T, S) {
+    const c = this.cfg, g = this.layers[l].B, d = (nm, gr, x, y, z) => this.dispatch(pass, nm, gr, x, y, z);
+    const H = c.hidden, hd = c.headDim[l], QN = c.heads * hd, kvn = c.kvHeads[l] * hd, DF = c.denseFf;
+    const tt = Math.ceil(T / 16), mm = (n) => Math.ceil(n / 16);
+    d('rmsnormB', g.rmsA, T);
+    d('matmulQ4T', g.q, mm(QN), tt); d('matmulQ4T', g.k, mm(kvn), tt);
+    if (g.v) d('matmulQ4T', g.v, mm(kvn), tt);
+    d('vNormB', g.vn, c.kvHeads[l], T);
+    d('qkNormRopeB', g.ropeQ, c.heads, T); d('qkNormRopeB', g.ropeK, c.kvHeads[l], T);
+    d('kvStoreB', g.kv, Math.ceil(kvn / 256), T);
+    d('attnScoreWB', g.score, Math.ceil(c.heads * T * S / 256));
+    d('softmaxB', g.soft, c.heads * T);
+    d('attnOutB', g.attOut, Math.ceil(QN / 256), T);
+    d('matmulQ4T', g.o, mm(H), tt);
+    d('rmsnormAddB', g.postA, T);
+    d('rmsnormB', g.rmsF, T);
+    d('matmulQ4T', g.mg, mm(DF), tt); d('matmulQ4T', g.mu, mm(DF), tt);
+    d('gegluSplitB', g.mact, Math.ceil(DF / 256), T);
+    d('matmulQ4T', g.md, mm(H), tt);
+    d('rmsnormB', g.mpost, T);
+    d('rmsnormB', g.xm, T);
+    d('rmsnormKB', g.rp, T);
+    d('matmulF32T', g.router, c.experts, T);
+    d('topkB', g.topk, T);
+  }
+  encodeExpertsB(pass, l, T) {
+    const c = this.cfg, g = this.layers[l].B, d = (nm, gr, x, y, z) => this.dispatch(pass, nm, gr, x, y, z);
+    d('expertQ4B', g.gu, Math.ceil(2 * c.expertFf / 4), 1, T * c.topK);
+    d('geglu', g.act, Math.ceil(T * c.topK * c.expertFf / 256));
+    d('expertQ4B', g.dn, Math.ceil(c.hidden / 4), 1, T * c.topK);
+    d('moeSumB', g.sum, Math.ceil(c.hidden / 256), T);
+    d('rmsnormB', g.mpost2, T);
+    d('postFfnB', g.post, T);
+  }
+
+  // Feeds T = ids.length tokens at this.position through every layer: one routing readback per layer,
+  // the union of the chunk's experts loaded once. want as in step(), for the last token.
+  async prefillChunk(ids, want = 'none') {
+    const c = this.cfg, dev = this.device, K = c.topK, H = c.hidden, T = ids.length, pos0 = this.position, S = pos0 + T;
+    if (T > this.chunkTokens) throw new Error(`chunk of ${T} > ${this.chunkTokens}`);
+    if (S > this.maxCtx) throw new Error(`context full (${this.maxCtx} tokens)`);
+    const tStart = performance.now();
+    dev.queue.writeBuffer(this.b.ids, 0, Uint32Array.from(ids));
+    dev.queue.writeBuffer(this.qb, 0, new Uint32Array([T, pos0, S, 0]));
+    const ls = c.swa.indexOf(true), lf = c.swa.indexOf(false);
+    const tables = (l, ff, buf) => {
+      if (l < 0) return;
+      const d = c.headDim[l], r = new Float32Array(T * d);
+      for (let t = 0; t < T; t++) r.set(this.ropeTable(d, c.ropeTheta[l], ff, pos0 + t), t * d);
+      dev.queue.writeBuffer(buf, 0, r);
+    };
+    tables(ls, null, this.b.ropeS); tables(lf, this.ropeFreqs, this.b.ropeF);
+    const selBytes = T * 2 * K * 4;
+    let enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
+    this.dispatch(pass, 'embedQ6KB', this.gB.embed, Math.ceil(H / 256), T);
+    this.encodeTrunkB(pass, 0, T, S);
+    pass.end();
+    enc.copyBufferToBuffer(this.b.sel, 0, this.rbSelB, 0, selBytes);
+    dev.queue.submit([enc.finish()]);
+    for (let l = 0; l < c.layers; l++) {
+      const t0 = performance.now();
+      await this.rbSelB.mapAsync(1, 0, selBytes);
+      this.counters.gpuWaitMs += performance.now() - t0;
+      const sel = new Uint32Array(this.rbSelB.getMappedRange(0, selBytes).slice(0));
+      this.rbSelB.unmap();
+      const pairs = new Uint32Array(T * K);
+      for (let t = 0; t < T; t++) for (let j = 0; j < K; j++) pairs[t * K + j] = sel[t * 2 * K + j];
+      const unique = [...new Set(pairs)];
+      const tq = performance.now();
+      const slotsU = await this.xs.ensure(l, unique);
+      this.counters.ensureMs += performance.now() - tq;
+      const slotOf = new Map(unique.map((e, i) => [e, slotsU[i]]));
+      dev.queue.writeBuffer(this.b.slots, 0, pairs.map((e) => slotOf.get(e)));
+      enc = dev.createCommandEncoder(); pass = enc.beginComputePass();
+      this.encodeExpertsB(pass, l, T);
+      if (l + 1 < c.layers) {
+        this.encodeTrunkB(pass, l + 1, T, S);
+        pass.end();
+        enc.copyBufferToBuffer(this.b.sel, 0, this.rbSelB, 0, selBytes);
+      } else {
+        pass.end();
+        enc.copyBufferToBuffer(this.b.x, (T - 1) * H * 4, this.a.x, 0, H * 4);
+        if (want !== 'none') {
+          pass = enc.beginComputePass();
+          this.encodeHead(pass, want);
+          pass.end();
+          if (want === 'argmax') enc.copyBufferToBuffer(this.a.am, 0, this.rbArg, 0, 4);
+          if (want === 'logits') enc.copyBufferToBuffer(this.a.logits, 0, this.rbLogits, 0, c.vocab * 4);
+        }
+      }
+      dev.queue.submit([enc.finish()]);
+      this.xs.release(slotsU);
+    }
+    this.position += T;
+    this.cached.push(...ids);
+    let result = null;
+    if (want === 'argmax') {
+      await this.rbArg.mapAsync(1, 0, 4);
+      result = new Uint32Array(this.rbArg.getMappedRange(0, 4))[0];
+      this.rbArg.unmap();
+    } else if (want === 'logits') {
+      await this.rbLogits.mapAsync(1);
+      result = new Float32Array(this.rbLogits.getMappedRange().slice(0));
+      this.rbLogits.unmap();
+    } else {
+      await dev.queue.onSubmittedWorkDone();
+    }
+    this.counters.tokens += T;
+    this.counters.wallMs += performance.now() - tStart;
+    return result;
+  }
+
+  // Feeds `ids` after the cached prefix they share; KV past the prefix is simply overwritten (no recurrent
+  // state to rewind). Chunks of up to chunkTokens when there are at least two new tokens.
+  async prefill(ids, want = 'argmax') {
+    let common = 0;
+    while (common < ids.length - 1 && common < this.cached.length && this.cached[common] === ids[common]) common++;
+    if (common < this.cached.length) { this.position = common; this.cached.length = common; }
+    const rest = ids.slice(common);
+    if (!this.batchPrefill || rest.length < 2) return super.prefill(ids, want);
+    let r = null;
+    for (let i = 0; i < rest.length; i += this.chunkTokens) {
+      r = await this.prefillChunk(rest.slice(i, i + this.chunkTokens), i + this.chunkTokens >= rest.length ? want : 'none');
+    }
+    return r;
   }
 
   encodeEmbed(pass) { this.dispatch(pass, 'embedQ6K', this.g.embed, Math.ceil(this.cfg.hidden / 256)); }
@@ -731,21 +1225,21 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
 
   // NeoX RoPE angles as llama.cpp's Metal kernel forms them: f32 pos × base^(−2i/d), ÷ the frequency factor
   // on full-attention layers. One table per layer kind; [0, d/2) = cos, [d/2, d) = sin.
+  ropeTable(d, base, ff, pos) {
+    const half = d / 2, r = new Float32Array(d), inv = Math.fround(-1 / d);
+    for (let i = 0; i < half; i++) {
+      let th = Math.fround(pos * Math.fround(Math.pow(base, Math.fround(inv * 2 * i))));
+      if (ff) th = Math.fround(th / ff[i]);
+      r[i] = Math.cos(th); r[half + i] = Math.sin(th);
+    }
+    return r;
+  }
   writeTokenUniforms(token, pos) {
     const c = this.cfg;
     this.device.queue.writeBuffer(this.tok, 0, new Uint32Array([token, pos, pos + 1, 0]));
-    const table = (d, base, ff) => {
-      const half = d / 2, r = new Float32Array(d), inv = Math.fround(-1 / d);
-      for (let i = 0; i < half; i++) {
-        let th = Math.fround(pos * Math.fround(Math.pow(base, Math.fround(inv * 2 * i))));
-        if (ff) th = Math.fround(th / ff[i]);
-        r[i] = Math.cos(th); r[half + i] = Math.sin(th);
-      }
-      return r;
-    };
     const ls = c.swa.indexOf(true), lf = c.swa.indexOf(false);
-    if (ls >= 0) this.device.queue.writeBuffer(this.a.ropeS, 0, table(c.headDim[ls], c.ropeTheta[ls], null));
-    if (lf >= 0) this.device.queue.writeBuffer(this.a.ropeF, 0, table(c.headDim[lf], c.ropeTheta[lf], this.ropeFreqs));
+    if (ls >= 0) this.device.queue.writeBuffer(this.a.ropeS, 0, this.ropeTable(c.headDim[ls], c.ropeTheta[ls], null, pos));
+    if (lf >= 0) this.device.queue.writeBuffer(this.a.ropeF, 0, this.ropeTable(c.headDim[lf], c.ropeTheta[lf], this.ropeFreqs, pos));
   }
 
   // Debug: the last step's per-layer states — attn_out (after the attention residual) and each layer's output.
