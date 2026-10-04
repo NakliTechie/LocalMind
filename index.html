@@ -2744,8 +2744,8 @@
           </label>
           <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
             Keeps the model's 1.2 GB per-layer embedding table in this browser's private storage and only
-            its ~33K most-used rows on the GPU: ~1 GB less GPU memory, unchanged output, decoding within a
-            few percent. The first load writes the table to disk once (~1 s). Also applies to Gemma 4 E4B (WebGPU kernels), whose
+            its ~33K most-used rows on the GPU: ~1 GB less GPU memory, unchanged output. Decoding is up to
+            ~8% slower on new text and within ~4% on repeated text or code. The first load writes the table to disk once (~1 s). Also applies to Gemma 4 E4B (WebGPU kernels), whose
             2-bit table is 749 MB. Applies to the next model load.
           </div>
         </div>
