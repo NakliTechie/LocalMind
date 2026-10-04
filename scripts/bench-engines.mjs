@@ -82,8 +82,14 @@ process.on('exit', kill);
 for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => { kill(); process.exit(130); });
 
 async function connect() {
-  for (let i = 0; i < 100; i++) { try { await fetch(`http://127.0.0.1:${PORT}/json/version`); break; } catch { await sleep(200); } }
-  const page = (await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()).find((t) => t.type === 'page');
+  // Chrome 154 may listen for DevTools on [::1] only; try both loopback addresses.
+  let cdpBase = null;
+  for (let i = 0; i < 100 && !cdpBase; i++) {
+    for (const host of ['127.0.0.1', '[::1]']) { try { await fetch(`http://${host}:${PORT}/json/version`); cdpBase = `http://${host}:${PORT}`; break; } catch {} }
+    if (!cdpBase) await sleep(200);
+  }
+  if (!cdpBase) throw new Error(`Chrome DevTools did not answer on port ${PORT}`);
+  const page = (await (await fetch(`${cdpBase}/json`)).json()).find((t) => t.type === 'page');
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
   let id = 0; const pend = new Map();
