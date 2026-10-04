@@ -186,4 +186,20 @@ assert.match(bonsai2Engine, /var Uy="webgpu-prefix-snapshots",qm="prefix-snapsho
 assert.match(indexSource, /if \(dbNames\.includes\('webgpu-prefix-snapshots'\)\) \{[^]*?get\('prefix-snapshot-slot'\)[^]*?add\('prism-ml\/Ternary-Bonsai-2-27B-gguf', 'prefix snapshot', bytes, async \(\) => \{\s*for \(const s of stores\) await idbReq\(db\.transaction\(s, 'readwrite'\)\.objectStore\(s\)\.clear\(\)\);/);
 assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',/);
 
+// Sidebar navigation (Chunk L layer 1): every item drives an element that exists, the modes it
+// lists have a matching chip, and the shell exposes nav + main landmarks.
+{
+  const nav = /<nav class="app-nav" id="appNav" aria-label="Main">([\s\S]*?)<\/nav>/.exec(indexSource);
+  assert.ok(nav, 'sidebar nav missing');
+  const targets = [...indexSource.matchAll(/data-click="([\w]+)"/g)].map((m) => m[1]);
+  assert.ok(targets.length >= 12, 'nav targets: ' + targets);
+  for (const id of targets) assert.match(indexSource, new RegExp(`id="${id}"`), `nav item drives #${id}, which does not exist`);
+  for (const mode of ['image', 'voice', 'compare', 'batch', 'diffuse', 'ocr', 'vision', 'clone']) {
+    assert.match(nav[1], new RegExp(`data-mode="${mode}"`), `nav lacks the ${mode} mode`);
+    assert.match(indexSource, new RegExp(`activeMode === '${mode}'`), `no ${mode} mode in refreshModeUI`);
+  }
+  assert.match(indexSource, /class="card" role="main"/);
+  assert.match(indexSource, /\.mode-chip\.moved:not\(\.active\) \{ display: none; \}/);
+}
+
 console.log('LocalMind inference workers and host catalog: ok');

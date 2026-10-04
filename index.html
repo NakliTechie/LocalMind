@@ -1800,6 +1800,27 @@
     /* Separates input modes (Search/Research/Compare/Batch) from on-device
        generation engines (Image/Diffuse) — different kinds of thing. */
     .mode-divider { width: 1px; height: 16px; background: var(--gray-200); margin: 0 4px; flex: none; align-self: center; }
+    /* Modes reached from the sidebar nav: their chip appears only while active, as the exit. */
+    .mode-chip.moved:not(.active) { display: none; }
+
+    /* Sidebar navigation (Chunk L layer 1) */
+    .app-nav { display: flex; flex-direction: column; gap: 1px; padding: 8px; border-bottom: 1px solid var(--gray-200); flex-shrink: 0; }
+    .app-nav button, .nav-more summary, .sidebar-foot button {
+      display: block; width: 100%; text-align: left; background: none; border: none; border-radius: 6px;
+      padding: 6px 10px; font: inherit; font-size: 0.86rem; color: var(--gray-800); cursor: pointer;
+    }
+    .app-nav button:hover, .nav-more summary:hover, .sidebar-foot button:hover { background: var(--gray-50); }
+    .app-nav button:focus-visible, .nav-more summary:focus-visible, .sidebar-foot button:focus-visible { outline: 2px solid var(--indigo-500); outline-offset: -2px; }
+    .app-nav button.active { background: var(--gray-50); color: var(--gray-900); font-weight: 600; box-shadow: inset 2px 0 0 var(--indigo-500); }
+    .app-nav button:disabled { color: var(--gray-600); cursor: default; background: none; }
+    .nav-more summary { list-style: none; }
+    .nav-more summary::-webkit-details-marker { display: none; }
+    .nav-more summary::after { content: ' \25B8'; color: var(--gray-600); }
+    .nav-more[open] summary::after { content: ' \25BE'; }
+    .nav-more button { padding-left: 22px; }
+    .sidebar-foot { display: flex; align-items: center; gap: 8px; padding: 8px; border-top: 1px solid var(--gray-200); flex-shrink: 0; }
+    .sidebar-foot button { width: auto; flex: 1; }
+    .app-version { font-size: 0.72rem; color: var(--gray-600); font-variant-numeric: tabular-nums; padding-right: 6px; }
     .mode-extra { display: none; padding: 8px 16px 0; }
     .mode-extra.open { display: block; }
     .mode-extra-head { font-size: 0.78rem; color: var(--gray-600); margin-bottom: 4px; }
@@ -2155,6 +2176,8 @@
       }
       .history-backdrop { display: none !important; }
       #historyBtn { display: none; }              /* rail is always visible */
+      /* These live in the docked nav on desktop; narrower layouts keep them in the toolbar. */
+      #newChatBtn, #settingsBtn, #memoryBtn, #folderBtn { display: none; }
       .app { max-width: 960px; height: calc(100vh - 140px); }
       .msg { max-width: min(86%, 720px); }        /* keep chat legible */
       .footer-nav { left: calc(50% + 136px); }    /* re-center over main area */
@@ -2392,7 +2415,7 @@
     </div>
 
     <!-- Main card -->
-    <div class="card" style="position:relative">
+    <div class="card" role="main" style="position:relative">
       <!-- Drag-drop overlay -->
       <div class="drag-overlay" id="dragOverlay">Drop image, audio, or video here</div>
 
@@ -2705,7 +2728,7 @@
         <button class="btn-icon" id="settingsBtn" title="System prompt settings">Settings</button>
         <button class="btn-icon" id="memoryBtn" title="View stored memories">Memory</button>
         <button class="btn-icon" id="folderBtn" title="Open folder — ingest all .md/.txt/.pdf files into memory">Folder</button>
-        <button class="btn-icon" id="historyBtn" title="Past conversations">History</button>
+        <button class="btn-icon" id="historyBtn" title="Navigation and past conversations" aria-controls="historySidebar">Menu</button>
         <button class="btn-icon" id="shareBtn" title="Share conversation (encrypted link)">Share</button>
         <button class="btn-icon" id="batchBtn" style="display:none" title="Batch (now in the mode chips above the input)">Batch</button>
         <button class="btn-icon" id="compareBtn" style="display:none" title="Compare (now in the mode chips above the input)">Compare</button>
@@ -2730,15 +2753,15 @@
       <div class="mode-row" id="modeRow">
         <button class="mode-chip" id="chipSearch" title="Web-enrich this message with a live search">&#127760; Search</button>
         <button class="mode-chip" id="chipResearch" title="Deep research &rarr; multi-source cited report">&#128300; Research</button>
-        <button class="mode-chip" id="chipCompare" title="Run the prompt through 2&ndash;3 models, then a judge">&#9878; Compare</button>
-        <button class="mode-chip" id="chipBatch" title="Run one prompt per line, in sequence">&#8801; Batch</button>
-        <span class="mode-divider" aria-hidden="true"></span>
-        <button class="mode-chip" id="chipImage" title="Generate an image from a prompt — on-device diffusion (WebGPU)">&#127912; Image</button>
-        <button class="mode-chip" id="chipDiffuse" title="Experimental: masked-diffusion text generation — watch the answer denoise (WebGPU)">&#127787;&#65039; Diffuse</button>
-        <button class="mode-chip" id="chipOCR" title="Extract text from an image or PDF on-device — GLM-OCR (WebGPU)">&#128196; OCR</button>
-        <button class="mode-chip" id="chipVision" title="Point your camera or drop an image — SmolVLM describes it on-device (WebGPU)">&#128247; Vision</button>
-        <button class="mode-chip" id="chipVoice" title="Hands-free voice conversation — talk, it transcribes, answers, and reads back (on-device)">&#127897;&#65039; Voice</button>
-        <button class="mode-chip" id="chipClone" title="Clone a voice from a short sample, then make it say anything — Chatterbox on-device (WebGPU)">&#127917; Clone</button>
+        <!-- The modes below live in the sidebar nav; each chip shows here only while its mode is active (one-click exit). -->
+        <button class="mode-chip moved" id="chipCompare" title="Run the prompt through 2&ndash;3 models, then a judge">&#9878; Compare</button>
+        <button class="mode-chip moved" id="chipBatch" title="Run one prompt per line, in sequence">&#8801; Batch</button>
+        <button class="mode-chip moved" id="chipImage" title="Generate an image from a prompt — on-device diffusion (WebGPU)">&#127912; Image</button>
+        <button class="mode-chip moved" id="chipDiffuse" title="Experimental: masked-diffusion text generation — watch the answer denoise (WebGPU)">&#127787;&#65039; Diffuse</button>
+        <button class="mode-chip moved" id="chipOCR" title="Extract text from an image or PDF on-device — GLM-OCR (WebGPU)">&#128196; OCR</button>
+        <button class="mode-chip moved" id="chipVision" title="Point your camera or drop an image — SmolVLM describes it on-device (WebGPU)">&#128247; Vision</button>
+        <button class="mode-chip moved" id="chipVoice" title="Hands-free voice conversation — talk, it transcribes, answers, and reads back (on-device)">&#127897;&#65039; Voice</button>
+        <button class="mode-chip moved" id="chipClone" title="Clone a voice from a short sample, then make it say anything — Chatterbox on-device (WebGPU)">&#127917; Clone</button>
         <span class="mode-hint" id="modeHint"></span>
       </div>
       <div class="mode-extra" id="comparePanel">
@@ -2926,11 +2949,35 @@
     <!-- History sidebar -->
     <div class="history-backdrop" id="historyBackdrop"></div>
     <div class="history-sidebar" id="historySidebar">
+      <!-- App navigation (Chunk L layer 1). Each item drives an existing chip or button
+           (data-click), so every mode keeps one code path; data-mode mirrors the active chip. -->
+      <nav class="app-nav" id="appNav" aria-label="Main">
+        <button type="button" data-click="newChatBtn">New chat</button>
+        <button type="button" data-mode="chat">Chat</button>
+        <button type="button" data-click="chipImage" data-mode="image">Image</button>
+        <button type="button" data-click="chipVoice" data-mode="voice">Voice</button>
+        <button type="button" data-models>Models</button>
+        <button type="button" data-click="memoryBtn">Memory</button>
+        <details class="nav-more">
+          <summary>More</summary>
+          <button type="button" data-click="chipCompare" data-mode="compare">Compare</button>
+          <button type="button" data-click="chipBatch" data-mode="batch">Batch</button>
+          <button type="button" data-click="chipDiffuse" data-mode="diffuse">Diffuse</button>
+          <button type="button" data-click="chipOCR" data-mode="ocr">OCR</button>
+          <button type="button" data-click="chipVision" data-mode="vision">Vision</button>
+          <button type="button" data-click="chipClone" data-mode="clone">Clone</button>
+          <button type="button" data-click="folderBtn">Folder</button>
+        </details>
+      </nav>
       <div class="history-sidebar-header">
-        <strong>History</strong>
+        <strong>Recents</strong>
         <span class="memory-count" id="historyCount">0 conversations</span>
       </div>
       <div class="history-sidebar-list" id="historyList"></div>
+      <div class="sidebar-foot">
+        <button type="button" data-click="settingsBtn">Settings</button>
+        <span class="app-version" id="appVersion"></span>
+      </div>
     </div>
   </div>
 
@@ -12101,6 +12148,7 @@ self.addEventListener('message', async (e) => {
     function openHistorySidebar() {
       historySidebar.classList.add('open');
       historyBackdrop.classList.add('open');
+      syncSidebarInert();
       memoryPanel.classList.remove('open');
       settingsPanel.classList.remove('open');
       refreshHistoryPanel();
@@ -12109,7 +12157,16 @@ self.addEventListener('message', async (e) => {
     function closeHistorySidebar() {
       historySidebar.classList.remove('open');
       historyBackdrop.classList.remove('open');
+      syncSidebarInert();
     }
+    // Below 1100px the sidebar is an off-screen drawer: keep its nav out of the tab order
+    // and the accessibility tree until it is open. Docked (desktop) it is always live.
+    const sidebarDocked = matchMedia('(min-width: 1100px)');
+    function syncSidebarInert() {
+      historySidebar.inert = !sidebarDocked.matches && !historySidebar.classList.contains('open');
+    }
+    sidebarDocked.addEventListener('change', syncSidebarInert);
+    syncSidebarInert();
 
     historyBtn.addEventListener('click', () => {
       if (historySidebar.classList.contains('open')) closeHistorySidebar();
@@ -18533,6 +18590,46 @@ self.addEventListener('message', async (e) => {
     // 🎭 Clone mode chip. Heavy WebGPU model (Chatterbox ~1.5 GB) — follows the
     // Vision/OCR suspend-restore pattern (unloads the chat model while active).
     if (chipClone) chipClone.addEventListener('click', () => { if (!generating) setExclusiveMode('clone'); });
+
+    // ── Sidebar navigation (Chunk L layer 1) ──────────────────
+    // Nav items click the existing chip or button (data-click), so each mode keeps a single
+    // code path; the nav only mirrors which mode is active. "Chat" leaves whatever mode is on.
+    const appNav = document.getElementById('appNav');
+    const navModeButtons = [...appNav.querySelectorAll('[data-mode]')];
+    const navNewChat = appNav.querySelector('[data-click="newChatBtn"]');
+    const navMore = appNav.querySelector('.nav-more');
+    function syncNav() {
+      for (const b of navModeButtons) {
+        const on = b.dataset.mode === activeMode;
+        b.classList.toggle('active', on);
+        if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+      }
+      if (navMore.querySelector('button.active')) navMore.open = true;
+      navNewChat.disabled = newChatBtn.disabled;
+    }
+    historySidebar.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-click], button[data-mode], button[data-models]');
+      if (!b) return;
+      if (b.dataset.mode === 'chat' && !b.dataset.click) {
+        if (!generating && activeMode !== 'chat') setExclusiveMode(activeMode);
+      } else if ('models' in b.dataset) {
+        if (!settingsPanel.classList.contains('open')) settingsBtn.click();
+        setSettingsTab('models');
+        settingsPanel.scrollTop = 0;
+      } else {
+        const target = document.getElementById(b.dataset.click);
+        if (target && !target.disabled) target.click();
+      }
+      if (!sidebarDocked.matches) closeHistorySidebar();
+    });
+    new MutationObserver(syncNav).observe(document.getElementById('modeRow'), { subtree: true, attributes: true, attributeFilter: ['class'] });
+    new MutationObserver(syncNav).observe(newChatBtn, { attributes: true, attributeFilter: ['disabled'] });
+    syncNav();
+    // Version string in view (TASTE bias 8); the About note is its single source.
+    {
+      const v = (document.querySelector('.help-note')?.textContent.match(/v\d+\.\d+\.\d+/) || [])[0];
+      if (v) document.getElementById('appVersion').textContent = v;
+    }
     // Push-to-talk: hold the mic (pointer) or hold V (when not typing). Release = send.
     if (voiceMicBtn) {
       const down = (e) => { if (activeMode !== 'voice') return; e.preventDefault(); voiceStartRecording(); };
