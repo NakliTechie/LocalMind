@@ -131,6 +131,14 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   const restoreAt = indexSource.indexOf('for (const m of loadCustomModelsFromStorage()) {');
   const sweepAt = indexSource.search(/^\s+sweepRetiredModelCaches\(\);/m);
   assert.ok(restoreAt > -1 && sweepAt > restoreAt, 'the boot sweep must run after custom models are restored');
+  // scripts/bench-engines.mjs registers every custom baseline (from ROWS, not the suite-filtered rows) on
+  // every row. Its LFM2.5-230M-ONNX baseline is retired, so a row that dropped it let that boot's sweep
+  // delete the cache, and every bench run downloaded it again.
+  const bench = await readFile(new URL('./bench-engines.mjs', import.meta.url), 'utf8');
+  assert.ok(retired.includes(/const LFM230_ONNX = \{ id: '([^']+)'/.exec(bench)[1]), 'bench 230M ONNX baseline is no longer retired; revisit this check');
+  assert.match(bench, /const CUSTOM_MODELS = \[\.\.\.new Map\(ROWS\.filter\(\(r\) => r\.custom\)\.map\(\(r\) => \[r\.custom\.id, r\.custom\]\)\)\.values\(\)\];/);
+  assert.match(bench, /localStorage\.setItem\('lm_custom_models', \$\{JSON\.stringify\(JSON\.stringify\(CUSTOM_MODELS\)\)\}\);/);
+  assert.doesNotMatch(bench, /lm_custom_models', \$\{JSON\.stringify\(JSON\.stringify\(\[row\.custom\]\)\)\}|removeItem\('lm_custom_models'\)/);
 }
 assert.equal(catalog.defaultKey, 'lfm2-230m-webgpu');
 assert.deepEqual(

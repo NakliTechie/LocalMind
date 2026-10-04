@@ -62,6 +62,10 @@ const ROWS = [
   { suite: 'dflash', model: 'Ternary Bonsai 2 27B', engine: 'WGSL + DFlash 2 · prose', key: 'ternary-bonsai-2-27b-webgpu', dflash: true, tok: 'qwen38', prompt: PROSE },
 ];
 const rows = ROWS.filter((r) => SUITE === 'all' || r.suite === SUITE);
+// Every row's boot registers ALL the custom baselines, not just its own. LFM2.5-230M-ONNX is on the app's
+// retired list, and the boot sweep deletes a retired repo's cache unless a custom entry reads it, so a row
+// that dropped it would make the next run download it again.
+const CUSTOM_MODELS = [...new Map(ROWS.filter((r) => r.custom).map((r) => [r.custom.id, r.custom])).values()];
 if (argv.includes('--list')) { for (const r of rows) console.log(`${r.suite.padEnd(8)} ${r.model.padEnd(22)} ${r.engine}`); process.exit(0); }
 if (!rows.length) { console.error(`unknown --suite ${SUITE} (engines | dflash | all)`); process.exit(2); }
 
@@ -94,11 +98,11 @@ async function connect() {
 }
 
 async function runRow(cdp, row) {
-  // Seed before the app boots: the API toggle, the DFlash setting, any custom model; watch the drafter.
+  // Seed before the app boots: the API toggle, the DFlash setting, the custom baselines; watch the drafter.
   const seed = `(() => { try {
       localStorage.setItem('lm_api_enabled', '1');
       localStorage.setItem('lm_dflash', ${row.dflash === false ? "'0'" : "'1'"});
-      ${row.custom ? `localStorage.setItem('lm_custom_models', ${JSON.stringify(JSON.stringify([row.custom]))});` : "localStorage.removeItem('lm_custom_models');"}
+      localStorage.setItem('lm_custom_models', ${JSON.stringify(JSON.stringify(CUSTOM_MODELS))});
     } catch (e) {}
     window.__benchDflash = null;
     const W = window.Worker;
