@@ -108,6 +108,8 @@ export function applyGemmaPatches(src, helpers) {
     's.argmax({xT:X,outT:this.idsT,count:p}),this.steps=await s.buildSteps(),this.pleIdsT&&a.embedTokensPerLayer.ple.mapT&&this.steps.unshift($pleLookupStep(r,this.idsT,a.embedTokensPerLayer.ple.mapT,this.pleIdsT))',
     'decode program: slot lookup first',
   );
+  // The helpers encode decode parts with the engine's prepared-step encoder _s(encoder, steps).
+  if (out.split('function _s(e,n){').length !== 2) throw new Error('gemma-4-e2b patch: encoder _s not found exactly once');
   replaceOnce('var vo=4;', 'var vo=4;\n' + helpers.replace(/^\/\/.*\n/gm, '').trim() + '\n', 'module-scope helpers');
 
   // (e) close the OPFS handles; report the mode.

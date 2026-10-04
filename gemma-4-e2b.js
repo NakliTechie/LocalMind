@@ -5644,10 +5644,13 @@ function $pleLookupStep(rt, idsT, mapT, slotsT) {
 
 async function* $plePipelined(session, cache, ple, first, pos, budget, stop) {
   const rt = session.model.rt, steps = session.steps;
-  const cut = Math.max(1, Math.min(steps.length - 1, Math.round(steps.length * (ple.split ?? 0.3))));
+  const cut = Math.max(1, Math.min(steps.length - 1, Math.round(steps.length * (ple.split ?? 0.6))));
   const partA = steps.slice(0, cut), partB = steps.slice(cut);
-  const head = (token, at) => { session.writeStepInputs(token, at); session.col.enqueue(partA); };
-  const tail = () => { session.col.enqueue(partB); return rt.readTensor(session.idsT).then((t) => t[0]); };
+  const device = rt.host.device;
+  const encode = (part) => { const e = device.createCommandEncoder({ label: 'ple-decode' }); _s(e, part); return e.finish(); };
+  let nextB = null;
+  const head = (token, at) => { session.writeStepInputs(token, at); device.queue.submit([encode(partA)]); nextB = encode(partB); };
+  const tail = () => { device.queue.submit([nextB]); nextB = null; return rt.readTensor(session.idsT).then((t) => t[0]); };
   head(first, pos);
   let pending = tail(), planned = 1, yielded = 0;
   pos += 1;

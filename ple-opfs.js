@@ -245,9 +245,10 @@ export class RowCache {
 export const GEMMA4_WARM = [[0, 28672], [236743, 4096]];
 
 // Defaults are the measured choice (2026-10-04, M4 Pro): 32,768 slots (151 MB) warmed with the
-// ranges above, a GPU slot map, and part A = 30% of each decode step. gpuMap: false gives the
+// ranges above, a GPU slot map, and part A = 60% of each decode step (a shorter part A ends before
+// the token's readback and the GPU waits; a longer one wastes more on a miss). gpuMap: false gives the
 // simpler mode where the CPU looks every decode token up and decode runs one step at a time.
-export function createGemmaPle({ key = 'gemma-4-e2b', slots = 32768, warm = GEMMA4_WARM, gpuMap = true, split = 0.3, source = null, onStatus = () => {} } = {}) {
+export function createGemmaPle({ key = 'gemma-4-e2b', slots = 32768, warm = GEMMA4_WARM, gpuMap = true, split = 0.6, source = null, onStatus = () => {} } = {}) {
   return {
     async attach({ bits, scale, vocab, hidden, groups, codeBits, device, alloc }) {
       const wordsPerRow = (hidden * codeBits) / 32;

@@ -50,21 +50,25 @@ function $pleLookupStep(rt, idsT, mapT, slotsT) {
 // Decode with the PLE table in OPFS. Upstream keeps four decode steps in flight because the GPU
 // feeds each step's argmax straight into the next; here the CPU must check each token's row
 // before that token's step may finish, and a full round trip per token costs ~16%. So each step
-// is submitted in two parts. Part A (the first `ple.split` of the step's kernels, starting with the
+// is submitted in two parts. Part A (the first `ple.split` of the step's kernels, 60% by default, starting with the
 // slot lookup) is submitted speculatively while the previous step is still running. When that
 // step's token comes back, the CPU checks its row: resident, it submits part B; not resident,
 // part A ran with a wrong row, so the CPU installs the row and submits A and B again at the same
-// position. Part A must outlast the readback (~1 ms) for the GPU never to wait on a hit; a miss
-// wastes one part A. Replays rewrite the same KV slots, so the output matches the resident
-// engine token for token.
+// position. Part A must outlast the readback (~1 ms) for the GPU never to wait on a hit, so part
+// B's command buffer is encoded (with the engine's own encoder, _s) while A runs and a hit costs
+// only a queue.submit. A miss wastes one part A. Replays rewrite the same KV slots, so the output
+// matches the resident engine token for token.
 //   session: the decode graph; cache: the generation state (advance); ple: the table;
 //   first: the token prefill produced; pos: its position; budget: tokens still to yield.
 async function* $plePipelined(session, cache, ple, first, pos, budget, stop) {
   const rt = session.model.rt, steps = session.steps;
-  const cut = Math.max(1, Math.min(steps.length - 1, Math.round(steps.length * (ple.split ?? 0.3))));
+  const cut = Math.max(1, Math.min(steps.length - 1, Math.round(steps.length * (ple.split ?? 0.6))));
   const partA = steps.slice(0, cut), partB = steps.slice(cut);
-  const head = (token, at) => { session.writeStepInputs(token, at); session.col.enqueue(partA); };
-  const tail = () => { session.col.enqueue(partB); return rt.readTensor(session.idsT).then((t) => t[0]); };
+  const device = rt.host.device;
+  const encode = (part) => { const e = device.createCommandEncoder({ label: 'ple-decode' }); _s(e, part); return e.finish(); };
+  let nextB = null;
+  const head = (token, at) => { session.writeStepInputs(token, at); device.queue.submit([encode(partA)]); nextB = encode(partB); };
+  const tail = () => { device.queue.submit([nextB]); nextB = null; return rt.readTensor(session.idsT).then((t) => t[0]); };
   head(first, pos);
   let pending = tail(), planned = 1, yielded = 0;
   pos += 1;
