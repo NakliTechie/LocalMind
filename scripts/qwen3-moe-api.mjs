@@ -33,16 +33,26 @@ export function makeApi(log = () => {}) {
       for (const r of ref.results.slice(0, limit)) {
         const t0 = performance.now();
         const g = await m.greedy(r.ids, r.gen.length, { top: 5 });
+        // The reference runs with ignore_eos, so where its own top-1 is a banned token (EOS) its
+        // sampled token is not its top-1. The comparison ends there: agreeing on that top-1 is a match.
+        let n = r.gen.length, endedAtBan = false;
+        for (let i = 0; i < r.gen.length; i++) if (r.top[i][0][0] !== r.gen[i]) { n = i; endedAtBan = g.ids[i] === r.top[i][0][0]; break; }
         let div = -1;
-        for (let i = 0; i < r.gen.length; i++) if (g.ids[i] !== r.gen[i]) { div = i; break; }
-        const row = { name: r.name, promptTokens: r.ids.length, n: r.gen.length, match: div < 0, firstDivergence: div, secs: (performance.now() - t0) / 1000 };
+        for (let i = 0; i < n; i++) if (g.ids[i] !== r.gen[i]) { div = i; break; }
+        if (div < 0 && n < r.gen.length && !endedAtBan) div = n;
+        const row = { name: r.name, promptTokens: r.ids.length, n, endedAtBan, match: div < 0, firstDivergence: div, secs: (performance.now() - t0) / 1000 };
         // max |Δ logprob| over positions before divergence, for tokens in both top-5 lists
-        let maxd = 0;
-        for (let i = 0; i < (div < 0 ? r.gen.length : div); i++) {
+        // Max |Δ logprob| over shared top-5 tokens, and over the reference's top-1 token alone (tail
+        // tokens far below the top drift most, so the top-1 figure is the one that decides greedy).
+        let maxd = 0, maxd1 = 0;
+        for (let i = 0; i < (div < 0 ? n : div); i++) {
           const ours = new Map(g.tops[i].map((x) => [x.id, x.logprob]));
           for (const [id, lp] of r.top[i]) if (ours.has(id)) maxd = Math.max(maxd, Math.abs(ours.get(id) - lp));
+          const [id1, lp1] = r.top[i][0];
+          if (ours.has(id1)) maxd1 = Math.max(maxd1, Math.abs(ours.get(id1) - lp1));
         }
         row.maxAbsLogprobDiff = +maxd.toFixed(5);
+        row.maxAbsTop1LogprobDiff = +maxd1.toFixed(5);
         if (div >= 0) {
           const rt = r.top[div], ot = g.tops[div];
           row.ref = { top: rt.slice(0, 3), margin: +(rt[0][1] - rt[1][1]).toFixed(5) };
