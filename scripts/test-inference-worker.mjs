@@ -139,6 +139,18 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   assert.match(bench, /const CUSTOM_MODELS = \[\.\.\.new Map\(ROWS\.filter\(\(r\) => r\.custom\)\.map\(\(r\) => \[r\.custom\.id, r\.custom\]\)\)\.values\(\)\];/);
   assert.match(bench, /localStorage\.setItem\('lm_custom_models', \$\{JSON\.stringify\(JSON\.stringify\(CUSTOM_MODELS\)\)\}\);/);
   assert.doesNotMatch(bench, /lm_custom_models', \$\{JSON\.stringify\(JSON\.stringify\(\[row\.custom\]\)\)\}|removeItem\('lm_custom_models'\)/);
+  // Every row runs under the no-progress watchdog (2026-10-02: a frozen worker held a bench run for two days):
+  // the row races the watchdog, an abandoned row is aborted at its next page call, the next row gets a fresh
+  // tab, and a CDP error (the page navigated away mid-await) throws instead of reading as a successful step.
+  assert.match(bench, /const ROW_TIMEOUT_MS = Number\(opt\('row-timeout', 20\)\) \* 60000;/);
+  assert.match(bench, /results\.push\(await runRowWatched\(cdp, row\)\)/);
+  assert.doesNotMatch(bench, /await runRow\(cdp, row\)/);
+  assert.match(bench, /return await Promise\.race\(\[work, stalled\]\);\s*\} catch \(err\) \{\s*ctl\.abort\(err\);/);
+  assert.match(bench, /log\(`\$\{row\.model\} · \$\{row\.engine\}: ERROR \$\{err\.message\}`\);\s*cdp = await freshTab\(cdp\);/);
+  assert.match(bench, /async function freshTab\(old\) \{\s*const tab = await \(await fetch\(`http:\/\/127\.0\.0\.1:\$\{PORT\}\/json\/new\?about:blank`, \{ method: 'PUT' \}\)\)\.json\(\);[^]*?\/json\/close\/\$\{old\.targetId\}[^]*?return connect\(tab\);/);
+  assert.match(bench, /const ev = async \(expression\) => \{ ctx\.signal\.throwIfAborted\(\); const v = await cdp\.ev\(expression\); ctx\.signal\.throwIfAborted\(\); return v; \};/);
+  assert.equal((bench.slice(bench.indexOf('async function runRow('), bench.indexOf('async function runRowWatched(')).match(/\bcdp\.ev\(/g) || []).length, 1, 'runRow must reach the page only through its guarded ev');
+  assert.match(bench, /if \(r\.error\) throw new Error\(r\.error\.message\);/);
 }
 assert.equal(catalog.defaultKey, 'lfm2-230m-webgpu');
 assert.deepEqual(

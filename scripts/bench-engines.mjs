@@ -11,10 +11,13 @@
 //   node scripts/bench-engines.mjs --suite dflash  # Ternary Bonsai 2 27B, plain vs DFlash 2, code and prose
 //   node scripts/bench-engines.mjs --url http://127.0.0.1:8000/ --profile ~/.cache/lm-bench --out bench.json
 //   node scripts/bench-engines.mjs --list          # print the rows and exit
+//   node scripts/bench-engines.mjs --row-timeout 20 # minutes a row may show no progress (default 20)
 //
 // Needs Chrome with WebGPU. The first run downloads every model in the suite into --profile (engines:
 // ~4.5 GB, dflash: ~7 GB); later runs reuse that cache. Close other GPU-heavy work first: a busy
 // machine moves absolute numbers by 1.5-3x (ratios within a model are steadier, not immune).
+// A row whose page shows no progress for --row-timeout minutes (status and download text unchanged, no
+// step finished) is recorded as an error and the run moves on to the next row.
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -31,6 +34,7 @@ const OUT = opt('out', null);
 const CHROME = opt('chrome', process.platform === 'darwin'
   ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'google-chrome');
 const PORT = Number(opt('port', 9431));
+const ROW_TIMEOUT_MS = Number(opt('row-timeout', 20)) * 60000;
 
 const PROSE = 'Explain how a hash map works: hashing, buckets, collisions and resizing.';
 const CODE = 'Write a Python class HashMap with put, get, delete and automatic resizing, using separate chaining. Code only.';
@@ -80,9 +84,10 @@ const kill = () => { try { chrome.kill('SIGTERM'); } catch {} };
 process.on('exit', kill);
 for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => { kill(); process.exit(130); });
 
-async function connect() {
+// Opens a CDP session on `page` (a /json target), or on the browser's first tab.
+async function connect(page) {
   for (let i = 0; i < 100; i++) { try { await fetch(`http://127.0.0.1:${PORT}/json/version`); break; } catch { await sleep(200); } }
-  const page = (await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()).find((t) => t.type === 'page');
+  page ||= (await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()).find((t) => t.type === 'page');
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
   let id = 0; const pend = new Map();
@@ -90,14 +95,27 @@ async function connect() {
   const send = (method, params = {}) => new Promise((r) => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
   const ev = async (expression) => {
     const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+    if (r.error) throw new Error(r.error.message);   // e.g. the page navigated away mid-await
     if (r.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || r.result.exceptionDetails.text);
     return r.result?.result?.value;
   };
   await send('Page.enable'); await send('Runtime.enable');
-  return { ws, send, ev };
+  return { ws, send, ev, targetId: page.id };
 }
 
-async function runRow(cdp, row) {
+// After a failed row the tab may be wedged (a spinning page, a navigation that never settles), so the next row
+// gets a new tab and the old one is closed. An abandoned row holds only the old session, so it cannot reach the new tab.
+async function freshTab(old) {
+  const tab = await (await fetch(`http://127.0.0.1:${PORT}/json/new?about:blank`, { method: 'PUT' })).json();
+  try { old.ws.close(); } catch {}
+  await Promise.race([fetch(`http://127.0.0.1:${PORT}/json/close/${old.targetId}`).catch(() => {}), sleep(15000)]);
+  return connect(tab);
+}
+
+// ctx.signal aborts an abandoned row at its next page call; ctx.steps counts finished steps for the watchdog.
+async function runRow(cdp, row, ctx) {
+  const ev = async (expression) => { ctx.signal.throwIfAborted(); const v = await cdp.ev(expression); ctx.signal.throwIfAborted(); return v; };
+  const step = () => { ctx.steps++; };
   // Seed before the app boots: the API toggle, the DFlash setting, the custom baselines; watch the drafter.
   const seed = `(() => { try {
       localStorage.setItem('lm_api_enabled', '1');
@@ -108,34 +126,39 @@ async function runRow(cdp, row) {
     const W = window.Worker;
     window.Worker = function (u, o) { const w = new W(u, o); w.addEventListener('message', (e) => { if (e.data && e.data.type === 'dflash') window.__benchDflash = e.data.status; }); return w; };
     window.Worker.prototype = W.prototype; })()`;
-  const { identifier } = (await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: seed })).result;
+  ctx.identifier = (await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: seed })).result.identifier;
   await cdp.send('Page.navigate', { url: URL_ + (URL_.includes('?') ? '&' : '?') + 'bench=' + Date.now() });
-  for (let i = 0; i < 240 && !(await cdp.ev('!!(window.localmind && window.localmind.ready)').catch(() => false)); i++) await sleep(1000);
+  for (let i = 0; i < 240 && !(await ev('!!(window.localmind && window.localmind.ready)').catch(() => { ctx.signal.throwIfAborted(); return false; })); i++) await sleep(1000);
+  step();
   const t0 = Date.now();
-  await cdp.ev(`window.localmind.load(${JSON.stringify(row.key)})`);
+  await ev(`window.localmind.load(${JSON.stringify(row.key)})`);
+  step();
   log(`loaded ${row.model} · ${row.engine} in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
   if (row.dflash) {
-    for (let i = 0; i < 900 && (await cdp.ev('window.__benchDflash')) !== 'ready'; i++) await sleep(2000);
-    log('DFlash 2 drafter:', await cdp.ev('window.__benchDflash'));
+    for (let i = 0; i < 900 && (await ev('window.__benchDflash')) !== 'ready'; i++) await sleep(2000);
+    step();
+    log('DFlash 2 drafter:', await ev('window.__benchDflash'));
   }
   const runs = [];
   for (let r = 0; r < RUNS; r++) {
-    runs.push(await cdp.ev(`(async () => {
+    runs.push(await ev(`(async () => {
       const t0 = performance.now(); let first = 0, last = 0, text = '';
       const stream = await window.localmind.chat.completions.create({ messages: [{ role: 'user', content: ${JSON.stringify(row.prompt)} }], stream: true, temperature: 0, max_tokens: ${MAX} });
       for await (const ch of stream) { const d = ch.choices && ch.choices[0] && ch.choices[0].delta && ch.choices[0].delta.content; if (d) { const now = performance.now(); if (!first) first = now; last = now; text += d; } }
       return { ttftMs: first - t0, decodeMs: last - first, text };
     })()`));
+    step();
   }
   // Exact token counts with the model's own tokenizer, in the page (no Node dependencies).
-  const counts = await cdp.ev(`(async () => {
+  const counts = await ev(`(async () => {
     const { Tokenizer } = await import('https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/+esm');
     const get = async (p) => { for (const f of [p, 'onnx/' + p]) { const r = await fetch('https://huggingface.co/${TOK[row.tok]}/resolve/main/' + f); if (r.ok) return r.json(); } return {}; };
     const tj = await get('tokenizer.json'), tc = await get('tokenizer_config.json');
     const t = new Tokenizer(tj, tc), special = new Set((tj.added_tokens || []).filter((a) => a.special).map((a) => a.content));
     return ${JSON.stringify(runs.map((x) => x.text))}.map((s) => t.encode(s, { addSpecialTokens: false }).tokens.filter((x) => !special.has(x)).length);
   })()`);
-  await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: ctx.identifier });
+  ctx.identifier = null;
   const per = runs.map((x, i) => ({ tokens: counts[i], ttftMs: x.ttftMs, tokPerSec: (counts[i] - 1) / (x.decodeMs / 1000) }));
   const warm = per.length > 1 ? per.slice(1) : per;
   return { ...row, custom: undefined, prompt: row.prompt === CODE ? 'code' : 'prose', runs: per,
@@ -144,11 +167,48 @@ async function runRow(cdp, row) {
     identicalRuns: new Set(runs.map((x) => x.text)).size === 1, firstText: runs[0].text };
 }
 
-const cdp = await connect();
+// Runs a row under a no-progress watchdog: the row fails once ROW_TIMEOUT_MS pass with the page's status and
+// download text unchanged and no step finished. Without it a wedged page holds the bench for good (2026-10-02:
+// the chat worker stopped running tasks mid-download, so load() never settled and the run sat for two days).
+// An abandoned row is aborted at its next page call; the caller then moves on in a fresh tab.
+const PROGRESS_EXPR = "[document.getElementById('statusText'), document.getElementById('progressText')].map((e) => e ? e.textContent : '').join(' · ')";
+async function runRowWatched(cdp, row) {
+  const ctl = new AbortController();
+  const ctx = { signal: ctl.signal, steps: 0, identifier: null };
+  const work = runRow(cdp, row, ctx);
+  work.catch(() => {});   // an abandoned row rejects later; that rejection is expected
+  let timer = null, settled = false;
+  const stalled = new Promise((_, reject) => {
+    let key = null, text = '', since = Date.now();
+    const tick = async () => {
+      const now = await Promise.race([cdp.ev(PROGRESS_EXPR).catch(() => null), sleep(10000).then(() => null)]);
+      if (settled) return;
+      if (now != null) text = now;   // an unanswered poll is not progress
+      const k = ctx.steps + '|' + text;
+      if (k !== key) { key = k; since = Date.now(); }
+      if (Date.now() - since >= ROW_TIMEOUT_MS) reject(new Error(`no progress for ${(ROW_TIMEOUT_MS / 60000).toFixed(1)} min at "${text}"`));
+      else timer = setTimeout(tick, Math.min(15000, ROW_TIMEOUT_MS / 3));
+    };
+    tick();
+  });
+  try {
+    return await Promise.race([work, stalled]);
+  } catch (err) {
+    ctl.abort(err);
+    throw err;
+  } finally {
+    settled = true; clearTimeout(timer);
+  }
+}
+
+let cdp = await connect();
 const results = [];
 for (const row of rows) {
-  try { results.push(await runRow(cdp, row)); log(`${row.model} · ${row.engine}: ${results.at(-1).tokPerSec} tok/s`); }
-  catch (err) { results.push({ ...row, custom: undefined, error: String(err.message || err).slice(0, 300) }); log(`${row.model} · ${row.engine}: ERROR ${err.message}`); }
+  try { results.push(await runRowWatched(cdp, row)); log(`${row.model} · ${row.engine}: ${results.at(-1).tokPerSec} tok/s`); }
+  catch (err) {
+    results.push({ ...row, custom: undefined, error: String(err.message || err).slice(0, 300) }); log(`${row.model} · ${row.engine}: ERROR ${err.message}`);
+    cdp = await freshTab(cdp);
+  }
 }
 cdp.ws.close(); kill();
 
