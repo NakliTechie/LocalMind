@@ -151,7 +151,8 @@ export class RowCache {
     this.clock = 0;
     this.row = new Uint8Array(file.rowBytes);
     this.u32 = new Uint32Array(1);
-    this.stats = { lookups: 0, ids: 0, misses: 0, readMs: 0 };
+    this.stats = { lookups: 0, ids: 0, misses: 0, readMs: 0, replays: 0 };
+    this.missLog = []; // the first 4,096 ids installed after load, for analysis
   }
 
   #touch(s) {
@@ -182,6 +183,7 @@ export class RowCache {
     this.slotOf[id] = s;
     this.#mapWrite(id, s);
     this.stats.misses++;
+    if (this.missLog.length < 4096) this.missLog.push(id);
   }
 
   // Makes every id resident and returns its slot. Rows one call uses are never evicted by the same
@@ -208,7 +210,7 @@ export class RowCache {
   has(id) { return this.slotOf[id] >= 0; }
 
   // Loads rows [row0, row0 + count) into the least recently used slots in large reads (for a warm
-  // set at load). Returns the milliseconds spent.
+  // set at load), then uploads the whole id->slot map once. Returns the milliseconds spent.
   warm(row0, count, batch = 4096) {
     const t0 = performance.now();
     count = Math.min(count, this.slots);
@@ -226,10 +228,9 @@ export class RowCache {
         if (s < 0) {
           s = this.head;
           const old = this.idOf[s];
-          if (old >= 0) { this.slotOf[old] = -1; this.#mapWrite(old, 0xffffffff); }
+          if (old >= 0) this.slotOf[old] = -1;
           this.idOf[s] = id;
           this.slotOf[id] = s;
-          this.#mapWrite(id, s);
         }
         this.#touch(s);
         slots[i] = s;
@@ -246,6 +247,8 @@ export class RowCache {
         }
       }
     }
+    // slotOf's bytes are the GPU map: -1 as an Int32 is 0xFFFFFFFF as a u32.
+    if (this.mapBuffer) this.queue.writeBuffer(this.mapBuffer, 0, this.slotOf);
     return performance.now() - t0;
   }
 }
@@ -255,7 +258,15 @@ export class RowCache {
 // missing or stale, opens it for reading, allocates the GPU slots through the engine and returns
 // the table the engine's graphs gather from. It returns null when OPFS cannot be used, and the
 // engine then keeps the table resident as before.
-export function createGemmaPle({ key = 'gemma-4-e2b', slots = 512, warmRows = 0, gpuMap = false, onStatus = () => {} } = {}) {
+// warm: [[firstRow, count], ...] loaded at attach. Gemma 4's vocabulary is in SentencePiece score
+// order, so low ids are the frequent merged pieces, and its single characters form one block from
+// id 236,743, also most frequent first (the first 256 hold 94 of the 108 ASCII characters).
+export const GEMMA4_WARM = [[0, 28672], [236743, 4096]];
+
+// Defaults are the measured choice (2026-10-04, M4 Pro): 32,768 slots (151 MB) warmed with the
+// ranges above, a GPU slot map, and part A = 30% of each decode step. gpuMap: false gives the
+// simpler mode where the CPU looks every decode token up and decode runs one step at a time.
+export function createGemmaPle({ key = 'gemma-4-e2b', slots = 32768, warm = GEMMA4_WARM, gpuMap = true, split = 0.3, onStatus = () => {} } = {}) {
   return {
     async attach({ bits, scale, vocab, hidden, groups, codeBits, device, alloc }) {
       const wordsPerRow = (hidden * codeBits) / 32;
@@ -280,7 +291,8 @@ export function createGemmaPle({ key = 'gemma-4-e2b', slots = 512, warmRows = 0,
           }, { extra: { layout: 'per token: packed codes (u32 words, LSB first) then f32 group scales', vocab, hidden, groups, codeBits } });
         }
         await file.openRead();
-        const n = Math.max(slots, warmRows);
+        const warmRows = warm.reduce((k, [, c]) => k + c, 0);
+        const n = Math.max(slots, warmRows, 256);
         const bitsT = alloc(n * bitsBytes, 'uint32', [n, wordsPerRow], 'ple-cache.bits');
         const scaleT = alloc(n * scaleBytes, 'float32', [n, groups], 'ple-cache.scale');
         let mapT = null;
@@ -292,10 +304,11 @@ export function createGemmaPle({ key = 'gemma-4-e2b', slots = 512, warmRows = 0,
           file, slots: n, queue: device.queue, mapBuffer: mapT ? mapT.buffer : null,
           planes: [{ offset: 0, bytes: bitsBytes, buffer: bitsT.buffer }, { offset: bitsBytes, bytes: scaleBytes, buffer: scaleT.buffer }],
         });
-        const warmMs = warmRows > 0 ? cache.warm(0, warmRows) : 0;
+        let warmMs = 0;
+        for (const [row0, count] of warm) warmMs += cache.warm(row0, count);
         onStatus({ phase: 'ready', wroteMs, warmMs, slots: n });
         return {
-          mode: 'opfs', slots: n, bitsT, scaleT, mapT, cache, wroteMs, warmMs,
+          mode: 'opfs', slots: n, bitsT, scaleT, mapT, cache, wroteMs, warmMs, warmRows, split,
           lookup: (ids, out) => cache.lookup(ids, out),
           // For a one-off graph over `ids` (the engine's whole-sequence fallback): its own rows,
           // gathered with iota ids, independent of the cache size.

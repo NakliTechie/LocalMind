@@ -5,7 +5,9 @@
      window.harness.call(op, args) posts one message to the worker and resolves its answer. -->
 <pre id="out">starting</pre>
 <script type="module">
-  const w = new Worker(new URL('./ple-harness-worker.js', import.meta.url), { type: 'module' });
+  // A per-load version keeps Chrome's HTTP cache from serving a stale worker, engine or ple-opfs.js.
+  const v = new URLSearchParams(location.search).get('t') || String(Date.now());
+  const w = new Worker(new URL('./ple-harness-worker.js?v=' + v, import.meta.url), { type: 'module' });
   const pend = new Map();
   let seq = 0;
   w.addEventListener('error', (e) => { document.getElementById('out').textContent = 'worker error: ' + e.message; });

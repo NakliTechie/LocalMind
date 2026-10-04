@@ -33,7 +33,13 @@ GPUBuffer.prototype.destroy = function () {
 
 // Keep the engine's device reachable for experiment patches.
 const requestDevice = GPUAdapter.prototype.requestDevice;
-GPUAdapter.prototype.requestDevice = async function (...a) { const d = await requestDevice.apply(this, a); self.__dev = d; return d; };
+const gpuErrors = [];
+GPUAdapter.prototype.requestDevice = async function (...a) {
+  const d = await requestDevice.apply(this, a);
+  self.__dev = d;
+  d.addEventListener('uncapturederror', (e) => gpuErrors.push(String(e.error && e.error.message).slice(0, 300)));
+  return d;
+};
 
 const logs = [];
 for (const k of ['log', 'warn', 'error']) {
@@ -45,7 +51,7 @@ let model = null;
 let engine = null;
 
 async function importEngine(patches) {
-  const url = new URL('../gemma-4-e2b.js', self.location.href).href;
+  const url = new URL('../gemma-4-e2b.js' + self.location.search, self.location.href).href;
   if (!patches || !patches.length) return import(url);
   let src = await (await fetch(url)).text();
   for (const [from, to] of patches) {
@@ -64,7 +70,7 @@ const handlers = {
     const t0 = performance.now();
     const status = [];
     const ple = mode === 'opfs'
-      ? (await import(new URL('../ple-opfs.js', self.location.href).href)).createGemmaPle({ ...pleOpts, onStatus: (s) => status.push(s) })
+      ? (await import(new URL('../ple-opfs.js' + self.location.search, self.location.href).href)).createGemmaPle({ ...pleOpts, onStatus: (s) => status.push(s) })
       : undefined;
     model = await engine.Gemma4Mobile.load(null, { ple, ...loadOpts });
     const loadMs = performance.now() - t0;
@@ -91,7 +97,8 @@ const handlers = {
   async promptTokens({ prompt }) {
     return model.encodePrompt([{ role: 'user', content: prompt }]).length;
   },
-  async gpu() { return { live, peak }; },
+  async missLog() { return model._model.weights.embedTokensPerLayer.ple?.cache.missLog.slice() ?? null; },
+  async gpu() { return { live, peak, errors: gpuErrors.slice() }; },
   async logs() { return logs.splice(0); },
   async opfs({ action }) {
     const root = await navigator.storage.getDirectory();

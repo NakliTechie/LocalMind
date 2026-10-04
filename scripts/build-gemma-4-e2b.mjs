@@ -16,17 +16,21 @@
 //       returns a small GPU row table; on null (no OPFS) it uploads the table resident as before.
 //   (c) the decode, prefill-block and whole-sequence graphs gather PLE rows through their own ids
 //       tensor (table slots) instead of the token ids; the gather kernel itself is unchanged.
-//   (d) each decode step and prefill block looks its tokens up before it is submitted; decode runs
-//       one step at a time in this mode because the CPU must know each token first.
+//   (d) each prefill block looks its tokens up before it is submitted. Decode either looks each
+//       token up on the CPU and runs one step at a time, or (with ple.mapT, a GPU copy of the
+//       token->slot map) keeps two steps in flight: a one-thread kernel at the start of each step
+//       maps the token to its slot, and a step whose token was not resident is replayed
+//       (scripts/gemma-4-e2b-ple.inc.js, spliced in verbatim).
 //   (e) dispose() closes the OPFS handles; pleMode / pleStats report the mode.
 import { readFile, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 
 const UPSTREAM_REV = '158f16ae0f672943ca304d59c47c8e3a264e399e';
 const UPSTREAM_URL = `https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels/raw/${UPSTREAM_REV}/gemma-4-e2b.js`;
 const UPSTREAM_SHA256 = '0234c0e866bfaa9623e938a7cfa7f5740cca22532cc1112dd4e8915b97f78d62';
 
-export function applyGemmaPatches(src) {
+export function applyGemmaPatches(src, helpers) {
   let out = src;
   const replaceOnce = (marker, repl, what) => {
     const n = out.split(marker).length - 1;
@@ -85,7 +89,7 @@ export function applyGemmaPatches(src) {
   // (d) look the step's tokens up before the step is submitted.
   replaceOnce(
     'n!==null&&s.writeBuffer(this.idsT.buffer,0,new Uint32Array([n])),rn.write(s,a,this.rope,r,o);',
-    'n!==null&&s.writeBuffer(this.idsT.buffer,0,new Uint32Array([n])),this.pleIdsT&&(n===null?$pleNeedsToken():s.writeBuffer(this.pleIdsT.buffer,0,this.model.weights.embedTokensPerLayer.ple.lookup([n]))),rn.write(s,a,this.rope,r,o);',
+    'n!==null&&s.writeBuffer(this.idsT.buffer,0,new Uint32Array([n])),this.pleIdsT&&$pleStepIds(this,s,n),rn.write(s,a,this.rope,r,o);',
     'decode step inputs',
   );
   replaceOnce(
@@ -93,8 +97,18 @@ export function applyGemmaPatches(src) {
     'i.set(n),s.writeBuffer(this.idsT.buffer,0,i),this.pleIdsT&&s.writeBuffer(this.pleIdsT.buffer,0,this.model.weights.embedTokensPerLayer.ple.lookup(i)),rn.write(s,a,this.rope,r,o);',
     'prefill-block inputs',
   );
-  replaceOnce('if(vo>1){if(o&&Rr(d,s)', 'if(vo>1&&!this.weights.embedTokensPerLayer.ple){if(o&&Rr(d,s)', 'pipelined decode only when resident');
-  replaceOnce('var vo=4;', 'var vo=4;function $pleNeedsToken(){throw new Error("PLE from OPFS: a decode step needs its token id on the CPU")}', 'helper');
+  replaceOnce(
+    'if(vo>1){if(o&&Rr(d,s)',
+    'if(this.weights.embedTokensPerLayer.ple?.mapT){if(o&&Rr(d,s)||(yield d,p+=1,p>=a))return;f=await this.#s(r,u);yield*$plePipelined(f,r,this.weights.embedTokensPerLayer.ple,d,u,a-p,W=>o&&Rr(W,s));return}' +
+      'if(vo>1&&!this.weights.embedTokensPerLayer.ple){if(o&&Rr(d,s)',
+    'decode loop: replayed pipeline with a GPU map, one step at a time without',
+  );
+  replaceOnce(
+    's.argmax({xT:X,outT:this.idsT,count:p}),this.steps=await s.buildSteps()',
+    's.argmax({xT:X,outT:this.idsT,count:p}),this.steps=await s.buildSteps(),this.pleIdsT&&a.embedTokensPerLayer.ple.mapT&&this.steps.unshift($pleLookupStep(r,this.idsT,a.embedTokensPerLayer.ple.mapT,this.pleIdsT))',
+    'decode program: slot lookup first',
+  );
+  replaceOnce('var vo=4;', 'var vo=4;\n' + helpers.replace(/^\/\/.*\n/gm, '').trim() + '\n', 'module-scope helpers');
 
   // (e) close the OPFS handles; report the mode.
   replaceOnce('this.#e.length=0,en(this.weights)}', 'this.#e.length=0,this.weights.embedTokensPerLayer?.ple?.close(),en(this.weights)}', 'dispose closes OPFS');
@@ -114,7 +128,8 @@ if (isMain) {
   const src = arg ? await readFile(arg, 'utf8') : await (await fetch(UPSTREAM_URL)).text();
   const sha = createHash('sha256').update(src).digest('hex');
   if (sha !== UPSTREAM_SHA256) console.error(`warning: upstream sha256 ${sha} != pinned ${UPSTREAM_SHA256}; markers still guard the patches`);
-  const out = applyGemmaPatches(src);
+  const helpers = await readFile(fileURLToPath(new URL('./gemma-4-e2b-ple.inc.js', import.meta.url)), 'utf8');
+  const out = applyGemmaPatches(src, helpers);
   const dest = new URL('../gemma-4-e2b.js', import.meta.url);
   await writeFile(dest, out);
   console.error(`wrote ${dest.pathname} (${out.length} bytes, +${out.length - src.length} over upstream)`);
