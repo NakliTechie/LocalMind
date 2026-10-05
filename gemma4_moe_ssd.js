@@ -150,9 +150,7 @@ export class GemmaTokenizer {
     this.tokens = kv['tokenizer.ggml.tokens'];
     const types = kv['tokenizer.ggml.token_type'] || [];
     const n = this.tokens.length;
-    // Three strings appear twice in the vocab ('#', '//', '<?'); llama.cpp's map keeps the later id.
-    this.ids = new Map();
-    for (let i = 0; i < n; i++) this.ids.set(this.tokens[i], i);
+    this.ids = new Map(this.tokens.map((t, i) => [t, i]));
     this.ranks = new Map((kv['tokenizer.ggml.merges'] || []).map((m, i) => [m, i]));
     this.isSpecial = new Uint8Array(n); this.byteOf = new Int16Array(n).fill(-1); this.byteTok = new Int32Array(256).fill(-1);
     const special = [];
@@ -224,7 +222,7 @@ export class GemmaTokenizer {
     const chunks = ids.map((id) => this.tokenBytes(id));
     const all = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
     let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
-    return new TextDecoder().decode(all);
+    return new TextDecoder('utf-8', { ignoreBOM: true }).decode(all);
   }
 }
 

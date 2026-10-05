@@ -46,7 +46,9 @@ export function parseGguf(u8) {
   const need = (n) => { if (p + n > u8.byteLength) { const e = new Error('GGUF header truncated'); e.needBytes = Math.max(u8.byteLength * 2, p + n + (1 << 20)); throw e; } };
   const u32 = () => { need(4); const v = dv.getUint32(p, true); p += 4; return v; };
   const u64 = () => { need(8); const v = Number(dv.getBigUint64(p, true)); p += 8; return v; };
-  const dec = new TextDecoder();
+  // ignoreBOM: keep a leading U+FEFF. Gemma 4's vocab has '#', '//' and '<?' twice, once with a byte-order mark;
+  // the default decoder strips it and the two tokens collide (2026-10-05).
+  const dec = new TextDecoder('utf-8', { ignoreBOM: true });
   const str = () => { const n = u64(); need(n); const s = dec.decode(u8.subarray(p, p + n)); p += n; return s; };
   const scalar = {
     0: () => { need(1); return dv.getUint8(p++); }, 1: () => { need(1); return dv.getInt8(p++); },

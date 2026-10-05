@@ -21,6 +21,11 @@ for (const c of cases) {
   assert.equal(tok.decode(c.ids), c.text, `decode ${JSON.stringify(c.text).slice(0, 60)}`);
   n++;
 }
+// '#', '//' and '<?' each exist twice, once with a leading byte-order mark (EF BB BF). Decoded with the BOM kept,
+// every token string is distinct and the plain spelling maps to the plain token, as in llama.cpp.
+assert.equal(new Set(tok.tokens).size, tok.tokens.length, 'token strings must be distinct');
+assert.deepEqual(['#', '//', '<?'].map((t) => tok.ids.get(t)), [236865, 715, 8510]);
+assert.equal(tok.decode([135260]), '\uFEFF//');
 // Byte fallback: a character outside the vocab becomes its UTF-8 bytes as <0xXX> tokens and decodes back.
 const rare = '\u{1D11E}\u{10FFFD}';
 assert.equal(tok.decode(tok.encode(rare)), rare);
