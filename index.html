@@ -10978,7 +10978,7 @@ self.addEventListener('message', async (e) => {
     // params.stream. Mirrors the OpenAI SDK shape closely enough that
     // simple clients can drop us in by swapping the base.
     // Tools, multimodal, and response_format are intentionally rejected
-    // in v1 — see ROADMAP.md and the SECURITY notes in the README.
+    // in v1 — see docs/ROADMAP.md and the SECURITY notes in the README.
     async function chatCompletionsCreate(params) {
       const start = Date.now();
       params = params || {};

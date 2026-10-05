@@ -123,7 +123,7 @@ The `+esm` jsDelivr endpoint internally redirects to content-addressed URLs, so 
 `run_python` returns stdout/stderr only; matplotlib figures go nowhere. Capture via `pyplot.savefig(BytesIO)` → base64 → image in the tool-result block.
 
 ### 5. Second runtime adapter — in-browser GGUF via wllama  · **IN PROGRESS (June 2026)**
-The runtime adapter boundary at [index.html:11615+](index.html) (`LocalMind.runtime`) was deliberately built so a second backend can be slotted in — the code comments already reference this ("a second backend (WebLLM, wllama, …) can be slotted in by adding another adapter section without touching anything above"). The endpoint backend (Tier 2) was the first such addition.
+The runtime adapter boundary at [index.html:11615+](../index.html) (`LocalMind.runtime`) was deliberately built so a second backend can be slotted in — the code comments already reference this ("a second backend (WebLLM, wllama, …) can be slotted in by adding another adapter section without touching anything above"). The endpoint backend (Tier 2) was the first such addition.
 
 A real GGUF path unlocks: (a) models with no ONNX export, (b) the native llama.cpp quant ladder (Q2_K, Q4_K_M, …) without waiting for ONNX exports, (c) interoperability with the broader local-LLM ecosystem where GGUF is the de facto format.
 

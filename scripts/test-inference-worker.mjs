@@ -6,7 +6,7 @@ const source = await readFile(new URL('../inference-worker.js', import.meta.url)
 const onnxSource = await readFile(new URL('../onnx-inference-worker.js', import.meta.url), 'utf8');
 const imageSource = await readFile(new URL('../image-inference-worker.js', import.meta.url), 'utf8');
 const indexSource = await readFile(new URL('../index.html', import.meta.url), 'utf8');
-const protocol = await readFile(new URL('../INFERENCE-PROTOCOL.md', import.meta.url), 'utf8');
+const protocol = await readFile(new URL('../docs/INFERENCE-PROTOCOL.md', import.meta.url), 'utf8');
 await import(new URL('../host-model-catalog.js', import.meta.url));
 const catalog = globalThis.LocalMindHostCatalog;
 

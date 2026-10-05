@@ -7,7 +7,6 @@
 !onnx-inference-worker.js
 !image-inference-worker.js
 !host-model-catalog.js
-!INFERENCE-PROTOCOL.md
 !gemma-4-e2b.js
 !ple-opfs.js
 !qwen3_moe_ssd.js
@@ -22,14 +21,8 @@
 !marketing/
 !marketing/**
 !README.md
-!ROADMAP.md
-!API.md
-!ARCHITECTURE.md
-!FEATURES.md
-!WEBGPU_KERNELS_PLAN.md
-!WEBGPU_KERNELS_GENERALISATION.md
-!VOICE-LOOP-HANDOFF.md
-!CODE-TIER-HANDOFF.md
+!docs/
+!docs/**
 !LICENSE
 !.gitignore
 !.nojekyll

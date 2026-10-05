@@ -118,15 +118,15 @@ won't work because ES module workers and WebGPU both require an HTTP origin.
 ## Using the workers from another host
 
 The LFM2 engine is exposed through the DOM-free
-[`inference-worker.js`](./inference-worker.js) boundary used by LocalMind
+[`inference-worker.js`](../inference-worker.js) boundary used by LocalMind
 itself. Hosts can also use the conservative
-[`host-model-catalog.js`](./host-model-catalog.js) and
-[`onnx-inference-worker.js`](./onnx-inference-worker.js) for the supported
+[`host-model-catalog.js`](../host-model-catalog.js) and
+[`onnx-inference-worker.js`](../onnx-inference-worker.js) for the supported
 Gemma 4 and Qwen3.5 WebGPU paths. The same catalog publishes the on-device Bonsai
 FLUX.2-Klein model through
-[`image-inference-worker.js`](./image-inference-worker.js); the worker is
+[`image-inference-worker.js`](../image-inference-worker.js); the worker is
 generated from LocalMind's inline image engine by
-[`scripts/extract-image-worker.mjs`](./scripts/extract-image-worker.mjs).
+[`scripts/extract-image-worker.mjs`](../scripts/extract-image-worker.mjs).
 NakliOS vendors these tested artifacts for its shared `naklios.ai` broker;
 model selection, cloud/local endpoint credentials, consent, and app isolation
 remain host responsibilities. The worker protocols are documented in

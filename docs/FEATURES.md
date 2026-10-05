@@ -1,6 +1,6 @@
 # LocalMind — Full feature guide
 
-The detailed reference for every LocalMind feature. For the short version, see the **[README](./README.md)**; for the internals, **[ARCHITECTURE.md](./ARCHITECTURE.md)**.
+The detailed reference for every LocalMind feature. For the short version, see the **[README](../README.md)**; for the internals, **[ARCHITECTURE.md](./ARCHITECTURE.md)**.
 
 ---
 
@@ -167,7 +167,7 @@ Settings → **Custom models** → paste a Hugging Face repo id (e.g. `onnx-comm
 
 ## Developer API
 
-Scripts in the same tab can drive the loaded model via an OpenAI-shaped `window.localmind` object (opt-in, Settings → JavaScript API). Non-streaming + streaming. Full reference: **[API.md](./API.md)** · live demo: **[demo.html](./demo.html)**.
+Scripts in the same tab can drive the loaded model via an OpenAI-shaped `window.localmind` object (opt-in, Settings → JavaScript API). Non-streaming + streaming. Full reference: **[API.md](./API.md)** · live demo: **[demo.html](../demo.html)**.
 
 ## Example prompts
 

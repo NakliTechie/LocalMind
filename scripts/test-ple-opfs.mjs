@@ -35,7 +35,7 @@ const MAX = Number(opt('max-tokens', 128));
 const ROUNDS = Number(opt('rounds', 6));
 const MODEL = opt('model', null); // a Gemma 4 QAT-mobile repo id; default: the engine's (E2B)
 
-const LONG = readFileSync(new URL('../ARCHITECTURE.md', import.meta.url), 'utf8').slice(0, 6700);
+const LONG = readFileSync(new URL('../docs/ARCHITECTURE.md', import.meta.url), 'utf8').slice(0, 6700);
 const PROMPTS = [
   'Explain how a hash map works: hashing, buckets, collisions and resizing.',
   'Write a Python class HashMap with put, get, delete and automatic resizing, using separate chaining. Code only.',

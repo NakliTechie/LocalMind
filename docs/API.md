@@ -51,7 +51,7 @@ The object is frozen (`Object.freeze`) and attached as a non-writable property, 
 
 ## Demo
 
-Open [`demo.html`](./demo.html) in the same folder. It iframes `index.html`, auto-flips the toggle, waits for the model, and runs both a non-streaming and a streaming completion against `iframe.contentWindow.localmind`.
+Open [`demo.html`](../demo.html) in the same folder. It iframes `index.html`, auto-flips the toggle, waits for the model, and runs both a non-streaming and a streaming completion against `iframe.contentWindow.localmind`.
 
 ## Architecture / security
 

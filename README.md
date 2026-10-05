@@ -85,7 +85,7 @@ node scripts/test-inference-worker.mjs   # UI and worker contracts (the full gat
 ```
 
 With Settings → JavaScript API on, `window.localmind` is an OpenAI-shaped client for the loaded model, and
-`window.localmind.commands` lists and runs every ⌘K palette command ([API.md](./API.md)).
+`window.localmind.commands` lists and runs every ⌘K palette command ([API.md](docs/API.md)).
 
 ## Verify it yourself
 
@@ -106,7 +106,7 @@ its embedding table on disk. `bench-engines.mjs --suite dflash` checks DFlash 2 
 
 MIT. Built on [Transformers.js](https://github.com/huggingface/transformers.js) and the
 [webml-community](https://huggingface.co/webml-community) WebGPU kernels; full credits in
-[ARCHITECTURE.md](./ARCHITECTURE.md#credits). Part of the [NakliTechie](https://naklitechie.github.io/) series, built
+[ARCHITECTURE.md](docs/ARCHITECTURE.md#credits). Part of the [NakliTechie](https://naklitechie.github.io/) series, built
 by [Chirag Patnaik](https://github.com/NakliTechie) with [Claude Code](https://claude.com/claude-code).
 
-[Features](./FEATURES.md) · [Architecture](./ARCHITECTURE.md) · [API](./API.md) · [Roadmap](./ROADMAP.md) · [Guided tour](https://naklitechie.github.io/LocalMind/guide/)
+[Features](docs/FEATURES.md) · [Architecture](docs/ARCHITECTURE.md) · [API](docs/API.md) · [Roadmap](docs/ROADMAP.md) · [Guided tour](https://naklitechie.github.io/LocalMind/guide/)
