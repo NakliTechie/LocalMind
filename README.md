@@ -57,7 +57,9 @@ with attach and voice stacked beside a taller text box, and everything else move
 The picker groups models as on this device, partly downloaded, or to download, with each size. They range from LFM2.5
 230M on hand-written WebGPU kernels (~1,060 tokens/s on an M4 Pro) to Ternary Bonsai 2 27B, plus Chrome's built-in
 Gemini Nano with no download at all. Two experimental engines stream mixture-of-experts models larger than GPU memory
-(Qwen3.6 35B-A3B, Gemma 4 26B-A4B) from the browser's private storage.
+(Qwen3.6 35B-A3B, Gemma 4 26B-A4B) from the browser's private storage. Their disk tier and engines are also a library,
+[diskformer.js](https://github.com/NakliTechie/diskformer.js), with a demo at
+[diskformer.naklitechie.com](https://diskformer.naklitechie.com).
 
 Every path is local. A model runs in the tab on WebGPU, or as a GGUF through llama.cpp compiled to WebAssembly (from a
 URL or a `.gguf` file on your disk, on CPU when there is no GPU), or on your own Ollama, LM Studio or llama.cpp server.
