@@ -1008,6 +1008,8 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
     this.g.lm = this.bind('matmulQ6K', [...q6, a.xn, a.logits, u.lm]);
     this.g.cap = this.bind('softcap', [a.logits, u.cap]);
     this.g.am = this.bind('argmax', [a.logits, a.am, u.am]);
+    // A chunk pins min(experts, T·K) experts per layer at once; keep that under half the pool.
+    if (Math.min(c.experts, this.chunkTokens * c.topK) > this.poolSlots / 2) this.chunkTokens = Math.max(2, Math.floor(this.poolSlots / 2 / c.topK));
     if (this.batchPrefill) this.initBatch();
   }
 
@@ -1254,6 +1256,8 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
 
   // NeoX RoPE angles as llama.cpp's Metal kernel forms them: f32 pos × base^(−2i/d), ÷ the frequency factor
   // on full-attention layers. One table per layer kind; [0, d/2) = cos, [d/2, d) = sin.
+  // KV cache bytes: per-layer head counts and sizes (sliding and full-attention layers differ).
+  kvBytes() { const c = this.cfg; return c.headDim.reduce((sum, d, l) => sum + 2 * 2 * this.maxCtx * c.kvHeads[l] * d, 0); }
   ropeTable(d, base, ff, pos) {
     const half = d / 2, r = new Float32Array(d), inv = Math.fround(-1 / d);
     for (let i = 0; i < half; i++) {

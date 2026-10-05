@@ -134,7 +134,7 @@ function planUnits(gguf, layout) {
 // The ingest is diskformer's ingestGguf with this engine's store folder and layout tag (kept, so stores written
 // before the split stay valid); `plan` lets another architecture supply its own layout (Gemma 4: gemma4_moe_ssd.js).
 export function ingestGguf(opts) {
-  return ingestStore({ ...opts, root: OPFS_ROOT, format: FORMAT, plan: opts.plan || { layout: planLayout, units: planUnits } });
+  return ingestStore({ ...opts, root: opts.root || OPFS_ROOT, format: FORMAT, plan: opts.plan || { layout: planLayout, units: planUnits } });
 }
 
 // ── Tokenizer: byte-level BPE from the GGUF vocab (tokenizer.ggml.model = gpt2, pre = qwen2) ──
@@ -546,7 +546,8 @@ export class Qwen3MoeSsd {
     const src = opts.source || (modelId === QWEN3_30B_A3B.repo || !modelId ? QWEN3_30B_A3B : { repo: modelId, file: opts.file, revision: opts.revision || 'main' });
     const url = opts.url || `https://huggingface.co/${src.repo}/resolve/${src.revision}/${src.file}`;
     const key = opts.key || storeKey(opts.file || src.file || url.split('/').pop());
-    const dir = `${OPFS_ROOT}/${key}`;
+    const root = opts.root || OPFS_ROOT;              // the OPFS folder for this engine's stores
+    const dir = `${root}/${key}`;
 
     onProgress({ status: 'init' });
     if (!navigator.gpu) throw new Error('WebGPU is not available');
@@ -566,12 +567,12 @@ export class Qwen3MoeSsd {
     try { manifest = JSON.parse(await readOpfsText(`${dir}/manifest.json`) || 'null'); } catch (_) { manifest = null; }
     if (opts.reingest || !manifest || !manifest.complete || manifest.format !== FORMAT) {
       manifest = await ingestGguf({
-        url, key, fetch: fetchFn, signal, source: { repo: src.repo, file: src.file, revision: src.revision, sha256: src.sha256, size: src.size },
+        url, key, root, fetch: fetchFn, signal, source: { repo: src.repo, file: src.file, revision: src.revision, sha256: src.sha256, size: src.size },
         onProgress: (e) => onProgress(ingestProgress(e)),
         plan: this.ingestPlan,
       });
     }
-    const headerFile = await (await (await navigator.storage.getDirectory()).getDirectoryHandle(OPFS_ROOT)).getDirectoryHandle(key);
+    const headerFile = await (await (await navigator.storage.getDirectory()).getDirectoryHandle(root)).getDirectoryHandle(key);
     const headerBytes = new Uint8Array(await (await (await headerFile.getFileHandle('header.bin')).getFile()).arrayBuffer());
     const gguf = parseGguf(headerBytes);
     const engine = new this(device, manifest, gguf, { ...opts, dir, key, url, adapterInfo: adapter.info || {} });
@@ -680,11 +681,27 @@ export class Qwen3MoeSsd {
     this.denseUploadSecs = (performance.now() - t0) / 1000;
   }
 
+  // Bytes for the expert cache. With opts.gpuBudgetBytes, the cache gets what the budget leaves after the weights
+  // that stay on the GPU, the KV cache and working buffers; a budget too small for those is refused. Otherwise
+  // opts.poolBytes, default 4 GiB.
+  poolBudget() {
+    const o = this.opts;
+    if (!o.gpuBudgetBytes) return o.poolBytes || 4 * 2 ** 30;
+    const gb = (n) => (n / 1e9).toFixed(2) + ' GB';
+    const fixed = this.gpuBytes.dense + this.kvBytes() + (o.workBytes ?? 512 * 2 ** 20);
+    const rest = o.gpuBudgetBytes - fixed;
+    const min = this.cfg.topK * 2 * this.manifest.experts.record;
+    if (rest < min) throw new Error(`GPU budget ${gb(o.gpuBudgetBytes)} is too small: weights that stay on the GPU, the KV cache and working buffers need ${gb(fixed)}, and the expert cache at least ${gb(min)} more`);
+    return rest;
+  }
+  // KV cache bytes at this.maxCtx (f16 K and V for every layer); engines with other layouts override it.
+  kvBytes() { const c = this.cfg; return 2 * 2 * c.layers * this.maxCtx * c.kvHeads * c.headDim; }
+
   // Expert slot pool + the streamer that feeds it.
   async initPool() {
     const c = this.cfg, dev = this.device, xp = this.manifest.experts;
     const maxSlotsByBinding = Math.floor(dev.limits.maxStorageBufferBindingSize / xp.parts.guQ.bytes);
-    this.poolSlots = Math.max(c.topK * 2, Math.min(maxSlotsByBinding, Math.floor((this.opts.poolBytes || 4 * 2 ** 30) / xp.record), c.layers * c.experts));
+    this.poolSlots = Math.max(c.topK * 2, Math.min(maxSlotsByBinding, Math.floor(this.poolBudget() / xp.record), c.layers * c.experts));
     this.pool = {};
     for (const [k, part] of Object.entries(xp.parts)) this.pool[k] = this.buffer(this.poolSlots * part.bytes, STORAGE | COPY_DST, 'pool');
     this.expertReader = await OpfsReaderPool.open(`${this.opts.dir}/${xp.file}`, { workers: this.opts.readers || 4 });

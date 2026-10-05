@@ -718,6 +718,12 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     });
   }
 
+  // For the GPU budget: f16 KV for the attention layers, conv + delta-rule state for the DeltaNet layers.
+  kvBytes() {
+    const c = this.cfg, s = c.ssm, convDim = 2 * s.kHeads * s.dState + s.dInner;
+    return this.recurrent.reduce((sum, r) => sum + (r ? 3 * convDim * 4 + s.vHeads * s.dState * s.dState * 4 : 2 * 2 * this.maxCtx * c.kvHeads * c.headDim), 0);
+  }
+
   initBuffers() {
     const c = this.cfg, s = c.ssm;
     const H = c.hidden, hd = c.headDim, QN = c.heads * hd, kvn = c.kvHeads * hd, F = c.expertFf, SF = c.shexpFf, K = c.topK;

@@ -12,20 +12,21 @@ export function makeApi(log = () => {}) {
   const api = {
     // engine: 'qwen3' (rung 2a, qwen3moe GGUFs), 'qwen35' (rung 2b, qwen35moe) or 'gemma4' (rung 2c, Gemma 4 MoE).
     // capture (gemma4): keep each layer's states of the last step for states().
-    async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture } = {}) {
+    async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, gpuBudgetGB, root } = {}) {
       if (m) { await m.dispose(); m = null; }
       const t0 = performance.now();
       let last = 0;
       if (!ENGINES[engine]) throw new Error(`unknown engine ${engine}`);
       m = await ENGINES[engine].load(null, {
-        url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture,
+        url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, root,
+        gpuBudgetBytes: gpuBudgetGB ? gpuBudgetGB * 1e9 : undefined,
         onProgress: (e) => {
           if (e.status === 'weights' && e.kind !== 'tensors' && performance.now() - last > 2000) { last = performance.now(); log({ ingest: e.loaded, total: e.total, secs: e.secs }); }
           else if (e.status === 'ingest-plan') log(e);
         },
       });
       globalThis.engine = m;
-      return log({ subgroupKernels: !!m.subgroupKernels, gpuRouting: m.gpuRouting, loaded: key, secs: (performance.now() - t0) / 1000, ingestSecs: m.manifest.ingestSecs, denseUploadSecs: m.denseUploadSecs, poolSlots: m.poolSlots, gpuBytes: m.gpuBytes, cfg: m.cfg });
+      return log({ gpuBytesTotal: Object.values(m.gpuBytes).reduce((x, y) => x + y, 0), subgroupKernels: !!m.subgroupKernels, gpuRouting: m.gpuRouting, loaded: key, secs: (performance.now() - t0) / 1000, ingestSecs: m.manifest.ingestSecs, denseUploadSecs: m.denseUploadSecs, poolSlots: m.poolSlots, gpuBytes: m.gpuBytes, cfg: m.cfg });
     },
     async greedy(ids, n = 16, { top = 5, resetStats = true } = {}) {
       if (resetStats) m.resetCounters();
