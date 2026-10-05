@@ -20,8 +20,13 @@
  * so the engine computes the same dot products llama.cpp does, up to summation order.
  */
 
-import { OpfsReaderPool, OpfsWriter, readOpfsText, writeOpfsText, removeOpfs } from './opfs-reader.js';
+import { OpfsReaderPool, readOpfsText } from './opfs-reader.js';
 import { ExpertStreamer } from './moe-expert-stream.js';
+// The store layer is diskformer.js's (github.com/NakliTechie/diskformer.js), byte-identical copies: gguf.js, ingest.js.
+import { GGML, Q8_BLOCK, Q4_BLOCK, Q6K_BLOCK, parseGguf, tensorBytes } from './gguf.js';
+import { ingestGguf as ingestStore, ingestProgress, storeKey, removeStore } from './ingest.js';
+export { GGML, Q4_BLOCK, Q6K_BLOCK, parseGguf, tensorBytes, splitQ4 } from './gguf.js';
+export { ingestProgress } from './ingest.js';
 
 export const QWEN3_30B_A3B = {
   repo: 'Qwen/Qwen3-30B-A3B-GGUF',
@@ -34,66 +39,6 @@ const FORMAT = 'localmind-qwen3moe-ssd/1';
 const OPFS_ROOT = 'localmind-ssd';
 
 // ── GGUF ────────────────────────────────────────────────────────────────────
-export const GGML = { F32: 0, F16: 1, Q4_0: 2, Q8_0: 8, Q6_K: 14 };
-const Q8_BLOCK = 34;  // f16 scale + 32 × int8
-export const Q4_BLOCK = 18;  // f16 scale + 32 × 4-bit (16 bytes)
-export const Q6K_BLOCK = 210; // 256 values: ql[128] + qh[64] + scales[16] + f16 d
-
-// Parses a GGUF header. Throws { needBytes } when `u8` stops before the header ends.
-export function parseGguf(u8) {
-  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-  let p = 0;
-  const need = (n) => { if (p + n > u8.byteLength) { const e = new Error('GGUF header truncated'); e.needBytes = Math.max(u8.byteLength * 2, p + n + (1 << 20)); throw e; } };
-  const u32 = () => { need(4); const v = dv.getUint32(p, true); p += 4; return v; };
-  const u64 = () => { need(8); const v = Number(dv.getBigUint64(p, true)); p += 8; return v; };
-  // ignoreBOM: keep a leading U+FEFF. Gemma 4's vocab has '#', '//' and '<?' twice, once with a byte-order mark;
-  // the default decoder strips it and the two tokens collide (2026-10-05).
-  const dec = new TextDecoder('utf-8', { ignoreBOM: true });
-  const str = () => { const n = u64(); need(n); const s = dec.decode(u8.subarray(p, p + n)); p += n; return s; };
-  const scalar = {
-    0: () => { need(1); return dv.getUint8(p++); }, 1: () => { need(1); return dv.getInt8(p++); },
-    2: () => { need(2); const v = dv.getUint16(p, true); p += 2; return v; }, 3: () => { need(2); const v = dv.getInt16(p, true); p += 2; return v; },
-    4: u32, 5: () => { need(4); const v = dv.getInt32(p, true); p += 4; return v; },
-    6: () => { need(4); const v = dv.getFloat32(p, true); p += 4; return v; },
-    7: () => { need(1); return dv.getUint8(p++) !== 0; },
-    10: u64, 11: () => { need(8); const v = Number(dv.getBigInt64(p, true)); p += 8; return v; },
-    12: () => { need(8); const v = dv.getFloat64(p, true); p += 8; return v; },
-  };
-  const value = (t) => {
-    if (t === 8) return str();
-    if (t === 9) { const at = u32(), n = u64(); const a = new Array(n); for (let i = 0; i < n; i++) a[i] = value(at); return a; }
-    const f = scalar[t];
-    if (!f) throw new Error(`GGUF: unknown value type ${t}`);
-    return f();
-  };
-  need(4);
-  if (dec.decode(u8.subarray(0, 4)) !== 'GGUF') throw new Error('not a GGUF file');
-  p = 4;
-  const version = u32(), nTensors = u64(), nKv = u64();
-  const kv = {};
-  for (let i = 0; i < nKv; i++) { const k = str(); kv[k] = value(u32()); }
-  const tensors = [];
-  for (let i = 0; i < nTensors; i++) {
-    const name = str(), nd = u32(), dims = [];
-    for (let d = 0; d < nd; d++) dims.push(u64());
-    const type = u32(), offset = u64();
-    tensors.push({ name, dims, type, offset });
-  }
-  const align = kv['general.alignment'] || 32;
-  const dataStart = Math.ceil(p / align) * align;
-  return { version, kv, tensors, headerBytes: p, dataStart };
-}
-
-export function tensorBytes(t) {
-  const n = t.dims.reduce((a, b) => a * b, 1);
-  if (t.type === GGML.F32) return n * 4;
-  if (t.type === GGML.F16) return n * 2;
-  if (t.type === GGML.Q8_0) return (n / 32) * Q8_BLOCK;
-  if (t.type === GGML.Q4_0) return (n / 32) * Q4_BLOCK;
-  if (t.type === GGML.Q6_K) return (n / 256) * Q6K_BLOCK;
-  throw new Error(`unsupported tensor type ${t.type} (${t.name})`);
-}
-
 // qwen3moe (rung 2a) and qwen35moe (Qwen3.5/3.6 MoE, rung 2b: qwen35_moe_ssd.js) share the
 // expert layout; qwen35moe adds the Gated DeltaNet (ssm.*), partial RoPE and a shared expert.
 export function configFromGguf(kv) {
@@ -151,49 +96,7 @@ export function planLayout(gguf) {
   };
 }
 
-// Q8_0 blocks → an int8 plane + an f16-scale plane, bit-exact. `src` holds whole blocks and
-// starts at an even byte offset, so both planes copy as u16 lanes.
-function splitQ8(src, q, s) {
-  const nb = src.byteLength / Q8_BLOCK;
-  const a = new Uint16Array(src.buffer, src.byteOffset, nb * 17);
-  const qd = new Uint16Array(q.buffer, q.byteOffset, nb * 16);
-  const sd = new Uint16Array(s.buffer, s.byteOffset, nb);
-  for (let b = 0, i = 0, o = 0; b < nb; b++, i += 17, o += 16) {
-    sd[b] = a[i];
-    qd[o] = a[i + 1]; qd[o + 1] = a[i + 2]; qd[o + 2] = a[i + 3]; qd[o + 3] = a[i + 4];
-    qd[o + 4] = a[i + 5]; qd[o + 5] = a[i + 6]; qd[o + 6] = a[i + 7]; qd[o + 7] = a[i + 8];
-    qd[o + 8] = a[i + 9]; qd[o + 9] = a[i + 10]; qd[o + 10] = a[i + 11]; qd[o + 11] = a[i + 12];
-    qd[o + 12] = a[i + 13]; qd[o + 13] = a[i + 14]; qd[o + 14] = a[i + 15]; qd[o + 15] = a[i + 16];
-  }
-}
-
-// Q4_0 blocks → a nibble plane (16 bytes per 32 values, ggml's order: low nibbles are values 0..15,
-// high nibbles 16..31) + an f16-scale plane, bit-exact.
-export function splitQ4(src, q, s) {
-  const nb = src.byteLength / Q4_BLOCK;
-  const a = new Uint16Array(src.buffer, src.byteOffset, nb * 9);
-  const qd = new Uint16Array(q.buffer, q.byteOffset, nb * 8);
-  const sd = new Uint16Array(s.buffer, s.byteOffset, nb);
-  for (let b = 0, i = 0, o = 0; b < nb; b++, i += 9, o += 8) {
-    sd[b] = a[i];
-    qd[o] = a[i + 1]; qd[o + 1] = a[i + 2]; qd[o + 2] = a[i + 3]; qd[o + 3] = a[i + 4];
-    qd[o + 4] = a[i + 5]; qd[o + 5] = a[i + 6]; qd[o + 6] = a[i + 7]; qd[o + 7] = a[i + 8];
-  }
-}
-
 // ── Ingest: GGUF (over HTTP Range) → OPFS, in the engine layout ─────────────
-const keyOf = (file) => file.replace(/\.gguf$/i, '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
-
-async function readHeader(url, fetchFn, signal) {
-  let n = 16 << 20;
-  for (;;) {
-    const r = await fetchFn(url, { headers: { Range: `bytes=0-${n - 1}` }, signal, cache: 'no-store' });
-    if (!r.ok) throw new Error(`GGUF header fetch: HTTP ${r.status}`);
-    const u8 = new Uint8Array(await r.arrayBuffer());
-    try { return { gguf: parseGguf(u8), bytes: u8 }; } catch (e) { if (!e.needBytes) throw e; n = e.needBytes; }
-  }
-}
-
 // Every byte range of the GGUF the engine keeps, as units small enough to transform in
 // memory: one unit per expert slice, row bands for dense Q8_0, whole F32 tensors.
 function planUnits(gguf, layout) {
@@ -228,101 +131,10 @@ function planUnits(gguf, layout) {
   return units;
 }
 
-// `plan` lets another architecture's engine supply its own layout and units (Gemma 4: gemma4_moe_ssd.js).
-export async function ingestGguf({ url, key, fetch: fetchFn = fetch, onProgress = () => {}, signal, source = {}, plan = { layout: planLayout, units: planUnits } }) {
-  const t0 = performance.now();
-  const { gguf, bytes: headerBuf } = await readHeader(url, fetchFn, signal);
-  const layout = plan.layout(gguf);
-  const dir = `${OPFS_ROOT}/${key}`;
-  const est = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : {};
-  const persisted = navigator.storage && navigator.storage.persist ? await navigator.storage.persist().catch(() => false) : false;
-  const needed = layout.experts.bytes + layout.dense.bytes;
-  onProgress({ status: 'ingest-plan', needed, quota: est.quota, usage: est.usage, persisted });
-  const quotaLog = [{ written: 0, quota: est.quota, usage: est.usage }];
-  await writeOpfsText(`${dir}/manifest.json`, JSON.stringify({ format: FORMAT, complete: false }));
-  // Header bytes, for the tokenizer and metadata at every later load.
-  const hw = await OpfsWriter.open(`${dir}/header.bin`, { truncate: true });
-  await hw.write(headerBuf.subarray(0, gguf.dataStart), 0);
-  await hw.close();
-
-  const units = plan.units(gguf, layout);
-  const writers = {
-    dense: await OpfsWriter.open(`${dir}/dense.bin`, { truncate: true }),
-    experts: await OpfsWriter.open(`${dir}/experts.bin`, { truncate: true }),
-  };
-  // No up-front truncate to full size: a fresh origin's quota is ~10 GiB and grows with what is
-  // actually written (measured 2026-10-02), so a single 30.8 GB extension would be refused. The
-  // writes below grow each file by at most one layer's records (~642 MB) at a time.
-
-  // Stream the data section in order. Units are filled from the response chunks, transformed,
-  // and written while the next bytes arrive (at most `maxWrites` writes in flight).
-  const first = units[0].src, last = units[units.length - 1].src + units[units.length - 1].len;
-  const maxUnit = units.reduce((m, u) => Math.max(m, u.len), 0);
-  let ui = 0, fill = 0, unitBuf = new Uint8Array(maxUnit);
-  const inflight = new Set(); const maxWrites = 8;
-  const spare = [];
-  const getBuf = (n) => { const i = spare.findIndex((b) => b.byteLength >= n); return i >= 0 ? spare.splice(i, 1)[0] : new ArrayBuffer(n); };
-  const queue = async (w, buf, len, at) => {
-    while (inflight.size >= maxWrites) await Promise.race(inflight);
-    const p = w.writeOwned(buf, len, at).then((b) => { inflight.delete(p); if (spare.length < 16) spare.push(b); });
-    inflight.add(p);
-  };
-  let done = 0, written = 0;
-  const flushUnit = async (u) => {
-    const src = unitBuf.subarray(0, u.len);
-    const w = writers[u.file];
-    if (u.raw !== undefined) {
-      const b = getBuf(u.len); new Uint8Array(b, 0, u.len).set(src);
-      await queue(w, b, u.len, u.raw); written += u.len; return;
-    }
-    const q4 = u.kind === 'q4', blk = q4 ? Q4_BLOCK : Q8_BLOCK, qPer = q4 ? 16 : 32;
-    const nb = u.len / blk;
-    const qb = getBuf(nb * qPer), sb = getBuf(nb * 2);
-    (q4 ? splitQ4 : splitQ8)(src, new Uint8Array(qb, 0, nb * qPer), new Uint8Array(sb, 0, nb * 2));
-    await queue(w, qb, nb * qPer, u.q);
-    await queue(w, sb, nb * 2, u.s);
-    written += nb * blk;
-  };
-  // Several sequential range requests (one per ~1 GiB) keep any one response bounded.
-  const SPAN = 1 << 30;
-  let pos = first;
-  for (let start = first; start < last; start += SPAN) {
-    const end = Math.min(last, start + SPAN) - 1;
-    const r = await fetchFn(url, { headers: { Range: `bytes=${start}-${end}` }, signal, cache: 'no-store' });
-    if (r.status !== 206) throw new Error(`GGUF range ${start}-${end}: HTTP ${r.status}`);
-    const reader = r.body.getReader();
-    for (;;) {
-      const { done: eof, value } = await reader.read();
-      if (eof) break;
-      let off = 0;
-      while (off < value.byteLength && ui < units.length) {
-        const u = units[ui];
-        if (pos < u.src) { const skip = Math.min(u.src - pos, value.byteLength - off); pos += skip; off += skip; continue; }
-        const take = Math.min(u.len - fill, value.byteLength - off);
-        unitBuf.set(value.subarray(off, off + take), fill);
-        fill += take; off += take; pos += take;
-        if (fill === u.len) { await flushUnit(u); ui++; fill = 0; }
-      }
-      done = pos - first;
-      onProgress({ status: 'ingest', loaded: done, total: last - first, written, secs: (performance.now() - t0) / 1000 });
-      if (written - quotaLog[quotaLog.length - 1].written > 4 * 2 ** 30 && navigator.storage.estimate) {
-        const e = await navigator.storage.estimate();
-        quotaLog.push({ written, quota: e.quota, usage: e.usage });
-      }
-    }
-  }
-  if (ui !== units.length) throw new Error(`ingest ended early: ${ui} of ${units.length} units`);
-  await Promise.all(inflight);
-  await writers.dense.close();
-  await writers.experts.close();
-  const manifest = {
-    format: FORMAT, complete: true, ingestedAt: new Date().toISOString(),
-    source: { url, ...source, dataStart: gguf.dataStart, headerBytes: gguf.headerBytes },
-    ingestSecs: (performance.now() - t0) / 1000, quotaBefore: est.quota, persisted, quotaLog,
-    ...layout,
-  };
-  await writeOpfsText(`${dir}/manifest.json`, JSON.stringify(manifest));
-  return manifest;
+// The ingest is diskformer's ingestGguf with this engine's store folder and layout tag (kept, so stores written
+// before the split stay valid); `plan` lets another architecture supply its own layout (Gemma 4: gemma4_moe_ssd.js).
+export function ingestGguf(opts) {
+  return ingestStore({ ...opts, root: OPFS_ROOT, format: FORMAT, plan: opts.plan || { layout: planLayout, units: planUnits } });
 }
 
 // ── Tokenizer: byte-level BPE from the GGUF vocab (tokenizer.ggml.model = gpt2, pre = qwen2) ──
@@ -733,7 +545,7 @@ export class Qwen3MoeSsd {
     const { fetch: fetchFn = (u, i) => fetch(u, i), onProgress = () => {}, signal } = opts;
     const src = opts.source || (modelId === QWEN3_30B_A3B.repo || !modelId ? QWEN3_30B_A3B : { repo: modelId, file: opts.file, revision: opts.revision || 'main' });
     const url = opts.url || `https://huggingface.co/${src.repo}/resolve/${src.revision}/${src.file}`;
-    const key = opts.key || keyOf(opts.file || src.file || url.split('/').pop());
+    const key = opts.key || storeKey(opts.file || src.file || url.split('/').pop());
     const dir = `${OPFS_ROOT}/${key}`;
 
     onProgress({ status: 'init' });
@@ -1203,11 +1015,4 @@ export function topN(logits, n) {
   return best;
 }
 
-// Ingest progress as hosts read it: a 'weights' event with byte counts. The spread goes first, so the
-// event's own status ('ingest') cannot overwrite 'weights' — it did until 2026-10-04, and LocalMind's
-// load watchdog, seeing no download progress, killed every first-time Qwen3.6 download after 3 minutes.
-export function ingestProgress(e) {
-  return e && e.status === 'ingest' ? { ...e, status: 'weights', loaded: e.loaded, total: e.total } : e;
-}
-
-export async function removeIngest(key) { await removeOpfs(`${OPFS_ROOT}/${key}`); }
+export async function removeIngest(key) { await removeStore(key, { root: OPFS_ROOT }); }

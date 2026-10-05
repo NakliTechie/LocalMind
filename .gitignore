@@ -15,6 +15,9 @@
 !gemma4_moe_ssd.js
 !moe-expert-stream.js
 !opfs-reader.js
+!gguf.js
+!ingest.js
+!rows.js
 !og.png
 !marketing/
 !marketing/**

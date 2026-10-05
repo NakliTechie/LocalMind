@@ -19,6 +19,9 @@ on:
       - gemma-4-e2b.js
       - ple-opfs.js
       - opfs-reader.js
+      - gguf.js
+      - ingest.js
+      - rows.js
       - qwen3_moe_ssd.js
       - qwen35_moe_ssd.js
       - gemma4_moe_ssd.js
@@ -38,7 +41,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          RUNTIME_FILES="index.html inference-worker.js lfm2_5.js gemma-4-e2b.js ple-opfs.js opfs-reader.js qwen3_moe_ssd.js qwen35_moe_ssd.js gemma4_moe_ssd.js moe-expert-stream.js ternary_bonsai_2_27b.js ternary_bonsai_2_dflash.js"
+          RUNTIME_FILES="index.html inference-worker.js lfm2_5.js gemma-4-e2b.js ple-opfs.js opfs-reader.js gguf.js ingest.js rows.js qwen3_moe_ssd.js qwen35_moe_ssd.js gemma4_moe_ssd.js moe-expert-stream.js ternary_bonsai_2_27b.js ternary_bonsai_2_dflash.js"
           git clone https://NakliTechie:$HF_TOKEN@huggingface.co/spaces/naklitechie/LocalMind /tmp/hf-space
           cp $RUNTIME_FILES /tmp/hf-space/
           cd /tmp/hf-space
