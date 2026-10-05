@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="author" content="Chirag Patnaik">
 <title>LocalMind — User guide</title>
-<meta name="description" content="How to use LocalMind: private, in-browser AI with model council, deep research, skills, memory, and on-disk sync.">
+<meta name="description" content="How to use LocalMind: private, in-browser AI with a model picker, the command palette, model council, deep research, skills, memory, a searchable Library, images and folder sync.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
 <style>
   :root {
@@ -33,6 +33,8 @@
   .toc a { color:var(--act); text-decoration:none; } .toc a:hover { text-decoration:underline; }
   .note { background:var(--act-bg); border-radius:8px; padding:10px 14px; font-size:0.9rem; margin:12px 0; }
   a.back { color:var(--act); font-weight:600; text-decoration:none; }
+  figure.narrow { max-width:420px; margin-left:auto; margin-right:auto; }
+  figure.phone { max-width:300px; margin-left:auto; margin-right:auto; }
   footer { margin-top:48px; padding-top:18px; border-top:1px solid var(--line); font-size:0.85rem; color:var(--soft); }
 </style>
 </head>
@@ -48,67 +50,83 @@
     <ul>
       <li><a href="#start">Getting started</a></li>
       <li><a href="#models">Choosing a model</a></li>
-      <li><a href="#modes">The mode chips</a></li>
+      <li><a href="#modes">The sidebar and &#8984;K</a></li>
       <li><a href="#compare">Compare (council)</a></li>
       <li><a href="#research">Deep Research</a></li>
       <li><a href="#batch">Batch</a></li>
       <li><a href="#skills">Self-improving skills</a></li>
-      <li><a href="#memory">Memory &amp; documents</a></li>
+      <li><a href="#memory">Library: memory and chats</a></li>
       <li><a href="#sync">Sync to a folder</a></li>
+      <li><a href="#images">Images and text diffusion</a></li>
+      <li><a href="#look">Light, dark and phones</a></li>
       <li><a href="#privacy">Privacy</a></li>
     </ul>
   </div>
 
   <h2 id="start">Getting started</h2>
-  <p>Open LocalMind and pick a model from the dropdown &mdash; it downloads once (over WebGPU), is cached locally, and from then on runs offline. Type a message and hit <kbd>Enter</kbd>. Everything &mdash; the model, your chats, your memory &mdash; stays on your device.</p>
-  <figure><img src="img/01-overview.jpg" alt="LocalMind chat" loading="lazy"><figcaption>A normal chat &mdash; answers are generated on-device (note the &ldquo;On-device&rdquo; tag).</figcaption></figure>
+  <p>Open LocalMind. The first time, it downloads a small default model (LFM2.5 230M, about 140&nbsp;MB) and keeps it in your browser&rsquo;s cache, so later starts skip the download. The welcome screen says which model is ready and offers a few example prompts. Tap one, or type a message and press <kbd>Enter</kbd>. The model, your chats and your memory stay on your device.</p>
+  <figure><img src="img/01-overview.jpg" alt="LocalMind welcome screen with the sidebar, the ready model and four example prompts" loading="lazy"><figcaption>The welcome screen: the ready model, example prompts, and the sidebar with your recent chats.</figcaption></figure>
+  <figure><img src="img/03-chat.jpg" alt="Gemma 4 E2B answering a translation request, tagged On-device" loading="lazy"><figcaption>A chat answered on the device (note the &ldquo;On-device&rdquo; tag).</figcaption></figure>
 
   <h2 id="models">Choosing a model</h2>
-  <p>Eight models span three trade-offs &mdash; download size, quality, and capability:</p>
+  <p>The model picker sits above the message box. It lists the models already on this device first, then any partly downloaded, then the rest with their download size, so you can see what will load straight away.</p>
   <ul>
-    <li><strong>Ternary Bonsai 1.7B / 4B / 8B</strong> &mdash; smallest tool-calling models (1.58-bit ternary weights).</li>
-    <li><strong>Qwen3.5 4B</strong> &mdash; 4-bit Qwen3.5 with image input, stronger reasoning, and tool calling.</li>
-    <li><strong>LFM2 8B A1B</strong> &mdash; Liquid AI&rsquo;s 8B sparse mixture-of-experts (runs on WebGPU via the symmetric-QMoE export).</li>
-    <li><strong>Gemma 3 1B</strong> &mdash; fast, text-only fallback.</li>
-    <li><strong>Gemma 4 E2B / E4B</strong> &mdash; multimodal (image + audio) + agent.</li>
+    <li><strong>Small and fast</strong> &mdash; LFM2.5 230M on hand-written WebGPU kernels (the default), and LFM2.5 1.2B.</li>
+    <li><strong>Images and audio in</strong> &mdash; Gemma 4 E2B / E4B, and Qwen3.5 4B for images.</li>
+    <li><strong>Reasoning</strong> &mdash; Ternary Bonsai 4B, and Ternary Bonsai 2 27B, a 27B model that runs in the tab (~5.9&nbsp;GB).</li>
+    <li><strong>No download</strong> &mdash; Gemini Nano, built into Chrome.</li>
+    <li><strong>Bigger than GPU memory (experimental)</strong> &mdash; Qwen3.6 35B-A3B and Gemma 4 26B-A4B stream their experts from the browser&rsquo;s private storage.</li>
   </ul>
+  <p>Settings &rarr; Models adds any Hugging Face ONNX repo or GGUF URL, or your own Ollama / LM Studio server. The full list is in <a href="../FEATURES.md">FEATURES.md</a>.</p>
+  <figure><img src="img/02-picker.jpg" alt="The model picker open, grouped into On this device and Download" loading="lazy"><figcaption>The picker: what is on this device, then what needs a download.</figcaption></figure>
 
-  <h2 id="modes">The mode chips</h2>
-  <p>Above the message box is a row of mode chips. They all use the <em>same</em> input and Send button:</p>
-  <ul>
-    <li><strong>🌐 Search</strong> &mdash; web-enrich this one message (a modifier you can combine with chat).</li>
-    <li><strong>🔬 Research</strong>, <strong>⚖ Compare</strong>, <strong>≣ Batch</strong> &mdash; mutually-exclusive actions; tap one, then Send.</li>
-  </ul>
-  <figure><img src="img/02-mode-chips.jpg" alt="Mode chips with Compare selected" loading="lazy"><figcaption>Compare is on, revealing the model picker. Tapping Research/Compare/Batch switches the action.</figcaption></figure>
+  <h2 id="modes">The sidebar and &#8984;K</h2>
+  <p>The sidebar holds <strong>New chat</strong>, <strong>Chat</strong>, <strong>Image</strong>, <strong>Voice</strong>, <strong>Models</strong> and <strong>Library</strong>. <strong>More</strong> opens Compare, Batch, Diffuse, OCR, Vision, Clone and Folder. <strong>Search</strong> and <strong>Research</strong> stay as toggles above the message box, so you can add web results to any message.</p>
+  <figure class="narrow"><img src="img/04-sidebar.jpg" alt="The sidebar with More expanded" loading="lazy"><figcaption>The sidebar, with More open.</figcaption></figure>
+  <p>Press <kbd>&#8984;</kbd><kbd>K</kbd> (<kbd>Ctrl</kbd><kbd>K</kbd> on Windows and Linux), or click <strong>Commands</strong>, for a palette of every action: type a few letters and press <kbd>Enter</kbd>.</p>
+  <figure><img src="img/05-palette.jpg" alt="The command palette filtered to the Settings commands" loading="lazy"><figcaption>The command palette, filtered by &ldquo;set&rdquo;.</figcaption></figure>
 
   <h2 id="compare">Compare &mdash; the model council</h2>
-  <p>Tap <strong>⚖ Compare</strong>, tick 2&ndash;3 models, type one question, and Send. LocalMind loads each model in turn (one at a time &mdash; WebGPU can&rsquo;t hold several at once), collects every answer, then the last model loaded acts as <strong>judge</strong> and picks the best.</p>
-  <figure><img src="img/04-compare.jpg" alt="Model council comparison with a judge verdict" loading="lazy"><figcaption>Two models answer; the indigo card is the judge&rsquo;s verdict.</figcaption></figure>
+  <p>Open <strong>More &rarr; Compare</strong>, tick 2&ndash;3 models, type one question, and Send. LocalMind loads each model in turn (one at a time &mdash; WebGPU can&rsquo;t hold several at once), collects every answer, then the last model loaded acts as <strong>judge</strong> and picks the best.</p>
+  <figure><img src="img/06-compare.jpg" alt="Model council: two answers and a judge verdict" loading="lazy"><figcaption>Two models answer; the last card is the judge&rsquo;s verdict.</figcaption></figure>
 
   <h2 id="research">Deep Research</h2>
-  <p>Tap <strong>🔬 Research</strong> and ask a question. LocalMind drafts several sub-queries, searches the web, reads the top sources, and writes a <strong>cited report</strong> with a sources list. It needs a web-search provider (set one in <a href="#sync">Settings</a>); tapping the chip will offer to open Settings if you haven&rsquo;t.</p>
-  <figure><img src="img/05-research.jpg" alt="Deep Research cited report" loading="lazy"><figcaption>A cited report &mdash; only the search queries touch the network.</figcaption></figure>
+  <p>Turn on <strong>Research</strong> above the message box and ask a question. LocalMind drafts several sub-queries, searches the web, reads the top sources, and writes a <strong>cited report</strong> with a sources list. It needs a web-search provider; if none is set, Research opens the setting for you.</p>
+  <figure><img src="img/07-research.jpg" alt="Settings opened at the web search provider, with a note that Deep Research needs one" loading="lazy"><figcaption>No provider yet: Research opens Settings at the search provider.</figcaption></figure>
 
   <h2 id="batch">Batch</h2>
-  <p>Tap <strong>≣ Batch</strong> and put one prompt per line (use <kbd>Shift</kbd>+<kbd>Enter</kbd> for new lines). Send runs them in sequence. Turn on <em>Auto-inject {{previous}}</em> to chain each answer into the next prompt.</p>
+  <p>Open <strong>More &rarr; Batch</strong> and put one prompt per line (use <kbd>Shift</kbd>+<kbd>Enter</kbd> for new lines). Send runs them in sequence. Turn on <em>Auto-inject {{previous}}</em> to chain each answer into the next prompt.</p>
 
   <h2 id="skills">Self-improving skills</h2>
-  <p>The agent can save reusable <strong>skills</strong> &mdash; named recipes like &ldquo;cite sources&rdquo; or &ldquo;be concise.&rdquo; Once saved, a relevant skill is retrieved and applied automatically in later chats, so the assistant gets better the more you use it. Skills live in the Memory panel under the <strong>skill</strong> filter.</p>
-  <figure><img src="img/06-skills.jpg" alt="Saved skills in the Memory panel" loading="lazy"><figcaption>Saved skills, auto-applied when relevant.</figcaption></figure>
+  <p>The agent can save reusable <strong>skills</strong> &mdash; named recipes like &ldquo;cite sources&rdquo; or &ldquo;be concise.&rdquo; Once saved, a relevant skill is retrieved and applied automatically in later chats, so the assistant gets better the more you use it. Skills live in <strong>Library &rarr; Memory</strong> under the <strong>skill</strong> filter.</p>
+  <figure><img src="img/08-skills.jpg" alt="Library Memory tab filtered to saved skills" loading="lazy"><figcaption>Saved skills (sample data), applied when relevant.</figcaption></figure>
 
-  <h2 id="memory">Memory &amp; documents</h2>
-  <p>LocalMind keeps a private, on-device memory (a local vector store). The agent can store facts; you can attach <strong>documents</strong> (PDF / DOCX / TXT) via the 📎 button or ingest a whole <strong>Folder</strong>, and they become searchable context. Open <strong>Memory</strong> to browse, filter, search, or clear it.</p>
-  <figure><img src="img/07-memory.jpg" alt="Memory panel" loading="lazy"><figcaption>Everything the assistant remembers &mdash; filterable and fully under your control.</figcaption></figure>
+  <h2 id="memory">Library: memory and chats</h2>
+  <p>LocalMind keeps a private, on-device memory (a local vector store). The agent can store facts; you can attach <strong>documents</strong> (PDF / DOCX / TXT) with the &#128206; button or add a whole <strong>Folder</strong> (under More), and they become searchable context. Open <strong>Library &rarr; Memory</strong> to browse, filter, search or clear it.</p>
+  <figure><img src="img/09-memory.jpg" alt="Library Memory tab listing facts, preferences, skills and document passages" loading="lazy"><figcaption>Everything the assistant remembers (sample data), filterable and under your control.</figcaption></figure>
+  <p><strong>Library &rarr; Chats</strong> searches the full text of every saved chat, not only the titles.</p>
+  <figure><img src="img/10-library.jpg" alt="Library Chats tab with the search monsoon matching one saved chat" loading="lazy"><figcaption>One search across every chat (sample data).</figcaption></figure>
 
   <h2 id="sync">Sync to a folder (permanent, cross-device)</h2>
-  <p>By default all data lives in this browser. In <strong>Settings &rarr; Data folder sync</strong>, connect a folder and LocalMind mirrors everything &mdash; skills, memory, documents, conversations &mdash; to it as plain files. Point that folder at a git / iCloud / Dropbox directory and your data follows you across devices. <strong>API keys stay in the browser</strong> and are never written to the folder.</p>
-  <figure><img src="img/08-settings.jpg" alt="Settings: web search and data folder sync" loading="lazy"><figcaption>Settings &mdash; web search provider and data-folder sync.</figcaption></figure>
+  <p>By default all data lives in this browser. In <strong>Settings &rarr; Data</strong>, connect a folder and LocalMind mirrors everything &mdash; skills, memory, documents, conversations &mdash; to it as plain files. Point that folder at a git / iCloud / Dropbox directory and your data follows you across devices. <strong>API keys stay in the browser</strong> and are never written to the folder.</p>
+  <figure><img src="img/11-settings.jpg" alt="Settings, Data tab: data folder sync" loading="lazy"><figcaption>Settings &rarr; Data: folder sync and backups.</figcaption></figure>
+
+  <h2 id="images">Images and text diffusion</h2>
+  <p><strong>Image</strong> in the sidebar makes pictures on your GPU with a 4B diffusion model, or through your own stable-diffusion.cpp server. The picture shows large beside the controls, with a Download PNG button; earlier ones stay in the strip below.</p>
+  <figure><img src="img/12-image.jpg" alt="Image screen: controls on the left, a watercolor of a paper lantern over a misty lake on the right" loading="lazy"><figcaption>A real on-device generation: 768&times;512, four steps, seed 11.</figcaption></figure>
+  <p><strong>More &rarr; Diffuse</strong> is an experimental way to write text: instead of word by word, the whole answer starts as masked tokens and &ldquo;denoises&rdquo; into place.</p>
+  <figure><img src="img/13-diffuse.jpg" alt="Diffuse mode mid-run, part of the answer still masked" loading="lazy"><figcaption>Text diffusion, caught halfway: the masked parts are still in the fog.</figcaption></figure>
+
+  <h2 id="look">Light, dark and phones</h2>
+  <p><strong>Settings &rarr; General &rarr; Appearance</strong> picks light, dark, or your system&rsquo;s theme. On a phone, the &#9776; button opens the sidebar, and the message box gets the full width with attach and voice stacked beside it.</p>
+  <figure><img src="img/14-dark.jpg" alt="LocalMind in the dark theme" loading="lazy"><figcaption>The dark theme.</figcaption></figure>
+  <figure class="phone"><img src="img/15-phone.jpg" alt="LocalMind on a phone: the welcome screen, with attach, memory and voice stacked beside the message box" loading="lazy"><figcaption>On a phone.</figcaption></figure>
 
   <h2 id="privacy">Privacy</h2>
-  <p>Models run on your device via WebGPU. Your conversations, memory, and documents never leave your machine. The only thing that touches the network is a <strong>web search</strong> &mdash; and only when you choose Search or Research, using a provider you configure. LocalMind can also be <strong>installed as an app</strong> (look for your browser&rsquo;s install button) and works offline once a model is cached.</p>
+  <p>Models run on your device via WebGPU. Your conversations, memory, and documents never leave your machine. The only thing that touches the network is a <strong>web search</strong> &mdash; and only when you choose Search or Research, using a provider you configure. Once a model is cached, it loads from your browser with no download.</p>
 
   <footer>
-    LocalMind is part of the <a class="back" href="https://naklitechie.github.io/">NakliTechie</a> single-file series. Built by Chirag Patnaik.
+    LocalMind is part of the <a class="back" href="https://naklitechie.github.io/">NakliTechie</a> series. Built by Chirag Patnaik. Screenshots: <code>python3 demo/capture.py</code> drives the real app; see <a class="back" href="CAPTURE-LOG.md">CAPTURE-LOG.md</a>.
   </footer>
 </div>
 </body>

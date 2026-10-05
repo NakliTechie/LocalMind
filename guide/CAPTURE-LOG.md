@@ -1,17 +1,21 @@
-# LocalMind guide capture — 2026-06-11 23:49:02
+# LocalMind guide capture — 2026-10-05 10:54:59
 
-**11/11 ok** · viewport 1280x860 @2x
+**15/15 ok** · real app, real models (Chrome headless + WebGPU) · desktop 1280x860 @2x, phone 390x844 @3x
 
-| # | Slug | Status | ms | Size | Console errors |
+| # | Slug | Status | ms | Size | Last console error |
 |---|---|---|---|---|---|
-| 01 | overview | ok | 1825 | 118KB | Worker error: Failed to load model: Cannot read properties o |
-| 02 | mode-chips | ok | 1805 | 108KB | Worker error: Failed to load model: Cannot read properties o |
-| 03 | chat | ok | 1794 | 118KB | Worker error: Failed to load model: Cannot read properties o |
-| 04 | compare | ok | 1895 | 176KB | Worker error: Failed to load model: Cannot read properties o |
-| 05 | research | ok | 1797 | 169KB | Worker error: Failed to load model: Cannot read properties o |
-| 06 | skills | ok | 1980 | 137KB | Worker error: Failed to load model: Cannot read properties o |
-| 07 | memory | ok | 1791 | 158KB | Worker error: Failed to load model: Cannot read properties o |
-| 08 | settings | ok | 1701 | 154KB | Worker error: Failed to load model: Cannot read properties o |
-| 09 | help | ok | 1706 | 162KB | Worker error: Failed to load model: Cannot read properties o |
-| 10 | image | ok | 2114 | 185KB | Worker error: Failed to load model: Cannot read properties o |
-| 11 | diffuse | ok | 1804 | 130KB | Worker error: Failed to load model: Cannot read properties o |
+| 01 | overview | ok | 58 | 207KB |  |
+| 02 | picker | ok | 63 | 270KB |  |
+| 03 | chat | ok | 54 | 206KB |  |
+| 04 | sidebar | ok | 51 | 108KB |  |
+| 05 | palette | ok | 81 | 186KB |  |
+| 07 | research | ok | 78 | 283KB |  |
+| 08 | skills | ok | 82 | 260KB |  |
+| 09 | memory | ok | 47 | 269KB |  |
+| 10 | library | ok | 99 | 233KB |  |
+| 11 | settings | ok | 64 | 237KB |  |
+| 14 | dark | ok | 59 | 194KB |  |
+| 15 | phone | ok | 63 | 206KB |  |
+| 06 | compare | ok | 72 | 306KB |  |
+| 12 | image | ok | 150 | 341KB |  |
+| 13 | diffuse | ok | 92 | 228KB | [0;93m2026-10-05 11:04:14.924699 [W:onnxruntime:, session_state.cc:1369 VerifyEachNodeIsA |
