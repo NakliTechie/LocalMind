@@ -44,6 +44,8 @@ Beyond chat, LocalMind has two on-device generation paradigms (mode chips above 
 - **🎨 Image** — text-to-image diffusion in the tab (FLUX.2-Klein 4B, ternary/1-bit, WebGPU). The chat model is freed while it runs; one click brings it back. No server, no API key. Size / steps / seed controls + a re-roll button.
 - **🌫️ Diffuse** — masked-diffusion *text* (a different paradigm from normal left-to-right generation; Qwen3-0.6B MDLM). The answer "denoises" out of a fog of masked tokens. A showcase of the paradigm, not a daily driver.
 
+The same split applies to **image generation**: Image mode runs a 4B diffusion model in the tab by default, or talks to a local [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) server for bigger ones (Qwen-Image 2.1, FLUX.2, Z-Image …). `scripts/image-server.sh` fetches `sd-server` for your platform, downloads a stock Qwen-Image 2.1 recipe if you give it no model (~10 GB), and serves on `127.0.0.1:7860`; pick **Local server** in Image mode's model menu and Send. Bring your own files with `--dit / --vae / --llm`. Nothing leaves the machine either way.
+
 ## Token saver
 
 On by default (Settings → General). Small local models have small context windows and slow generation, so big inputs are expensive. The token saver:

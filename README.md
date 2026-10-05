@@ -1,114 +1,110 @@
-# LocalMind
+<h1 align="center">LocalMind</h1>
 
-**Private AI in your browser tab.** Chat, generate images, search the web, and talk to your documents — running entirely on your own device. No server, no API keys, no data leaving your machine.
+<p align="center"><b>Private AI in your browser tab. Chat, make images, talk to your documents and use your voice,<br>with the models running on your own device.</b></p>
 
-**▶ [Try it live](https://naklitechie.github.io/LocalMind)**  ·  **[Guided tour](https://naklitechie.github.io/LocalMind/guide/)**
+<p align="center">A static web page with no build step. Chrome, Edge or Firefox with WebGPU. No account, no server, no telemetry.</p>
 
-![LocalMind running on-device](guide/img/01-overview.jpg)
+<p align="center">
+  <img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-08184a?style=flat-square">
+  <img alt="build step: none" src="https://img.shields.io/badge/build%20step-none-08184a?style=flat-square">
+  <img alt="account: none" src="https://img.shields.io/badge/account-none-08184a?style=flat-square">
+  <img alt="server: none" src="https://img.shields.io/badge/server-none-08184a?style=flat-square">
+</p>
 
-## What is it?
+<p align="center"><img src="marketing/hero.jpg" width="880" alt="LocalMind in Chrome: the sidebar with Chat, Image, Voice, Models and Library on the left, and Gemma 4 E2B answering a Japanese, French and Hindi translation on the device"></p>
 
-LocalMind is a single web page that runs real AI models **on your own device**. Open the link, pick a model, and start chatting — the model downloads once, caches in your browser, and works offline after that. Your conversations, files, and memory never leave your machine.
+## Install
 
-It began as a private chatbot and grew into a small **AI workbench**: chat, image generation, document Q&A, OCR, web research, and voice — all local.
+| Where | How |
+|---|---|
+| Your browser | Open **[localmind.naklitechie.com](https://localmind.naklitechie.com)** in Chrome or Edge 113+, or Firefox 130+ |
+| Your own copy | `git clone https://github.com/NakliTechie/LocalMind && cd LocalMind && python3 -m http.server 8080` |
 
-> **The promise: no server · no API keys · no data leaving your device.** The only thing that ever touches the network is a web search — and only when *you* press the search button.
+On first open LocalMind downloads LFM2.5 230M (~140 MB) once and keeps it in the browser's cache, so the next start
+skips the download; where Chrome already has Gemini Nano, it starts on that with no download. Tap an example prompt or
+type. The model picker above the message box lists what is already on this device first; pick a bigger model when you
+want more. To drive the loaded model from a script, turn on Settings → JavaScript API:
 
-## What you can do
-
-- 💬 **Chat with private local models** — eleven to choose from, from a tiny ~140 MB model (or Chrome's own Gemini Nano, a 0-byte download) up to a **27B-class model (Ternary Bonsai 2 27B, ternary 1.75-bit)** running entirely in the tab. They reason, write, and code.
-- 🎨 **Generate images** — text-to-image on your GPU, right in the tab.
-- 🌫️ **Watch text "denoise"** — an experimental diffusion-text mode (a different way of generating).
-- 🌐 **Search the web** *(optional)* — bring your own free search key; answers come back with clickable sources.
-- 📄 **Chat with your documents** — drop in PDFs, Word docs, notes, or a whole folder and ask questions across them. Multilingual search (100+ languages, via a multilingual‑e5 embedder) — ask in one language about documents in another. Flip on **sharper answers** (Settings) and it double-checks which passages *actually* answer your question — so replies quote the right part, not just a keyword match. It remembers across sessions.
-- 🔎 **Extract text from images & PDFs (OCR)** — drop in a photo, screenshot, or scanned PDF and get back clean, selectable text or Markdown — tables and formulas included. Runs entirely on your GPU (GLM-OCR); the document never leaves your device. Needs WebGPU (Chrome/Edge); the model downloads once (~1.4 GB), then works offline. You can also point it at the model folder on disk for zero runtime fetch.
-- 🖼️ **See & hear** — some models accept images and audio; voice-to-text works on any model.
-- 📷 **Point your camera** — describe what it sees, or drop in an image and ask about it — on-device captioning & visual Q&A (SmolVLM, WebGPU). Downloads ~0.9 GB once, then works offline.
-- 🔊 **Voice in and out** — read any reply aloud (🔊, Kokoro-82M, English + Hindi), or go fully hands-free (🎙 **Voice mode**): hold to talk, it transcribes (Moonshine), answers, and reads back. Both run on-device; nothing leaves your machine.
-- 🎭 **Clone a voice** — record 5–10 seconds of a voice, then make it say anything *in that voice* — zero-shot, entirely in the tab (Chatterbox). A heavy first download (~1.4 GB), then offline. The reference audio never leaves your device.
-- 🧠 **It remembers** — a private, on-device memory you can browse, search, and tidy up.
-- 🔌 **Use *any* model** — point it at your own Ollama / LM Studio, load a GGUF from a URL, or **open a `.gguf` straight from your disk** (no download — fully offline).
-- 📱 **Phone to desktop** — installable as an app; works offline.
-
-*Every feature, in detail → [FEATURES.md](./FEATURES.md).*
-
-## Three ways to run a model
-
-Pick whatever fits your hardware — all three are local, nothing leaves your device:
-
-| | How it runs | Best for |
-|---|---|---|
-| **In your browser** | On your GPU via WebGPU — zero setup | The private default; nothing to install |
-| **In-browser GGUF** | A GGUF loaded into the tab (llama.cpp → WebAssembly) — from a URL **or a local file on disk** | The huge GGUF ecosystem, no setup; runs on CPU even without a GPU |
-| **Your own server** | Point it at Ollama / LM Studio on your machine | Big models (7B–70B+) at full speed |
-
-The same split applies to **image generation**: Image mode runs a 4B diffusion model in the tab by default, or talks to a local [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) server for bigger ones (Qwen-Image 2.1, FLUX.2, Z-Image …). `scripts/image-server.sh` fetches `sd-server` for your platform, downloads a stock Qwen-Image 2.1 recipe if you give it no model (~10 GB), and serves on `127.0.0.1:7860`; pick **Local server** in Image mode's model menu and Send. Bring your own files with `--dit / --vae / --llm`. Nothing leaves the machine either way.
-
-Two GGUF models ship in the picker: LFM2.5 230M (the CPU fallback when there is no WebGPU) and **MiniCPM5 2B** — OpenBMB's Apache-2.0 2B, which gets a 16K context for long documents. It's a GGUF-only release with no ONNX build, so the in-tab llama.cpp path is the only way to run it in a browser. It calls tools too, in its own XML format rather than the JSON the other models use — LocalMind reads both.
-
-### Custom WebGPU engine (the default)
-
-The default model, **LFM2.5 230M**, runs on a **from-scratch WebGPU inference engine** — every kernel (matmul, attention, RoPE, RMSNorm, the int4 dequant) is hand-written WGSL, reading the quantized weights directly with **no ONNX runtime and no llama.cpp**. At ~140 MB it downloads in seconds and decodes at ~1,060 tokens/sec on an M4 Pro — 3.6× the same model on ONNX — so you're chatting almost immediately. **Gemma 4 E2B** runs on the same approach at ~170 tok/s, 4× its ONNX build, and it scales all the way up to **Ternary Bonsai 2 27B**, a 27B-parameter model (ternary, ~5.9 GB) running entirely in the tab. All are WebGPU-only.
-
-These engines are ported, largely verbatim, from the open-source [`webml-community`](https://huggingface.co/webml-community) Spaces on Hugging Face — [`lfm2-webgpu-kernels`](https://huggingface.co/spaces/webml-community/lfm2-webgpu-kernels), [`gemma-4-webgpu-kernels`](https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels), and [`ternary-bonsai-2-webgpu-kernels`](https://huggingface.co/spaces/webml-community/ternary-bonsai-2-webgpu-kernels) (the 27B). `webml-community` is the home of [**Transformers.js**](https://github.com/huggingface/transformers.js), the in-browser ML library by **[Xenova](https://github.com/xenova) (Joshua Lochner)** at Hugging Face — the foundation this entire project is built on, and where these WebGPU-kernel engines come from. LocalMind's contribution is the integration: adapting each engine's stream into the shared chat protocol and slotting it in next to the other backends. The Gemma engine also has a standalone home at [tylerstraub/gemma4-webgpu](https://github.com/tylerstraub/gemma4-webgpu). **Full credit for Transformers.js and the WGSL kernels goes upstream.**
-
-The LFM2 engine is exposed through the DOM-free
-[`inference-worker.js`](./inference-worker.js) boundary used by LocalMind
-itself. Hosts can also use the conservative
-[`host-model-catalog.js`](./host-model-catalog.js) and
-[`onnx-inference-worker.js`](./onnx-inference-worker.js) for the supported
-Gemma 4 and Qwen3.5 WebGPU paths. The same catalog publishes the on-device Bonsai
-FLUX.2-Klein model through
-[`image-inference-worker.js`](./image-inference-worker.js); the worker is
-generated from LocalMind's inline image engine by
-[`scripts/extract-image-worker.mjs`](./scripts/extract-image-worker.mjs).
-NakliOS vendors these tested artifacts for its shared `naklios.ai` broker;
-model selection, cloud/local endpoint credentials, consent, and app isolation
-remain host responsibilities. The worker protocols are documented in
-[`INFERENCE-PROTOCOL.md`](./INFERENCE-PROTOCOL.md).
-
-**Read-aloud** uses [**Kokoro-82M**](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) via [`kokoro-js`](https://www.npmjs.com/package/kokoro-js); **Voice mode** transcribes with [**Moonshine**](https://huggingface.co/onnx-community/moonshine-base-ONNX) (English) and keeps Whisper-base as the multilingual fallback. All of it runs on WebAssembly so it never competes with the chat model's GPU — and entirely on-device.
-
-**Voice cloning** (🎭) uses [**Chatterbox**](https://huggingface.co/onnx-community/chatterbox-ONNX) (Resemble AI, MIT) on WebGPU — a first-class Transformers.js model. **Live Vision** (📷) uses [**SmolVLM**](https://huggingface.co/HuggingFaceTB/SmolVLM-500M-Instruct) (Hugging Face, Apache-2.0); the optional retrieval **reranker** uses [ms-marco-MiniLM](https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2) or [bge-reranker-v2-m3](https://huggingface.co/onnx-community/bge-reranker-v2-m3-ONNX).
-
-## Try it in 30 seconds
-
-1. Open **[naklitechie.github.io/LocalMind](https://naklitechie.github.io/LocalMind)** in Chrome or Edge.
-2. Pick a model — the default is **LFM2.5 230M** (~140 MB, on the custom WebGPU engine), small and fast so you're chatting in seconds; pick a bigger one anytime for more capability. *(On desktop Chrome/Edge where Gemini Nano is already downloaded, LocalMind starts on Nano — zero download.)*
-3. Wait for the one-time download, then chat.
-
-To run it yourself, it's one HTML file with no build step:
-
-```bash
-python3 -m http.server 8080   # then open http://localhost:8080
+```js
+await window.localmind.load('lfm2-230m-webgpu');
+const r = await window.localmind.chat.completions.create({ messages: [{ role: 'user', content: 'Hello' }] });
 ```
 
-No dependencies, no backend. (Needs an HTTP server — it won't run from a `file://` path.)
+No account, no API key, no config file. Your own copy needs an HTTP server; `file://` will not load the workers.
 
-## Privacy
+## Why
 
-Everything runs on your device. Models download from Hugging Face once and cache locally; after that you can go fully offline. There's no account, no telemetry, no backend. Web search is opt-in and uses *your* key, sent straight from your browser to the provider you chose.
+You want help with things you would rather not paste into a website: a contract, your notes, a letter from the doctor.
+A hosted chatbot sends every word to someone else's server. LocalMind runs the model inside your browser tab instead.
+Models download once from Hugging Face; what you type, the files you add and the memory it keeps stay on your machine.
+Web search is the one exception, and it runs only when you turn it on, with your own search key.
 
-## Browser support
+In-tab models need WebGPU, so Safari does not work yet. Small models answer in seconds on a laptop. Ternary Bonsai 2 27B
+is a ~5.9 GB download and needs a GPU with the memory to hold it. For 7B–70B models at full speed, point LocalMind at
+your own Ollama, LM Studio or llama.cpp server; the browser then only streams the answer.
 
-Works in **Chrome / Edge 113+** and **Firefox 130+** — in-browser models need WebGPU (the "your own server" mode works without it). Safari's WebGPU support isn't there yet.
+## Find your way around
 
-## Learn more
+The sidebar holds Chat, Image, Voice, Models and Library; Compare, Batch, Diffuse, OCR, Vision, Clone and Folder sit
+under More. Press ⌘K (Ctrl+K on Windows and Linux) for a palette of every action, from switching models to opening a
+setting. Library searches the full text of every saved chat, with your on-device memory in the tab beside it.
 
-- 📖 **[Full feature guide](./FEATURES.md)** — models, agent tools, memory, web search, batch, sharing, MCP, custom models, and more
-- 🛠️ **[How it works](./ARCHITECTURE.md)** — architecture, the runtimes, workers, and tech stack
-- 🧑‍💻 **[Developer API](./API.md)** — drive the model from your own page (`window.localmind`)
-- ⏱️ **Benchmark the engines yourself** — `node scripts/bench-engines.mjs` drives Chrome through that API and prints decode tok/s per engine (same model, same prompt, exact token counts)
-- 🗺️ **[Roadmap](./ROADMAP.md)** — what's shipped and what's next
+Settings → General → Appearance picks light, dark or your system's theme. On a phone the composer gets the full width,
+with attach and voice stacked beside a taller text box, and everything else moves into the menu.
 
-## Acknowledgments
+## Pick a model, or bring your own
 
-- **Local-file GGUF loading** was suggested by [@Mayur88888888](https://github.com/Mayur88888888) ([#6](https://github.com/NakliTechie/LocalMind/pull/6)). Thanks!
+The picker groups models as on this device, partly downloaded, or to download, with each size. They range from LFM2.5
+230M on hand-written WebGPU kernels (~1,060 tokens/s on an M4 Pro) to Ternary Bonsai 2 27B, plus Chrome's built-in
+Gemini Nano with no download at all. Two experimental engines stream mixture-of-experts models larger than GPU memory
+(Qwen3.6 35B-A3B, Gemma 4 26B-A4B) from the browser's private storage.
 
----
+Every path is local. A model runs in the tab on WebGPU, or as a GGUF through llama.cpp compiled to WebAssembly (from a
+URL or a `.gguf` file on your disk, on CPU when there is no GPU), or on your own Ollama, LM Studio or llama.cpp server.
+Settings → Models adds any Hugging Face ONNX repo or GGUF URL to the picker.
 
-## Part of the NakliTechie series
+## Documents, images and voice
 
-A growing collection of browser-native tools that run entirely on your device — no server, no data leaving your machine. Full portfolio: **[naklitechie.github.io](https://naklitechie.github.io/)**.
+Drop PDFs, Word files, notes or a whole folder into a chat and ask across them, in one language about documents in
+another. LocalMind remembers between sessions. OCR turns photos and scanned PDFs into selectable text with GLM-OCR on
+your GPU. Image mode draws with a 4B diffusion model in the tab, or sends the prompt to your own stable-diffusion.cpp
+server for bigger models.
 
-Built by [Chirag Patnaik](https://github.com/NakliTechie) · MIT licensed · with [Claude Code](https://claude.com/claude-code).
+Voice mode is hold-to-talk: Moonshine transcribes, the model answers and Kokoro reads the reply aloud. Clone makes any
+text sound like a 5–10 second voice sample, with Chatterbox. Each model downloads once and runs on your device.
+
+## Commands
+
+```bash
+python3 -m http.server 8080              # serve your copy, then open http://localhost:8080
+scripts/image-server.sh                  # a local stable-diffusion.cpp server for Image mode on 127.0.0.1:7860
+node scripts/bench-engines.mjs           # decode tok/s per engine: drives Chrome, same model and prompt, exact token counts
+node scripts/test-inference-worker.mjs   # UI and worker contracts (the full gate is below)
+```
+
+With Settings → JavaScript API on, `window.localmind` is an OpenAI-shaped client for the loaded model, and
+`window.localmind.commands` lists and runs every ⌘K palette command ([API.md](./API.md)).
+
+## Verify it yourself
+
+```bash
+for t in download-stall endpoint engine-fetch inference-worker moe-expert-stream token-count; do
+  node scripts/test-$t.mjs || { echo "FAILED: $t"; break; }
+done
+```
+
+These six suites need Node and nothing else: no install, no model download, no browser. They refuse a sidebar or
+palette command that maps to no real control, a model without its Settings entry, a load failure that shows no Retry,
+a truncated model download that the cache would keep, and a token estimate outside its bounds against each model's
+own tokenizer. Two more suites drive Chrome with WebGPU: `scripts/test-qwen35-kernels.mjs` checks the SSD engine's
+WGSL kernels against llama.cpp's CPU ops, and `scripts/test-ple-opfs.mjs` checks Gemma 4 gives identical output with
+its embedding table on disk. `bench-engines.mjs --suite dflash` checks DFlash 2 output is byte-identical to plain decoding.
+
+## License
+
+MIT. Built on [Transformers.js](https://github.com/huggingface/transformers.js) and the
+[webml-community](https://huggingface.co/webml-community) WebGPU kernels; full credits in
+[ARCHITECTURE.md](./ARCHITECTURE.md#credits). Part of the [NakliTechie](https://naklitechie.github.io/) series, built
+by [Chirag Patnaik](https://github.com/NakliTechie) with [Claude Code](https://claude.com/claude-code).
+
+[Features](./FEATURES.md) · [Architecture](./ARCHITECTURE.md) · [API](./API.md) · [Roadmap](./ROADMAP.md) · [Guided tour](https://naklitechie.github.io/LocalMind/guide/)

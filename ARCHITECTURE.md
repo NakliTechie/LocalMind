@@ -114,3 +114,30 @@ the two outputs are byte-identical; `--suite ple` does the same for Gemma 4 E2B 
 and from OPFS, and fails a row whose engine reports the other mode. GitHub Pages, Netlify, S3, or
 `python3 -m http.server` all work. They must be served over HTTP — `file://`
 won't work because ES module workers and WebGPU both require an HTTP origin.
+
+## Using the workers from another host
+
+The LFM2 engine is exposed through the DOM-free
+[`inference-worker.js`](./inference-worker.js) boundary used by LocalMind
+itself. Hosts can also use the conservative
+[`host-model-catalog.js`](./host-model-catalog.js) and
+[`onnx-inference-worker.js`](./onnx-inference-worker.js) for the supported
+Gemma 4 and Qwen3.5 WebGPU paths. The same catalog publishes the on-device Bonsai
+FLUX.2-Klein model through
+[`image-inference-worker.js`](./image-inference-worker.js); the worker is
+generated from LocalMind's inline image engine by
+[`scripts/extract-image-worker.mjs`](./scripts/extract-image-worker.mjs).
+NakliOS vendors these tested artifacts for its shared `naklios.ai` broker;
+model selection, cloud/local endpoint credentials, consent, and app isolation
+remain host responsibilities. The worker protocols are documented in
+[`INFERENCE-PROTOCOL.md`](./INFERENCE-PROTOCOL.md).
+
+## Credits
+
+These engines are ported, largely verbatim, from the open-source [`webml-community`](https://huggingface.co/webml-community) Spaces on Hugging Face — [`lfm2-webgpu-kernels`](https://huggingface.co/spaces/webml-community/lfm2-webgpu-kernels), [`gemma-4-webgpu-kernels`](https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels), and [`ternary-bonsai-2-webgpu-kernels`](https://huggingface.co/spaces/webml-community/ternary-bonsai-2-webgpu-kernels) (the 27B). `webml-community` is the home of [**Transformers.js**](https://github.com/huggingface/transformers.js), the in-browser ML library by **[Xenova](https://github.com/xenova) (Joshua Lochner)** at Hugging Face — the foundation this entire project is built on, and where these WebGPU-kernel engines come from. LocalMind's contribution is the integration: adapting each engine's stream into the shared chat protocol and slotting it in next to the other backends. The Gemma engine also has a standalone home at [tylerstraub/gemma4-webgpu](https://github.com/tylerstraub/gemma4-webgpu). **Full credit for Transformers.js and the WGSL kernels goes upstream.**
+
+**Read-aloud** uses [**Kokoro-82M**](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) via [`kokoro-js`](https://www.npmjs.com/package/kokoro-js); **Voice mode** transcribes with [**Moonshine**](https://huggingface.co/onnx-community/moonshine-base-ONNX) (English) and keeps Whisper-base as the multilingual fallback. All of it runs on WebAssembly so it never competes with the chat model's GPU — and entirely on-device.
+
+**Voice cloning** (🎭) uses [**Chatterbox**](https://huggingface.co/onnx-community/chatterbox-ONNX) (Resemble AI, MIT) on WebGPU — a first-class Transformers.js model. **Live Vision** (📷) uses [**SmolVLM**](https://huggingface.co/HuggingFaceTB/SmolVLM-500M-Instruct) (Hugging Face, Apache-2.0); the optional retrieval **reranker** uses [ms-marco-MiniLM](https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2) or [bge-reranker-v2-m3](https://huggingface.co/onnx-community/bge-reranker-v2-m3-ONNX).
+
+- **Local-file GGUF loading** was suggested by [@Mayur88888888](https://github.com/Mayur88888888) ([#6](https://github.com/NakliTechie/LocalMind/pull/6)). Thanks!
