@@ -1914,6 +1914,12 @@
 
     /* Library (Chunk L layer 6) */
     .library-tabs { display: flex; gap: 6px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--gray-200); }
+    .library-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
+    .library-image { margin: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.68rem; color: var(--gray-500); }
+    .library-image img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; border: 1px solid var(--gray-200); cursor: pointer; }
+    .library-image figcaption { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .library-image .library-image-actions { display: flex; gap: 4px; }
+    .library-image .library-image-actions > * { font-size: 0.68rem; padding: 2px 6px; }
     .library-snippet { font-size: 0.72rem; color: var(--gray-500); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .history-more { display: block; width: calc(100% - 16px); margin: 6px 8px; padding: 6px 10px; border: none; border-radius: 6px; background: none; font: inherit; font-size: 0.78rem; color: var(--accent-text); text-align: left; cursor: pointer; }
     .history-more:hover { background: var(--gray-50); }
@@ -2851,7 +2857,16 @@
         <!-- Library (Chunk L layer 6): every saved chat, searchable, beside Memory. -->
         <div class="library-tabs" role="tablist" aria-label="Library">
           <button type="button" class="btn-icon settings-tab-btn active" data-lib-tab="chats" role="tab" aria-selected="true">Chats</button>
+          <button type="button" class="btn-icon settings-tab-btn" data-lib-tab="images" role="tab" aria-selected="false">Images</button>
           <button type="button" class="btn-icon settings-tab-btn" data-lib-tab="memory" role="tab" aria-selected="false">Memory</button>
+        </div>
+        <div data-lib="images" hidden>
+          <div class="memory-search-row">
+            <span class="memory-count" id="libraryImageCount"></span>
+            <button type="button" class="btn-icon memory-clear-btn" id="libraryImagesClear" title="Delete every saved image">Delete all</button>
+          </div>
+          <div class="library-images" id="libraryImageList"></div>
+          <div style="font-size:0.7rem;color:var(--gray-500);margin-top:6px;line-height:1.5">Images you generate are kept in this browser only. Delete them here; Download saves a PNG.</div>
         </div>
         <div data-lib="chats">
           <div class="memory-search-row">
@@ -12814,13 +12829,75 @@ self.addEventListener('message', async (e) => {
     }
     let librarySearchTimer = null;
     librarySearch.addEventListener('input', () => { clearTimeout(librarySearchTimer); librarySearchTimer = setTimeout(refreshLibraryChats, 150); });
+    // IMAGE-STORE (Open Q#1, 2026-10-06 "ok"): generated images are kept in IndexedDB (database
+    // localmind-images, store images): the PNG as a Blob plus prompt, size, seed, steps, engine and time.
+    // Voice and OCR output stay ephemeral. Saving is best-effort: a full or blocked store never fails a generation.
+    const IMAGE_DB = 'localmind-images', IMAGE_STORE = 'images';
+    let imageDbPromise = null;
+    function openImageDb() {
+      if (!imageDbPromise) imageDbPromise = new Promise((resolve, reject) => {
+        const req = indexedDB.open(IMAGE_DB, 1);
+        req.onupgradeneeded = () => { const os = req.result.createObjectStore(IMAGE_STORE, { keyPath: 'id' }); os.createIndex('created', 'created'); };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => { imageDbPromise = null; reject(req.error); };
+      });
+      return imageDbPromise;
+    }
+    async function imageStoreTx(mode, fn) {
+      const db = await openImageDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(IMAGE_STORE, mode);
+        const out = fn(tx.objectStore(IMAGE_STORE));
+        tx.oncomplete = () => resolve(out && 'result' in out ? out.result : undefined);
+        tx.onerror = tx.onabort = () => reject(tx.error);
+      });
+    }
+    const saveImageRecord = (rec) => imageStoreTx('readwrite', (os) => os.put(rec));
+    const deleteImageRecord = (id) => imageStoreTx('readwrite', (os) => os.delete(id));
+    const clearImageRecords = () => imageStoreTx('readwrite', (os) => os.clear());
+    async function listImageRecords() { return ((await imageStoreTx('readonly', (os) => os.getAll())) || []).sort((a, b) => b.created - a.created); }
+    // END IMAGE-STORE
+
+    const libraryImageList = document.getElementById('libraryImageList');
+    const libraryImageCount = document.getElementById('libraryImageCount');
+    let libraryImageUrls = [];
+    async function refreshLibraryImages() {
+      libraryImageUrls.forEach((u) => URL.revokeObjectURL(u)); libraryImageUrls = [];
+      let recs;
+      try { recs = await listImageRecords(); } catch { libraryImageList.innerHTML = '<div class="memory-empty">Error loading images</div>'; return; }
+      libraryImageCount.textContent = `${recs.length} image${recs.length === 1 ? '' : 's'}`;
+      document.getElementById('libraryImagesClear').disabled = !recs.length;
+      libraryImageList.innerHTML = '';
+      if (!recs.length) { libraryImageList.innerHTML = '<div class="memory-empty">No saved images yet. Images you generate in Image mode appear here.</div>'; return; }
+      for (const r of recs) {
+        const url = URL.createObjectURL(r.png); libraryImageUrls.push(url);
+        const fig = document.createElement('figure'); fig.className = 'library-image';
+        const img = document.createElement('img'); img.src = url; img.alt = r.prompt; img.loading = 'lazy'; img.title = 'Open full size';
+        img.addEventListener('click', () => window.open(url, '_blank', 'noopener'));
+        const cap = document.createElement('figcaption');
+        cap.textContent = `${r.prompt} · ${r.width}×${r.height} · seed ${r.seed} · ${new Date(r.created).toLocaleDateString()}`;
+        cap.title = r.prompt;
+        const row = document.createElement('div'); row.className = 'library-image-actions';
+        const dl = document.createElement('a'); dl.className = 'btn-icon'; dl.href = url; dl.download = `localmind-${r.seed}.png`; dl.textContent = 'Download';
+        const del = document.createElement('button'); del.type = 'button'; del.className = 'btn-icon'; del.textContent = 'Delete'; del.setAttribute('aria-label', 'Delete image');
+        del.addEventListener('click', async () => { await deleteImageRecord(r.id); refreshLibraryImages(); });
+        row.append(dl, del);
+        fig.append(img, cap, row);
+        libraryImageList.appendChild(fig);
+      }
+    }
+    document.getElementById('libraryImagesClear').addEventListener('click', async () => {
+      if (!confirm('Delete every saved image? This cannot be undone.')) return;
+      await clearImageRecords(); refreshLibraryImages();
+    });
+
     function setLibraryTab(tab) {
       memoryPanel.querySelectorAll('[data-lib-tab]').forEach(b => {
         const on = b.dataset.libTab === tab;
         b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on));
       });
       memoryPanel.querySelectorAll('[data-lib]').forEach(el => { el.hidden = el.dataset.lib !== tab; });
-      if (tab === 'chats') refreshLibraryChats(); else refreshMemoryPanel();
+      if (tab === 'chats') refreshLibraryChats(); else if (tab === 'images') refreshLibraryImages(); else refreshMemoryPanel();
     }
     memoryPanel.querySelectorAll('[data-lib-tab]').forEach(b => b.addEventListener('click', () => setLibraryTab(b.dataset.libTab)));
     function openLibrary(tab) {
@@ -19657,6 +19734,7 @@ self.addEventListener('message', async (e) => {
       { id: 'mode.research', title: 'Deep research (needs web search)', group: 'Modes', run: () => { if (activeMode !== 'research') chipResearch.click(); }, enabled: () => !generating },
       { id: 'search.toggle', title: 'Web search for the next message: on / off', group: 'Modes', run: () => chipSearch.click(), enabled: () => !generating },
       { id: 'library.chats', title: 'Library: search all chats', group: 'Data', run: () => openLibrary('chats') },
+      { id: 'library.images', title: 'Library: saved images', group: 'Data', run: () => openLibrary('images') },
       { id: 'memory.open', title: 'Library: Memory', group: 'Data', run: () => openLibrary('memory') },
       { id: 'folder.ingest', title: 'Add a folder to memory', group: 'Data', run: () => folderBtn.click(), agent: false },
       { id: 'models.pick', title: 'Choose a model', group: 'Models', run: () => document.getElementById('modelPickerBtn').click() },
@@ -19886,7 +19964,12 @@ self.addEventListener('message', async (e) => {
           },
         });
         const ms = Date.now() - t0;
-        const url = URL.createObjectURL(new Blob([res.bytes], { type: 'image/png' }));
+        const png = new Blob([res.bytes], { type: 'image/png' });
+        const url = URL.createObjectURL(png);
+        // Keep it for the Library's Images tab (best-effort: a storage failure does not fail the generation).
+        saveImageRecord({ id: `img-${Date.now()}-${res.seed}`, created: Date.now(), prompt, width: res.width, height: res.height,
+          seed: res.seed, steps, engine: isImageServer() ? 'local-server' : imageModelSelect.value, ms, png })
+          .catch((e) => console.warn('Could not save the image to the Library:', e));
         ph.bubble.innerHTML = '';
         const img = document.createElement('img');
         img.className = 'gen-image'; img.src = url; img.alt = prompt;
