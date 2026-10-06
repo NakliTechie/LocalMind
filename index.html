@@ -7717,6 +7717,26 @@ let stopFlag = false;
 
 const post = (m) => self.postMessage(m);
 
+// WLLAMA-DRAIN: wllama 3.4.1's stream ends one result early — getResponse() stops on has_more:false while the
+// final chunk is still queued in the wasm side. That chunk then opens the NEXT request, which in turn ends one
+// chunk early and loses its own last token (night run 2026-10-06: MiniCPM5 tool args cut to `98765 * 432`,
+// rewriter JSON cut mid-object). Read the queue dry with the same get_result call getResponse() uses, before and
+// after every generation; text found after a stream belongs to that stream. Returns the leftover chunks.
+async function drainWllamaResults(w) {
+  const proxy = w && w.proxy;
+  if (!proxy || typeof proxy.wllamaAction !== 'function') return [];
+  const out = [];
+  for (let i = 0; i < 64; i++) {
+    const r = await proxy.wllamaAction('get_result', { _name: 'gres_req' });
+    const j = r && r.data_json;
+    if (!j || j === 'null') { if (!(r && r.has_more)) break; continue; }
+    let arr; try { arr = JSON.parse(j); } catch (_) { break; }
+    for (const c of (Array.isArray(arr) ? arr : [arr])) out.push(c);
+  }
+  return out;
+}
+// END WLLAMA-DRAIN
+
 self.onmessage = async (e) => {
   const d = e.data || {};
   try {
@@ -7746,6 +7766,7 @@ self.onmessage = async (e) => {
           : String(m.content == null ? '' : m.content),
       }));
       abortController = new AbortController();
+      try { await drainWllamaResults(wllama); } catch (_) {}   // anything a stopped turn left queued
       try {
         const stream = await wllama.createChatCompletion({
           messages: msgs,
@@ -7758,6 +7779,12 @@ self.onmessage = async (e) => {
         });
         for await (const chunk of stream) {
           if (stopFlag) break;
+          const t = chunk && chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content;
+          if (t) post({ type: 'token', token: t });
+        }
+        // The tail wllama left queued is this reply's (dropped if the user stopped).
+        const left = await drainWllamaResults(wllama);
+        if (!stopFlag) for (const chunk of left) {
           const t = chunk && chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content;
           if (t) post({ type: 'token', token: t });
         }
