@@ -566,6 +566,10 @@
        sits above the bubble when expanded. Default collapsed; toggle
        button sits next to Save as MD. */
     .tool-trace-container { margin: 0 0 8px 0; }
+    .tool-approval-card { margin: 0 0 8px 0; padding: 8px 10px; border: 1px solid var(--accent, #7c5cff); border-radius: 8px; font-size: 0.75rem; }
+    .tool-approval-card pre { margin: 6px 0; max-height: 9em; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 0.7rem; }
+    .tool-approval-card .tool-approval-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .tool-approval-card.decided { border-style: dashed; color: var(--gray-500); }
     .tool-trace-container.collapsed { display: none; }
 
     .msg.assistant .msg-bubble ol,
@@ -2762,6 +2766,10 @@
           <div id="hfTokenStatus" style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;min-height:1em"></div>
         </div>
         <div class="settings-divider" data-tab="tools">
+          <label class="toggle-row" id="toolApprovalRow">
+            <input type="checkbox" id="toolApprovalToggle" checked>
+            Ask before running custom and MCP tools <span style="font-weight:400;color:var(--gray-500)">(they send the model's arguments to another server; built-in tools always run)</span>
+          </label>
           <label>Custom tools <span style="font-weight:400;color:var(--gray-500)">(agent-capable models; HTTP POST to your endpoint)</span></label>
           <textarea id="customToolInput" class="settings-input" rows="6" placeholder='{
   "name": "my_tool",
@@ -17867,6 +17875,67 @@ self.addEventListener('message', async (e) => {
     // Run a planner step: up to 2 tool iterations, returns the text of the
     // final (non-tool) assistant response along with collected sources and
     // a flag for whether any tool was actually called.
+    // TOOL-APPROVAL (Open Q#11): custom and MCP tools send the model's arguments to another server, so each call
+    // waits for Allow / Always / Deny on a card in the chat, unless the gate is off (Settings → Tools) or the user
+    // chose "Always" for that tool this session. Built-in tools run as before.
+    const TOOL_APPROVAL_KEY = 'lm_tool_approval';
+    const toolApprovedThisSession = new Set();
+    function toolApprovalOn() { try { return localStorage.getItem(TOOL_APPROVAL_KEY) !== 'off'; } catch { return true; } }
+    function toolNeedsApproval(name, tool, gateOn, approved) {
+      return !!(tool && (tool._custom || tool._mcp)) && !!gateOn && !approved.has(name);
+    }
+    function toolDeclinedResult(name) { return { error: `The user declined to run ${name}. Answer without it.` }; }
+    // END TOOL-APPROVAL
+    // Settings → Tools checkbox (wired here, after the const it reads).
+    const toolApprovalToggle = document.getElementById('toolApprovalToggle');
+    if (toolApprovalToggle) {
+      toolApprovalToggle.checked = toolApprovalOn();
+      toolApprovalToggle.addEventListener('change', () => { try { localStorage.setItem(TOOL_APPROVAL_KEY, toolApprovalToggle.checked ? 'on' : 'off'); } catch {} });
+    }
+
+    // The card sits above the reply bubble. Stop (generating → false) while it is open counts as Deny.
+    function askToolApproval(name, tool, args) {
+      return new Promise((resolve) => {
+        const msg = currentAssistantEl ? currentAssistantEl.bubble.parentElement : null;
+        if (!msg) { resolve('deny'); return; }
+        let host = '';
+        try { host = new URL(tool._mcp ? tool._mcpUrl : tool._endpoint).host; } catch { host = 'another server'; }
+        const card = document.createElement('div');
+        card.className = 'tool-approval-card';
+        card.setAttribute('role', 'group');
+        card.setAttribute('aria-label', `Approve tool call ${name}`);
+        const title = document.createElement('div');
+        title.style.fontWeight = '600';
+        title.textContent = `Run ${name}? It sends these arguments to ${host}.`;
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(args ?? {}, null, 2);
+        const row = document.createElement('div');
+        row.className = 'tool-approval-actions';
+        const mk = (label, value) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn-icon'; b.textContent = label; b.addEventListener('click', () => finish(value)); row.appendChild(b); return b; };
+        mk('Allow', 'allow'); mk('Always allow this tool', 'always'); mk('Deny', 'deny');
+        card.append(title, pre, row);
+        msg.insertBefore(card, currentAssistantEl.bubble);
+        const watch = setInterval(() => { if (!generating) finish('deny'); }, 300);
+        function finish(v) {
+          clearInterval(watch);
+          card.classList.add('decided');
+          card.replaceChildren(Object.assign(document.createElement('div'), {
+            textContent: v === 'deny' ? `Declined: ${name} did not run.` : `Allowed: ${name}${v === 'always' ? ' (for the rest of this session)' : ''}.`,
+          }));
+          resolve(v);
+        }
+        row.querySelector('button').focus();
+      });
+    }
+    async function executeToolWithApproval(tc, tool, ctx) {
+      if (toolNeedsApproval(tc.name, tool, toolApprovalOn(), toolApprovedThisSession)) {
+        const v = await askToolApproval(tc.name, tool, tc.arguments);
+        if (v === 'always') toolApprovedThisSession.add(tc.name);
+        if (v === 'deny') return toolDeclinedResult(tc.name);
+      }
+      return tool.execute(tc.arguments, ctx);
+    }
+
     async function runPlannerStepWithTools(stepMessages, enableThinking, tools, genConfig, lastImageBlob, userQuery) {
       const STEP_MAX_ITER = 2;
       let loopMessages = [...stepMessages];
@@ -17892,7 +17961,7 @@ self.addEventListener('message', async (e) => {
             toolResult = { error: 'Unknown tool: ' + tc.name };
           } else {
             try {
-              toolResult = await tool.execute(tc.arguments, { userQuery, imageBlob: lastImageBlob });
+              toolResult = await executeToolWithApproval(tc, tool, { userQuery, imageBlob: lastImageBlob });
             } catch (e) {
               toolResult = { error: e.message };
             }
@@ -18368,6 +18437,8 @@ self.addEventListener('message', async (e) => {
       }
 
       for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+        // Stopped while a tool ran or its approval card was open: finish without another model turn.
+        if (iter > 0 && !generating) { finishGeneration(currentAssistantText || null, allSources, toolsUsedInLoop); return; }
         // Disable thinking on follow-up iterations to avoid tool
         // calls inside thinking blocks.
         const iterThinking = iter === 0 ? enableThinking : false;
@@ -18448,7 +18519,7 @@ self.addEventListener('message', async (e) => {
             toolResult = { error: `Unknown tool: ${tc.name}` };
           } else {
             try {
-              toolResult = await tool.execute(tc.arguments, { userQuery: text, imageBlob: lastImageBlob });
+              toolResult = await executeToolWithApproval(tc, tool, { userQuery: text, imageBlob: lastImageBlob });
             } catch (e) {
               toolResult = { error: e.message };
             }
