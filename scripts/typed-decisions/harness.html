@@ -1,0 +1,44 @@
+<!doctype html><meta charset="utf-8"><title>typed decisions · JevBench on Ternary Bonsai 2</title>
+<!-- Driven by scripts/typed-decisions/run-jevbench.mjs (headless Chrome + WebGPU). Served from the repo root by
+     scripts/serve-range.mjs, which maps /models/ to ~/Models, so the 5.9 GB GGUF loads from disk, not Hugging Face. -->
+<script type="module">
+import { TernaryBonsai2 } from '/src/ternary_bonsai_2_27b.js';
+import { controlLabels, decide } from '/scripts/typed-decisions/decide.mjs';
+import { SPLITS, parseTasks, taskToDecision, scoreTask, summarize } from '/scripts/typed-decisions/jevbench.mjs';
+import { makeBonsaiScorer, bonsaiSingleToken } from '/scripts/typed-decisions/bonsai-seam.mjs';
+
+const S = window.state = { phase: 'idle', progress: '', rows: [], error: null, summary: null };
+const GGUF = '/models/bonsai2/Ternary-Bonsai-2-27B-PTQ1_0.gguf';
+// Hugging Face URLs for the GGUF are rewritten to the local copy; anything else passes through.
+const localFetch = (u, i) => fetch(/Ternary-Bonsai-2-27B-PTQ1_0\.gguf/.test(String(u)) ? GGUF : u, i);
+
+window.runJev = async ({ permutations = 1, maxLength = 16384, limit = Infinity, skip = 0 } = {}) => {
+  try {
+    S.phase = 'load';
+    const engine = await TernaryBonsai2.load(null, { fetch: localFetch, maxLength,
+      onProgress: (p) => { S.progress = p ? `${p.status} ${p.loaded ?? ''}/${p.total ?? ''}` : ''; } });
+    const { score, lastRow } = makeBonsaiScorer(engine, TernaryBonsai2);
+    // seam check: the argmax of the decoded row must be the engine's own greedy token
+    const probe = [{ role: 'user', content: 'What is the capital of France? Answer in one word.' }];
+    const { row } = await lastRow(probe); let am = 0; for (let j = 1; j < row.length; j++) if (row[j] > row[am]) am = j;
+    S.seamCheck = engine.tokenizer.decode([am]);
+    const labels = controlLabels(24, bonsaiSingleToken(engine));
+    const tasks = [];
+    for (const s of SPLITS) tasks.push(...parseTasks(await (await fetch(`/scripts/typed-decisions/jevbench/${s}.jsonl`)).text(), s));
+    S.phase = 'run'; S.total = tasks.length;
+    const end = Number.isFinite(limit) && limit > 0 ? Math.min(tasks.length, skip + limit) : tasks.length;   // JSON turns Infinity into null
+    for (let i = skip; i < end; i++) {
+      const t = tasks[i], d = taskToDecision(t), t0 = performance.now();
+      try {
+        const r = await decide({ ...d, labels, score, permutations });
+        const probs = d.toLabels(r.probs);
+        S.rows.push({ id: t.id, tier: t.tier, type: t.question.type, ms: Math.round(performance.now() - t0), probs, ...scoreTask(probs, t) });
+      } catch (e) { S.rows.push({ id: t.id, tier: t.tier, type: t.question.type, valid: false, correct: false, error: String(e && e.message || e) }); }
+      S.progress = `${i + 1}/${tasks.length}`;
+    }
+    S.summary = summarize(S.rows.filter((r) => r.valid !== false || r.error));
+    S.phase = 'done';
+  } catch (e) { S.error = String(e && e.stack || e); S.phase = 'error'; }
+};
+window.ready = true;
+</script>

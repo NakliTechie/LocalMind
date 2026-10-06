@@ -7,13 +7,16 @@
 //   noul   → Bool over [true, false]; criteria true/false go into the question; p(true) is "yes";
 //   score  → Choice over "0".."3"; the rubric levels go into the question as "0: …".
 // The context is the task's `state`. A different mapping can move the score; record which one a run used.
-import { readFileSync } from 'node:fs';
+// Runs in Node (loadTasks reads the files) and in a browser (fetch the .jsonl, then parseTasks).
+const fs = typeof process !== 'undefined' && process.versions && process.versions.node ? await import('node:fs') : null;
 
 const DIR = new URL('./jevbench/', import.meta.url);
 export const SPLITS = ['original', 'easy', 'hard'];
 
+export const parseTasks = (text, tier) => text.split('\n').filter(Boolean).map((l) => ({ ...JSON.parse(l), tier }));
 export function loadTasks(splits = SPLITS) {
-  return splits.flatMap((s) => readFileSync(new URL(`${s}.jsonl`, DIR), 'utf8').split('\n').filter(Boolean).map((l) => ({ ...JSON.parse(l), tier: s })));
+  if (!fs) throw new Error('loadTasks needs Node; in a browser fetch the .jsonl and call parseTasks');
+  return splits.flatMap((s) => parseTasks(fs.readFileSync(new URL(`${s}.jsonl`, DIR), 'utf8'), s));
 }
 
 export function taskToDecision(task) {
