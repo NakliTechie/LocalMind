@@ -9059,6 +9059,36 @@ self.addEventListener('message', async (e) => {
     // can still show *which* file is currently streaming bytes.
     let currentDownloadFile = '';
 
+    // DOWNLOAD-ETA (UX review H1): rate over the last 20 s of progress reports, so a resumed download (loaded
+    // starts high) or a stalled patch does not skew it. No estimate until 3 s of data. Units are whatever
+    // loaded/total count (bytes, or a 0–1000 fraction for the GPU upload), so the ETA holds for both.
+    function createEtaTracker(windowMs = 20000, minSpanMs = 3000) {
+      let samples = [];
+      return {
+        reset() { samples = []; },
+        // Returns { rate (units/s), secondsLeft } or null while there is too little data.
+        push(loaded, total, now = performance.now()) {
+          if (samples.length && loaded < samples[samples.length - 1].loaded) samples = [];   // a new file or a restart
+          samples.push({ t: now, loaded });
+          while (samples.length > 2 && now - samples[1].t >= windowMs) samples.shift();
+          const first = samples[0];
+          const span = now - first.t;
+          if (span < minSpanMs || loaded <= first.loaded || !(total > loaded)) return null;
+          const rate = (loaded - first.loaded) / (span / 1000);
+          return { rate, secondsLeft: (total - loaded) / rate };
+        },
+      };
+    }
+    function formatEta(s) {
+      if (!(s >= 0) || !isFinite(s)) return '';
+      if (s < 60) return `~${Math.max(5, Math.ceil(s / 5) * 5)} s left`;
+      const m = Math.round(s / 60);
+      if (m < 60) return `~${m} min left`;
+      return `~${Math.floor(m / 60)} h ${m % 60} min left`;
+    }
+    // END DOWNLOAD-ETA
+    const downloadEta = createEtaTracker();
+
     // ── JavaScript API state ────────────────────────────────────
     // Feature-flag persisted in localStorage. The real window.localmind
     // object is attached in a later step; this step only builds the
@@ -16763,11 +16793,18 @@ self.addEventListener('message', async (e) => {
           } else if (p.status === 'progress_total' && p.loaded && p.total) {
             const pct = Math.min(100, Math.round((p.loaded / p.total) * 100));
             progressFill.style.width = pct + '%';
-            const loadedMB = (p.loaded / 1024 / 1024).toFixed(0);
-            const totalMB = (p.total / 1024 / 1024).toFixed(0);
             const label = currentDownloadFile ? ` ${currentDownloadFile}` : '';
-            progressText.textContent = `Downloading${label} — ${loadedMB} / ${totalMB} MB (${pct}%)`;
+            // total 1000 = a fraction (the GPU upload), not bytes: no MB or speed for it.
+            const isBytes = p.total > 1000;
+            const est = downloadEta.push(p.loaded, p.total);
+            const eta = est ? formatEta(est.secondsLeft) : '';
+            const speed = est && isBytes ? ` · ${(est.rate / 1024 / 1024).toFixed(est.rate < 10 * 1024 * 1024 ? 1 : 0)} MB/s` : '';
+            const amount = isBytes ? `${(p.loaded / 1024 / 1024).toFixed(0)} / ${(p.total / 1024 / 1024).toFixed(0)} MB (${pct}%)` : `${pct}%`;
+            progressText.textContent = `Downloading${label} — ${amount}${speed}${eta ? ' · ' + eta : ''}`;
             statusText.textContent = 'Downloading...';
+            // H1: the input is where a newcomer looks, so it carries the progress too.
+            const m = MODELS[activeModelKey];
+            if (m && chatInput.disabled) chatInput.placeholder = `Loading ${m.label} — ${pct}%${eta ? ', ' + eta : ''}`;
           } else if (p.status === 'loading') {
             progressText.textContent = `Loading ${fileName}...`;
             statusText.textContent = 'Loading into memory...';
@@ -16972,6 +17009,7 @@ self.addEventListener('message', async (e) => {
 
       // Reset aggregate-progress state for this load
       currentDownloadFile = '';
+      downloadEta.reset();
 
       // Reset UI
       statusBadge.className = 'status-badge loading';
