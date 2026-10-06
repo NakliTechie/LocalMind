@@ -3079,7 +3079,12 @@
       </div>
 
       <div class="mode-extra" id="visionPanel" role="region" aria-label="Live Vision">
-        <div class="mode-extra-head">Vision &middot; <span class="memory-count">SmolVLM-500M &middot; on-device (WebGPU)</span></div>
+        <div class="mode-extra-head">Vision &middot; <span class="memory-count">SmolVLM-500M &middot; on-device (WebGPU)</span>
+          <select id="visionModelSelect" class="settings-select" style="margin-left:8px;font-size:0.72rem" aria-label="Vision model size" title="Light is the default on phones">
+            <option value="full">Full &middot; ~1.0&nbsp;GB</option>
+            <option value="light">Light &middot; ~0.36&nbsp;GB (phones)</option>
+          </select>
+        </div>
         <div class="vision-stage">
           <video id="visionVideo" playsinline muted style="width:100%;max-height:300px;background:#000;border-radius:8px;display:none"></video>
           <img id="visionStill" alt="" style="width:100%;max-height:300px;object-fit:contain;border-radius:8px;display:none">
@@ -8506,8 +8511,9 @@ self.onmessage = async (e) => {
 // Same transformers.js load shape as the OCR worker (AutoProcessor + per-module
 // dtype), but delivered as a <script type="text/worker"> block read via
 // textContent -> blob URL, so it stays single-file AND sidesteps the
-// template-literal backtick trap. All modules at fp16 (~0.9 GB total; fp16 is
-// numerically stable here — q4f16 degenerated to gibberish on this model).
+// template-literal backtick trap. The host picks the dtype (VISION-MODELS): Full =
+// every module fp16 (~1.0 GB); Light = q4f16 (~0.36 GB) for phones. (q4f16 was
+// degenerate on the 256M under 4.2.0; the 500M on this 3.7.1 pin is under test.)
 //
 // VERSION PIN — this vision worker pins transformers.js to 3.7.1, NOT the @4.2.0
 // the chat/OCR workers use. Verified live 2026-08-21: on 4.2.0 SmolVLM's Idefics3
@@ -20125,6 +20131,15 @@ self.addEventListener('message', async (e) => {
     // the chat model while active (one heavy WebGPU worker at a time), same as
     // OCR/Image/Diffuse; restores it on exit.
     const VISION_MODEL_ID = 'HuggingFaceTB/SmolVLM-500M-Instruct';
+    // VISION-MODELS (Chunk A3): the same SmolVLM-500M at two sizes. Full = every module fp16 (1,017 MB).
+    // Light = every module q4f16 (358 MB: decoder 205 + embed 95 + vision 58) for phones. If light captions
+    // degenerate, the fallback is decoder-only q4f16 with fp16 embed + vision (497 MB). Phones default to light.
+    const VISION_MODELS = {
+      full: { dtype: 'fp16', size: '~1.0 GB' },
+      light: { dtype: { embed_tokens: 'q4f16', vision_encoder: 'q4f16', decoder_model_merged: 'q4f16' }, size: '~0.36 GB' },
+    };
+    function defaultVisionModel(stored, mobile) { return VISION_MODELS[stored] ? stored : (mobile ? 'light' : 'full'); }
+    // END VISION-MODELS
     const visionPanel   = document.getElementById('visionPanel');
     // chipVision is declared earlier (beside chipVoice) to avoid a TDZ in the
     // mode-chip listener block; do not re-declare it here.
@@ -20139,7 +20154,20 @@ self.addEventListener('message', async (e) => {
     const visionPromptInput = document.getElementById('visionPrompt');
     const visionProgressFill = document.getElementById('visionProgressFill');
     const visionProgressText = document.getElementById('visionProgressText');
-    const VIS_PROGRESS_DEFAULT = 'Start the camera or pick an image, then Describe. First use downloads SmolVLM (~0.9 GB) once, then runs offline. WebGPU — best on Chrome/Edge.';
+    const visionModelSelect = document.getElementById('visionModelSelect');
+    { let stored = null; try { stored = localStorage.getItem('lm_vision_model'); } catch {} visionModelSelect.value = defaultVisionModel(stored, isMobileDevice()); }
+    const visionModel = () => VISION_MODELS[visionModelSelect.value] || VISION_MODELS.full;
+    const visProgressDefault = () => `Start the camera or pick an image, then Describe. First use downloads SmolVLM (${visionModel().size}) once, then runs offline. WebGPU — best on Chrome/Edge.`;
+    // Switching size: drop the loaded model; the next Describe loads the other one.
+    visionModelSelect.addEventListener('change', () => {
+      try { localStorage.setItem('lm_vision_model', visionModelSelect.value); } catch {}
+      if (VS.worker) { try { VS.worker.terminate(); } catch {} VS.worker = null; }
+      VS.ready = false; VS.loading = false; VS.busy = false;
+      visionDescribeBtn.disabled = true; visionLiveBtn.disabled = true;
+      visionProgressFill.style.width = '0%';
+      visionProgressText.textContent = visProgressDefault();
+    });
+    visionProgressText.textContent = visProgressDefault();   // the static text names no size
     const VS = { worker: null, ready: false, loading: false, stream: null, busy: false, live: false, liveTimer: null, reqId: 0, still: null };
 
     function ensureVisionWorker() {
@@ -20180,8 +20208,8 @@ self.addEventListener('message', async (e) => {
       worker = null; modelReady = false;
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
       visionProgressFill.style.width = '0%';
-      visionProgressText.textContent = 'Loading SmolVLM (first use downloads ~0.9 GB once, then offline)…';
-      ensureVisionWorker().postMessage({ type: 'load', modelId: VISION_MODEL_ID });
+      visionProgressText.textContent = `Loading SmolVLM (first use downloads ${visionModel().size} once, then offline)…`;
+      ensureVisionWorker().postMessage({ type: 'load', modelId: VISION_MODEL_ID, dtype: visionModel().dtype });
     }
     function grabVisionFrame() {
       let src, sw, sh;
@@ -20240,7 +20268,7 @@ self.addEventListener('message', async (e) => {
     });
     function onEnterVisionMode() {
       visionCaption.textContent = '';
-      if (!VS.ready && !VS.loading) visionProgressText.textContent = VIS_PROGRESS_DEFAULT;
+      if (!VS.ready && !VS.loading) visionProgressText.textContent = visProgressDefault();
     }
     function onLeaveVisionMode() {
       VS.live = false; clearTimeout(VS.liveTimer);
