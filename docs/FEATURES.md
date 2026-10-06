@@ -88,7 +88,7 @@ Tool-capable models (Bonsai, Qwen3.5, LFM2, MiniCPM5, Gemma 4) decide when to us
 **Multi-model & research:**
 - **Compare / council** — run one prompt through 2–3 models, then a judge picks the best.
 - **Deep Research** — sub-queries → web search → read sources → a cited report, on-device.
-- **Self-improving skills** — the agent saves reusable skills that auto-apply in later chats.
+- **Self-improving skills** — the agent saves reusable skills that auto-apply in later chats. Agent-capable models only; following them grows with model size. Small models (under ~4B) apply short direct commands but tend to skip conditional ones ("if X, do Y"), so word skills as direct commands (measured on a 1.7B model, 2026-06-04).
 
 **Math & diagrams:** inline `$\int x^2 dx$` / display `$$\sum i$$` render via KaTeX; ` ```mermaid ` blocks render as SVG.
 
