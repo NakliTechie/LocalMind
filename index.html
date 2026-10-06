@@ -19538,6 +19538,16 @@ self.addEventListener('message', async (e) => {
     let imageCount = 0;         // images generated this session
     let imageBusy = false;        // an image run is in flight (no mid-step interrupt)
     let lastChatModelKey = null;  // chat model suspended to free VRAM for a gen-mode model
+    // One heavy WebGPU worker at a time: a gen mode (Image, Diffuse, OCR, Vision, Clone) unloads the chat model and
+    // remembers it for the way back. The header says so; it used to keep whatever the chat load last showed
+    // ("Warming up…" / "Loading…") for as long as the mode was open (night run 2026-10-06, item 7).
+    function suspendChatModel() {
+      if (activeModelKey) lastChatModelKey = activeModelKey;
+      try { LocalMind.runtime.unload(); } catch {}
+      worker = null; modelReady = false;
+      statusBadge.className = 'status-badge';
+      statusText.textContent = 'Chat model paused';
+    }
     // Diffuse-mode refs + state (masked-diffusion text via a separate WebGPU worker)
     const chipDiffuse         = document.getElementById('chipDiffuse');
     const diffusePanel        = document.getElementById('diffusePanel');
@@ -19936,9 +19946,7 @@ self.addEventListener('message', async (e) => {
       const modelId = imageModelSelect.value;
       if (modelId === 'local-server') return; // nothing to load in-tab; the server holds the weights
       if (LocalMind.runtime._imageWorker && LocalMind.runtime._imageActiveModel === modelId) return;
-      if (activeModelKey) lastChatModelKey = activeModelKey;
-      try { LocalMind.runtime.unload(); } catch {}
-      worker = null; modelReady = false;
+      suspendChatModel();
       try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch {}
       imageProgressFill.style.width = '0%';
       imageProgressText.textContent = 'Loading diffusion model… first run downloads ~3GB (cached after).';
@@ -20062,9 +20070,7 @@ self.addEventListener('message', async (e) => {
     // ── Diffuse: masked-diffusion text generation (kohra) ───────
     async function ensureDiffusionModel() {
       if (LocalMind.runtime._diffusionWorker && LocalMind.runtime._diffusionActiveModel === DIFFUSION_MODEL.model) return;
-      if (activeModelKey) lastChatModelKey = activeModelKey;
-      try { LocalMind.runtime.unload(); } catch {}
-      worker = null; modelReady = false;
+      suspendChatModel();
       try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch {}
       diffuseProgressFill.style.width = '35%';
       diffuseProgressText.textContent = 'Loading diffusion LM… first run downloads ~1.4GB + compiles WebGPU shaders (cached after).';
@@ -20230,9 +20236,7 @@ self.addEventListener('message', async (e) => {
       if (VS.ready || VS.loading) return;
       VS.loading = true;
       // Free the chat model's VRAM first (one heavy WebGPU worker at a time).
-      if (activeModelKey) lastChatModelKey = activeModelKey;
-      try { LocalMind.runtime.unload(); } catch {}
-      worker = null; modelReady = false;
+      suspendChatModel();
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
       visionProgressFill.style.width = '0%';
       visionProgressText.textContent = `Loading SmolVLM (first use downloads ${visionModel().size} once, then offline)…`;
@@ -20464,9 +20468,7 @@ self.addEventListener('message', async (e) => {
       if (CB.ready || CB.loading) return;
       CB.loading = true;
       // Free the chat model's VRAM first (one heavy WebGPU worker at a time).
-      if (activeModelKey) lastChatModelKey = activeModelKey;
-      try { LocalMind.runtime.unload(); } catch {}
-      worker = null; modelReady = false;
+      suspendChatModel();
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
       cloneProgressFill.style.width = '0%';
       cloneSetProgress('Loading Chatterbox (first use downloads ~1.5 GB once, then offline)…');
@@ -20608,9 +20610,7 @@ self.addEventListener('message', async (e) => {
     async function ensureOCRModel() {
       const wantId = ocrFolderFiles ? '__folder__' : OCR_MODEL.modelId;
       if (LocalMind.runtime._ocrWorker && LocalMind.runtime._ocrActiveModel === wantId) return;
-      if (activeModelKey) lastChatModelKey = activeModelKey;
-      try { LocalMind.runtime.unload(); } catch {}
-      worker = null; modelReady = false;
+      suspendChatModel();
       try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch {}
       ocrProgressFill.style.width = '0%';
       ocrProgressText.textContent = ocrFolderFiles
