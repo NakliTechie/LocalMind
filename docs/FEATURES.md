@@ -167,7 +167,7 @@ Settings → **Custom models** → paste a Hugging Face repo id (e.g. `onnx-comm
 
 ## Developer API
 
-Scripts in the same tab can drive the loaded model via an OpenAI-shaped `window.localmind` object (opt-in, Settings → JavaScript API). Non-streaming + streaming. Full reference: **[API.md](./API.md)** · live demo: **[demo.html](../demo.html)**.
+Scripts in the same tab can drive the loaded model via an OpenAI-shaped `window.localmind` object (opt-in, Settings → JavaScript API). Non-streaming + streaming. Full reference, including a same-origin iframe example: **[API.md](./API.md)**.
 
 ## Example prompts
 

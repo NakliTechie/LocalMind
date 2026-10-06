@@ -46,7 +46,7 @@ Three generation paradigms live in the one file: **autoregressive chat** (ONNX +
   - WebGPU adapter limits queried for hard-block on per-buffer size + absolute 6 GB ceiling
   - Soft warning above 2 GB
   - Persisted in localStorage; restored on reload; remove button per entry
-- **`demo.html`** — standalone same-origin iframe page demonstrating the JS API end-to-end (non-streaming + streaming)
+- **`demo.html`** — standalone same-origin iframe page demonstrating the JS API end-to-end (non-streaming + streaming). *Removed from the deploy; docs/API.md carries the iframe snippet instead.*
 - **README benchmark** — comparison table vs WebLLM Chat, Chatty, Transformers.js demos
 - **SAM image segmentation** — `segment_image` tool calling Segment Anything Model (SlimSAM 50/77, SAM ViT-Base, SAM 3)
   - Separate WASM blob-URL worker, lazy-loaded on first use

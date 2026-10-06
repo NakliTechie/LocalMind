@@ -19,8 +19,6 @@
 !guide/**
 !demo/
 !demo/capture.py
-!demo/capture-gif.py
-!demo/capture-gif-tour.py
 !demo/make-montage.py
 !scripts/
 !scripts/**

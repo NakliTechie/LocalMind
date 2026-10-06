@@ -2483,8 +2483,8 @@
               </ul>
               <h4>Activity log</h4>
               <p>Every API call is logged in-memory (last 50). Click the <code>&bull; API</code> chip in the toolbar or <strong>Settings &rarr; View activity log</strong>. Each call shows method, prompt length, tokens generated, duration, and outcome (ok / err / busy).</p>
-              <h4>Demo</h4>
-              <p>Open <code>demo.html</code> in the same folder. It iframes LocalMind, auto-flips the toggle, waits for the model, and runs both a non-streaming and a streaming completion against <code>iframe.contentWindow.localmind</code>.</p>
+              <h4>From another page</h4>
+              <p>A page on the same origin can embed LocalMind in an iframe, tick <code>apiEnabledToggle</code> inside it, and call <code>iframe.contentWindow.localmind</code>. docs/API.md in the repo has the snippet.</p>
               <div class="help-note">Experimental &mdash; the shape may change before a stable v1.1.</div>
             </div>
           </div>
@@ -10800,8 +10800,8 @@ self.addEventListener('message', async (e) => {
     }
 
     // Resolve a user-supplied model identifier to a short MODELS key.
-    // Accepts either the short key ("gemma3-1b") or the full HF id
-    // ("onnx-community/gemma-3-1b-it-ONNX-GQA"). Returns null if unknown.
+    // Accepts either the short key ("lfm2-230m-webgpu") or the full HF id
+    // ("LiquidAI/LFM2.5-230M-GGUF"). Returns null if unknown.
     function resolveModelKey(idOrKey) {
       if (MODELS[idOrKey]) return idOrKey;
       for (const [k, m] of Object.entries(MODELS)) {
@@ -11052,6 +11052,7 @@ self.addEventListener('message', async (e) => {
       // own counts to the main thread. countTokens() is script- and model-aware
       // (see TOKEN-COUNT-START), which is the difference between a usable number
       // and one that is ~10x out on Indic text.
+      const promptChars = chatMessages.reduce((s, m) => s + m.content.length, 0);
       const promptTokensApprox = Math.max(1, chatMessages.reduce((n, m) => n + countTokens(m.content, activeModelKey), 0));
       const completionTokensApprox = Math.max(1, countTokens(responseText || '', activeModelKey));
 
