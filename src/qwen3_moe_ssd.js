@@ -24,7 +24,7 @@ import { OpfsReaderPool, readOpfsText } from './opfs-reader.js';
 import { ExpertStreamer } from './moe-expert-stream.js';
 // The store layer is diskformer.js's (github.com/NakliTechie/diskformer.js), byte-identical copies: gguf.js, ingest.js.
 import { GGML, Q8_BLOCK, Q4_BLOCK, Q6K_BLOCK, parseGguf, tensorBytes } from './gguf.js';
-import { ingestGguf as ingestStore, ingestProgress, storeKey, removeStore } from './ingest.js';
+import { ingestGguf as ingestStore, ingestProgress, fileFetch, storeKey, removeStore } from './ingest.js';
 export { GGML, Q4_BLOCK, Q6K_BLOCK, parseGguf, tensorBytes, splitQ4 } from './gguf.js';
 export { ingestProgress } from './ingest.js';
 
@@ -542,8 +542,14 @@ export class Qwen3MoeSsd {
   static tokenizerFrom(kv) { return new BpeTokenizer(kv); }
 
   static async load(modelId = QWEN3_30B_A3B.repo, opts = {}) {
-    const { fetch: fetchFn = (u, i) => fetch(u, i), onProgress = () => {}, signal } = opts;
+    const { onProgress = () => {}, signal, localFile } = opts;
     const src = opts.source || (modelId === QWEN3_30B_A3B.repo || !modelId ? QWEN3_30B_A3B : { repo: modelId, file: opts.file, revision: opts.revision || 'main' });
+    // localFile: the same GGUF already on disk (a File the user picked), ingested instead of downloaded. A size
+    // other than the pinned file's is refused before any write; the GGUF header check in the ingest plan follows.
+    if (localFile && src.size && localFile.size !== src.size) {
+      throw new Error(`${localFile.name} is ${localFile.size.toLocaleString()} bytes, not ${src.file} (${src.size.toLocaleString()} bytes). Pick that file.`);
+    }
+    const fetchFn = localFile ? fileFetch(localFile) : (opts.fetch || ((u, i) => fetch(u, i)));
     const url = opts.url || `https://huggingface.co/${src.repo}/resolve/${src.revision}/${src.file}`;
     const key = opts.key || storeKey(opts.file || src.file || url.split('/').pop());
     const root = opts.root || OPFS_ROOT;              // the OPFS folder for this engine's stores
@@ -567,7 +573,7 @@ export class Qwen3MoeSsd {
     try { manifest = JSON.parse(await readOpfsText(`${dir}/manifest.json`) || 'null'); } catch (_) { manifest = null; }
     if (opts.reingest || !manifest || !manifest.complete || manifest.format !== FORMAT) {
       manifest = await ingestGguf({
-        url, key, root, fetch: fetchFn, signal, source: { repo: src.repo, file: src.file, revision: src.revision, sha256: src.sha256, size: src.size },
+        url, key, root, fetch: fetchFn, signal, source: { repo: src.repo, file: src.file, revision: src.revision, sha256: src.sha256, size: src.size, ...(localFile ? { localFile: localFile.name } : {}) },
         onProgress: (e) => onProgress(ingestProgress(e)),
         plan: this.ingestPlan,
       });

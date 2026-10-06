@@ -59,7 +59,8 @@ The picker groups models as on this device, partly downloaded, or to download, w
 Gemini Nano with no download at all. Two experimental engines stream mixture-of-experts models larger than GPU memory
 (Qwen3.6 35B-A3B, Gemma 4 26B-A4B) from the browser's private storage. Their disk tier and engines are also a library,
 [diskformer.js](https://github.com/NakliTechie/diskformer.js), with a demo at
-[diskformer.naklitechie.com](https://diskformer.naklitechie.com).
+[diskformer.naklitechie.com](https://diskformer.naklitechie.com). If their GGUF is already on your disk (a Hugging Face or LM
+Studio folder), Settings → Models → Load .gguf from disk… copies it in instead of downloading it.
 
 Every path is local. A model runs in the tab on WebGPU, or as a GGUF through llama.cpp compiled to WebAssembly (from a
 URL or a `.gguf` file on your disk, on CPU when there is no GPU), or on your own Ollama, LM Studio or llama.cpp server.

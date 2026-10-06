@@ -2717,7 +2717,7 @@
           <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap">
             <input type="file" id="localGgufInput" accept=".gguf" style="display:none">
             <button class="btn-icon" id="localGgufBtn" title="Pick a .gguf already on your disk — nothing is downloaded">Load .gguf from disk…</button>
-            <span style="font-size:0.68rem;color:var(--gray-500)">no download · this session</span>
+            <span style="font-size:0.68rem;color:var(--gray-500)">no download · this session · Gemma 4 26B-A4B or Qwen3.6 35B-A3B's GGUF from your Hugging Face or LM Studio folder skips their download (macOS picker: ⌘⇧. shows ~/.cache)</span>
           </div>
           <div id="customModelStatus" style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5;min-height:1em"></div>
           <div id="customModelList" style="margin-top:6px"></div>
@@ -8277,6 +8277,7 @@ self.onmessage = async (e) => {
       // only the dense part from OPFS. contextSize sizes the f16 KV cache.
       model = await Engine.load(null, {
         fetch: engineFetch,
+        localFile: d.localFile || undefined,   // the model's GGUF picked from disk: ingested instead of downloaded
         maxCtx: d.contextSize > 0 ? d.contextSize : undefined,
         onProgress: (ev) => {
           if (!ev) return;
@@ -8899,6 +8900,9 @@ self.addEventListener('message', async (e) => {
         label: 'Qwen3.6 35B-A3B · SSD-streamed (experimental)',
         backend: 'qwen35moe-ssd',
         size: '~37 GB',
+        // The pinned GGUF (QWEN36_35B_A3B in qwen35_moe_ssd.js): "Load .gguf from disk…" routes a file of exactly
+        // this size here and ingests it instead of downloading. test-local-gguf-ssd.mjs keeps the two in step.
+        gguf: { file: 'Qwen3.6-35B-A3B-Q8_0.gguf', size: 36903140320 },
         type: 'causal',
         multimodal: false,
         agentCapable: false,
@@ -8918,6 +8922,7 @@ self.addEventListener('message', async (e) => {
         label: 'Gemma 4 26B-A4B · SSD-streamed (experimental)',
         backend: 'gemma4moe-ssd',
         size: '~14 GB',
+        gguf: { file: 'gemma-4-26B_q4_0-it.gguf', size: 14439363584 },   // GEMMA4_26B_A4B in gemma4_moe_ssd.js
         type: 'causal',
         multimodal: false,
         agentCapable: false,
@@ -11747,9 +11752,24 @@ self.addEventListener('message', async (e) => {
       return { entry, warnings };
     }
 
+    // LOCAL-GGUF-SSD: a picked GGUF that is an SSD-streamed model's pinned file (same byte size) goes to that
+    // model, which copies it into on-device storage instead of downloading it (e.g. from ~/.cache/huggingface).
+    function ssdModelForFile(file, models) {
+      return Object.keys(models).find((id) => models[id].gguf && models[id].gguf.size === file.size) || null;
+    }
+    // END LOCAL-GGUF-SSD
+
     async function handleLocalGgufPick(file) {
       if (!file) return;
       if (!/\.gguf$/i.test(file.name || '')) { setCustomStatus('pick a file ending in .gguf', 'err'); return; }
+      const ssdId = ssdModelForFile(file, MODELS);
+      if (ssdId) {
+        MODELS[ssdId].localFile = file;
+        modelSelect.value = ssdId;
+        setCustomStatus(`${file.name} is ${MODELS[ssdId].label}'s file. Copying it into on-device storage once (no download); later loads read the copy.`, 'ok');
+        loadModel(ssdId);
+        return;
+      }
       const { entry, warnings } = buildLocalGgufEntry(file);
       if (MODELS[entry.id]) MODELS[entry.id].localFile = file; else addCustomModelToRegistry(entry);
       modelSelect.value = entry.id;
@@ -14631,7 +14651,7 @@ ${JSON.stringify({ name, result })}
             // maxLength. The shared load message shape is harmless either way.
             // hfToken (Settings → Models) rides along for the three custom-WGSL
             // engines, which send it as Authorization: Bearer to huggingface.co.
-            w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0, localFile: (isWllama && MODELS[modelId]) ? (MODELS[modelId].localFile || null) : null, hfToken: isWllama ? null : hfToken(), dflash: isBonsai2Webgpu ? dflashEnabled() : false, ple: isGemma4Webgpu ? gemma4PleEnabled() : false });
+            w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0, localFile: (isWllama || moeSsd) ? (options.localFile || null) : null, hfToken: isWllama ? null : hfToken(), dflash: isBonsai2Webgpu ? dflashEnabled() : false, ple: isGemma4Webgpu ? gemma4PleEnabled() : false });
           } else {
             const resumable = localStorage.getItem('lm_resumable_downloads') !== '0';
             w.postMessage({ type: 'load', modelId, dtype, modelType, modelClass, resumable });
@@ -16800,10 +16820,12 @@ self.addEventListener('message', async (e) => {
             const eta = est ? formatEta(est.secondsLeft) : '';
             const speed = est && isBytes ? ` · ${(est.rate / 1024 / 1024).toFixed(est.rate < 10 * 1024 * 1024 ? 1 : 0)} MB/s` : '';
             const amount = isBytes ? `${(p.loaded / 1024 / 1024).toFixed(0)} / ${(p.total / 1024 / 1024).toFixed(0)} MB (${pct}%)` : `${pct}%`;
-            progressText.textContent = `Downloading${label} — ${amount}${speed}${eta ? ' · ' + eta : ''}`;
-            statusText.textContent = 'Downloading...';
-            // H1: the input is where a newcomer looks, so it carries the progress too.
+            // A GGUF picked from disk is copied (SSD engines) or read (wllama), not downloaded.
             const m = MODELS[activeModelKey];
+            const verb = m && m.localFile ? (m.gguf ? 'Copying from disk' : 'Reading from disk') : 'Downloading';
+            progressText.textContent = `${verb}${label} — ${amount}${speed}${eta ? ' · ' + eta : ''}`;
+            statusText.textContent = `${verb}...`;
+            // H1: the input is where a newcomer looks, so it carries the progress too.
             if (m && chatInput.disabled) chatInput.placeholder = `Loading ${m.label} — ${pct}%${eta ? ', ' + eta : ''}`;
           } else if (p.status === 'loading') {
             progressText.textContent = `Loading ${fileName}...`;
@@ -17038,6 +17060,7 @@ self.addEventListener('message', async (e) => {
         modelClass: m.modelClass,
         backend: m.backend,          // 'wllama' → adapter uses the wllama worker
         contextSize: m.contextSize,  // n_ctx for the GGUF load
+        localFile: m.localFile || null,   // a GGUF picked from disk (wllama loads it; the SSD engines ingest it)
         capabilities: {
           text: true,
           image: m.imageInput ?? !!m.multimodal,
@@ -28553,7 +28576,7 @@ import { parseGguf, splitQ8, splitQ4, Q8_BLOCK, Q4_BLOCK } from './gguf.js';
 export const ROOT = 'diskformer';
 export const FORMAT = 'diskformer-gguf/1';
 
-// ── Ingest: GGUF (over HTTP Range) → OPFS, in the engine layout ─────────────
+// ── Ingest: GGUF (over HTTP Range, or a local file) → OPFS, in the engine layout ──
 export const storeKey = (file) => file.replace(/\.gguf$/i, '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
 
 export async function readHeader(url, fetchFn, signal) {
@@ -28567,6 +28590,20 @@ export async function readHeader(url, fetchFn, signal) {
     const u8 = new Uint8Array(await r.arrayBuffer());
     try { return { gguf: parseGguf(u8), bytes: u8, file }; } catch (e) { if (!e.needBytes) throw e; n = e.needBytes; }
   }
+}
+
+// A local file as the source: a fetch-shaped function that answers ingestGguf's Range requests from a Blob (a GGUF
+// the user picked, e.g. from a Hugging Face or LM Studio cache), so nothing is downloaded. Pass it as `fetch`.
+// No ETag: an interrupted ingest resumes from the same file (same header and size), never from a download's state.
+export function fileFetch(blob) {
+  return async (_url, { headers = {}, signal } = {}) => {
+    if (signal) signal.throwIfAborted();
+    const m = /^bytes=(\d+)-(\d+)$/.exec(headers.Range || '');
+    if (!m) throw new Error('fileFetch: only Range requests (bytes=a-b) are supported');
+    const start = Number(m[1]), end = Math.min(Number(m[2]), blob.size - 1);
+    if (start > end) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${blob.size}` } });
+    return new Response(blob.slice(start, end + 1), { status: 206, headers: { 'content-range': `bytes ${start}-${end}/${blob.size}` } });
+  };
 }
 
 // FNV-1a, for the resume identity: over bytes (the GGUF header) or a string (the plan's output layout).
@@ -36547,7 +36584,7 @@ import { OpfsReaderPool, readOpfsText } from './opfs-reader.js';
 import { ExpertStreamer } from './moe-expert-stream.js';
 // The store layer is diskformer.js's (github.com/NakliTechie/diskformer.js), byte-identical copies: gguf.js, ingest.js.
 import { GGML, Q8_BLOCK, Q4_BLOCK, Q6K_BLOCK, parseGguf, tensorBytes } from './gguf.js';
-import { ingestGguf as ingestStore, ingestProgress, storeKey, removeStore } from './ingest.js';
+import { ingestGguf as ingestStore, ingestProgress, fileFetch, storeKey, removeStore } from './ingest.js';
 export { GGML, Q4_BLOCK, Q6K_BLOCK, parseGguf, tensorBytes, splitQ4 } from './gguf.js';
 export { ingestProgress } from './ingest.js';
 
@@ -37065,8 +37102,14 @@ export class Qwen3MoeSsd {
   static tokenizerFrom(kv) { return new BpeTokenizer(kv); }
 
   static async load(modelId = QWEN3_30B_A3B.repo, opts = {}) {
-    const { fetch: fetchFn = (u, i) => fetch(u, i), onProgress = () => {}, signal } = opts;
+    const { onProgress = () => {}, signal, localFile } = opts;
     const src = opts.source || (modelId === QWEN3_30B_A3B.repo || !modelId ? QWEN3_30B_A3B : { repo: modelId, file: opts.file, revision: opts.revision || 'main' });
+    // localFile: the same GGUF already on disk (a File the user picked), ingested instead of downloaded. A size
+    // other than the pinned file's is refused before any write; the GGUF header check in the ingest plan follows.
+    if (localFile && src.size && localFile.size !== src.size) {
+      throw new Error(`${localFile.name} is ${localFile.size.toLocaleString()} bytes, not ${src.file} (${src.size.toLocaleString()} bytes). Pick that file.`);
+    }
+    const fetchFn = localFile ? fileFetch(localFile) : (opts.fetch || ((u, i) => fetch(u, i)));
     const url = opts.url || `https://huggingface.co/${src.repo}/resolve/${src.revision}/${src.file}`;
     const key = opts.key || storeKey(opts.file || src.file || url.split('/').pop());
     const root = opts.root || OPFS_ROOT;              // the OPFS folder for this engine's stores
@@ -37090,7 +37133,7 @@ export class Qwen3MoeSsd {
     try { manifest = JSON.parse(await readOpfsText(`${dir}/manifest.json`) || 'null'); } catch (_) { manifest = null; }
     if (opts.reingest || !manifest || !manifest.complete || manifest.format !== FORMAT) {
       manifest = await ingestGguf({
-        url, key, root, fetch: fetchFn, signal, source: { repo: src.repo, file: src.file, revision: src.revision, sha256: src.sha256, size: src.size },
+        url, key, root, fetch: fetchFn, signal, source: { repo: src.repo, file: src.file, revision: src.revision, sha256: src.sha256, size: src.size, ...(localFile ? { localFile: localFile.name } : {}) },
         onProgress: (e) => onProgress(ingestProgress(e)),
         plan: this.ingestPlan,
       });

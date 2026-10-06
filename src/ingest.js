@@ -17,7 +17,7 @@ import { parseGguf, splitQ8, splitQ4, Q8_BLOCK, Q4_BLOCK } from './gguf.js';
 export const ROOT = 'diskformer';
 export const FORMAT = 'diskformer-gguf/1';
 
-// ── Ingest: GGUF (over HTTP Range) → OPFS, in the engine layout ─────────────
+// ── Ingest: GGUF (over HTTP Range, or a local file) → OPFS, in the engine layout ──
 export const storeKey = (file) => file.replace(/\.gguf$/i, '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
 
 export async function readHeader(url, fetchFn, signal) {
@@ -31,6 +31,20 @@ export async function readHeader(url, fetchFn, signal) {
     const u8 = new Uint8Array(await r.arrayBuffer());
     try { return { gguf: parseGguf(u8), bytes: u8, file }; } catch (e) { if (!e.needBytes) throw e; n = e.needBytes; }
   }
+}
+
+// A local file as the source: a fetch-shaped function that answers ingestGguf's Range requests from a Blob (a GGUF
+// the user picked, e.g. from a Hugging Face or LM Studio cache), so nothing is downloaded. Pass it as `fetch`.
+// No ETag: an interrupted ingest resumes from the same file (same header and size), never from a download's state.
+export function fileFetch(blob) {
+  return async (_url, { headers = {}, signal } = {}) => {
+    if (signal) signal.throwIfAborted();
+    const m = /^bytes=(\d+)-(\d+)$/.exec(headers.Range || '');
+    if (!m) throw new Error('fileFetch: only Range requests (bytes=a-b) are supported');
+    const start = Number(m[1]), end = Math.min(Number(m[2]), blob.size - 1);
+    if (start > end) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${blob.size}` } });
+    return new Response(blob.slice(start, end + 1), { status: 206, headers: { 'content-range': `bytes ${start}-${end}/${blob.size}` } });
+  };
 }
 
 // FNV-1a, for the resume identity: over bytes (the GGUF header) or a string (the plan's output layout).
