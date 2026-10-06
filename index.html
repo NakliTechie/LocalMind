@@ -2782,7 +2782,8 @@
           </div>
         </div>
         <div class="settings-divider" data-tab="models">
-          <label>Local model endpoint <span style="font-weight:400;color:var(--gray-500)">(OpenAI-compatible local server — Ollama, LM Studio, llama.cpp, Atomic Chat)</span></label>
+          <h4 style="margin:0 0 6px;font-size:0.8rem">Local servers <span style="font-weight:400;color:var(--gray-500)">(models that run on this machine, outside the browser)</span></h4>
+          <label>Chat model endpoint <span style="font-weight:400;color:var(--gray-500)">(OpenAI-compatible — Ollama, LM Studio, llama.cpp, Atomic Chat)</span></label>
           <div style="display:flex;gap:6px;margin-top:4px">
             <select id="endpointPresetSelect" class="settings-select" style="flex:0 0 auto;max-width:42%" title="Fill the URL (and temperature) from a preset"><option value="">Preset…</option></select>
             <input type="text" id="endpointUrlInput" class="settings-input" placeholder="http://localhost:11434/v1" style="flex:1">
@@ -2795,9 +2796,14 @@
           <div style="font-size:0.7rem;color:var(--gray-500);margin-top:2px;line-height:1.5">0 = greedy. Required for lossless speculative decoding on dflash serve.</div>
           <div id="endpointStatus" style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5;min-height:1em"></div>
           <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
-            Run bigger / faster models without the WebGPU limit &mdash; inference runs on your machine, nothing leaves your device. Discovered models appear in the model menu above. The server must allow CORS for this origin (Ollama: set <code>OLLAMA_ORIGINS</code>; LM Studio: enable CORS).
+            Run bigger / faster models without the WebGPU limit &mdash; inference runs on your machine, nothing leaves your device. Discovered models appear in the model menu above. The server must allow CORS for this origin (Ollama: set <code>OLLAMA_ORIGINS</code>; LM Studio: enable CORS; Atomic Chat: add this site under Trusted Hosts).
             Pick a preset to fill the URL: Ollama <code>:11434/v1</code> &middot; LM Studio <code>:1234/v1</code> &middot; llama.cpp <code>:8080/v1</code> &middot; Atomic <code>:1337/v1</code> &middot; dflash serve <code>:8790/v1</code>.
           </div>
+          <!-- Open Q#20: the image server's URL lives here too, beside the chat endpoint. It is the same value as the
+               Image panel's Server field (one localStorage key, lm_image_endpoint_url); editing either updates both. -->
+          <label for="settingsImageEndpointInput" style="display:block;margin-top:10px">Image server <span style="font-weight:400;color:var(--gray-500)">(stable-diffusion.cpp <code>sd-server</code> — Qwen-Image 2.1, FLUX, …)</span></label>
+          <input type="text" id="settingsImageEndpointInput" class="settings-input" placeholder="http://127.0.0.1:7860" style="width:100%;margin-top:4px">
+          <div style="font-size:0.7rem;color:var(--gray-500);margin-top:2px;line-height:1.5">Used when the Image screen's model is "Local server". Same field as the Image panel's Server box.</div>
         </div>
         <div class="settings-divider" data-tab="tools">
           <label>MCP servers <span style="font-weight:400;color:var(--gray-500)">(Streamable HTTP transport; tools discovered via JSON-RPC <code>tools/list</code>)</span></label>
@@ -11581,7 +11587,7 @@ self.addEventListener('message', async (e) => {
         }
       } catch (e) { if (e instanceof TypeError) netErr = e; }
       let msg = 'No models found — is the server running, and does it allow CORS for this origin?';
-      if (netErr && isLocalNetworkHost(raw)) msg += ' ' + LOCAL_NETWORK_HINT;
+      if (netErr && isLocalNetworkHost(raw)) { msg += ' ' + LOCAL_NETWORK_HINT; const cors = corsHintFor(raw); if (cors) msg += ' ' + cors; }
       throw new Error(msg);
     }
     // Sampling temperature for every endpoint model, persisted beside the URL.
@@ -11627,9 +11633,24 @@ self.addEventListener('message', async (e) => {
         || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^169\.254\./.test(host);
     }
     const LOCAL_NETWORK_HINT = 'Chrome may have blocked this request behind its "local network access" permission — click Allow when the prompt appears, or check this site\'s permissions (lock icon → Site settings → Local network access).';
+    // The other cause of a network TypeError: the server refuses this origin (CORS). Each server opens it
+    // in a different place, so name the fix for the one on this port (Open Q#10).
+    function corsHintFor(base) {
+      let url;
+      try { url = new URL(base); } catch { return ''; }
+      const origin = (globalThis.location && location.origin) || 'this site';
+      const host = (globalThis.location && location.hostname) || 'this site';
+      return ({
+        '11434': `If it is Ollama, restart it with OLLAMA_ORIGINS=${origin} (or *).`,
+        '1234': 'If it is LM Studio, turn on Developer → Server settings → Enable CORS.',
+        '1337': `If it is Atomic Chat, add ${host} under Settings → Local API Server → Trusted Hosts.`,
+      })[url.port] || '';
+    }
     function endpointErrorMessage(e, base) {
       const msg = (e && e.message) || String(e);
-      return (e instanceof TypeError && isLocalNetworkHost(base)) ? msg + '. ' + LOCAL_NETWORK_HINT : msg;
+      if (!(e instanceof TypeError && isLocalNetworkHost(base))) return msg;
+      const cors = corsHintFor(base);
+      return msg + '. ' + LOCAL_NETWORK_HINT + (cors ? ' ' + cors : '');
     }
     function registerEndpointModel(base, model) {
       const id = 'endpoint:' + base + '::' + model;
@@ -19302,10 +19323,17 @@ self.addEventListener('message', async (e) => {
       }
     }
     imageModelSelect.addEventListener('change', () => { syncImageEngineUi(); });
-    imageEndpointInput.addEventListener('change', () => { syncImageEngineUi(); });
+    // Settings → Local servers carries the same URL (Open Q#20): one value, two fields, kept in step both ways.
+    const settingsImageEndpointInput = document.getElementById('settingsImageEndpointInput');
+    imageEndpointInput.addEventListener('change', () => { settingsImageEndpointInput.value = imageEndpointInput.value; syncImageEngineUi(); });
+    settingsImageEndpointInput.addEventListener('change', () => {
+      imageEndpointInput.value = settingsImageEndpointInput.value.trim();
+      try { localStorage.setItem('lm_image_endpoint_url', imageEndpointInput.value); } catch {}
+      if (isImageServer()) syncImageEngineUi();
+    });
     try {
       const savedImgEp = localStorage.getItem('lm_image_endpoint_url');
-      if (savedImgEp) imageEndpointInput.value = savedImgEp;
+      if (savedImgEp) { imageEndpointInput.value = savedImgEp; settingsImageEndpointInput.value = savedImgEp; }
     } catch {}
     // POST the prompt to sd-server and hand back the same {bytes,width,height,seed} shape the
     // in-tab worker returns, so the rendering path below is shared.

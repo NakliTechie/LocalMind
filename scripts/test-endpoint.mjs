@@ -82,12 +82,12 @@ export const harness = {
 };
 export { normalizeEndpointBase, discoverEndpointModels, clampEndpointTemperature, getEndpointTemperature,
   setEndpointTemperature, ENDPOINT_PRESETS, isLocalNetworkHost, endpointErrorMessage, LOCAL_NETWORK_HINT,
-  registerEndpointModel, generateViaEndpoint, _adapterParseToolCalls };
+  registerEndpointModel, generateViaEndpoint, _adapterParseToolCalls, corsHintFor };
 `);
 const mod = await import(pathToFileURL(modPath).href);
 const { harness, discoverEndpointModels, clampEndpointTemperature, getEndpointTemperature, setEndpointTemperature,
   ENDPOINT_PRESETS, isLocalNetworkHost, endpointErrorMessage, LOCAL_NETWORK_HINT, registerEndpointModel,
-  generateViaEndpoint, _adapterParseToolCalls } = mod;
+  generateViaEndpoint, _adapterParseToolCalls, corsHintFor } = mod;
 
 // SSE helper: `chunks` is an array of raw byte-strings handed to the reader one
 // per read() — a chunk boundary can fall anywhere, including mid-line.
@@ -176,12 +176,20 @@ const reset = () => { requests.length = 0; harness.reset(); for (const k of Obje
   assert.equal(endpointErrorMessage(new Error('endpoint HTTP 500'), 'http://127.0.0.1:8790/v1'), 'endpoint HTTP 500');
   assert.match(LOCAL_NETWORK_HINT, /local network access/i);
   assert.match(LOCAL_NETWORK_HINT, /Allow/);
+  // Per-server CORS fix (Open Q#10): Ollama, LM Studio and Atomic Chat each name their own setting; others none.
+  assert.match(corsHintFor('http://localhost:11434/v1'), /OLLAMA_ORIGINS=/);
+  assert.match(corsHintFor('http://127.0.0.1:1234/v1'), /LM Studio.*Enable CORS/);
+  assert.match(corsHintFor('http://localhost:1337/v1'), /Atomic Chat.*Trusted Hosts/);
+  assert.equal(corsHintFor('http://127.0.0.1:8790/v1'), '');
+  assert.equal(corsHintFor('not a url'), '');
+  assert.equal(endpointErrorMessage(net, 'http://localhost:11434/v1'), 'Failed to fetch. ' + LOCAL_NETWORK_HINT + ' ' + corsHintFor('http://localhost:11434/v1'));
 
   // Discovery path: both probes reject with a TypeError on a loopback host → hint.
   reset();
   fetchImpl = async () => { throw new TypeError('Failed to fetch'); };
   await assert.rejects(discoverEndpointModels('http://127.0.0.1:8790/v1'), (e) => e.message.includes(LOCAL_NETWORK_HINT));
   await assert.rejects(discoverEndpointModels('https://api.example.com/v1'), (e) => !e.message.includes(LOCAL_NETWORK_HINT));
+  await assert.rejects(discoverEndpointModels('http://localhost:1337/v1'), (e) => /Trusted Hosts/.test(e.message));
   // HTTP status (server up, nothing found) on a loopback host → no hint.
   fetchImpl = async () => new Response('{}', { status: 404 });
   await assert.rejects(discoverEndpointModels('http://127.0.0.1:8790/v1'), (e) => !e.message.includes(LOCAL_NETWORK_HINT) && /No models found/.test(e.message));
