@@ -11,7 +11,7 @@
 //   curl -L -o /tmp/bonsai2_index.html \
 //     https://huggingface.co/spaces/webml-community/ternary-bonsai-2-webgpu-kernels/raw/main/index.html
 //   node scripts/extract-ternary-bonsai-2-27b.mjs /tmp/bonsai2_index.html
-// Writes ../ternary_bonsai_2_27b.js next to the other vendored engines.
+// Writes ../src/ternary_bonsai_2_27b.js next to the other vendored engines; then run scripts/roll-in.mjs.
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -129,7 +129,7 @@ export function extractTernaryBonsai2Engine(html) {
 export async function writeTernaryBonsai2Engine(htmlPath) {
   const html = await readFile(htmlPath, 'utf8');
   const source = extractTernaryBonsai2Engine(html);
-  await writeFile(new URL('ternary_bonsai_2_27b.js', root), source);
+  await writeFile(new URL('src/ternary_bonsai_2_27b.js', root), source);
   return source;
 }
 
@@ -137,5 +137,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const htmlPath = process.argv[2];
   if (!htmlPath) throw new Error('usage: node scripts/extract-ternary-bonsai-2-27b.mjs <bonsai2_index.html>');
   const source = await writeTernaryBonsai2Engine(htmlPath);
-  console.log(`Wrote ternary_bonsai_2_27b.js (${source.length} bytes)`);
+  console.log(`Wrote src/ternary_bonsai_2_27b.js (${source.length} bytes); now run node scripts/roll-in.mjs`);
 }

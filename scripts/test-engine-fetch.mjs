@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const indexSource = await readFile(new URL('../index.html', import.meta.url), 'utf8');
-const workerSource = await readFile(new URL('../inference-worker.js', import.meta.url), 'utf8');
+const workerSource = await readFile(new URL('../src/inference-worker.js', import.meta.url), 'utf8');
 
 const block = (id) => {
   const m = new RegExp(`<script type="text/worker" id="${id}">([\\s\\S]*?)</script>`).exec(indexSource);

@@ -1,9 +1,9 @@
 // The rung-2a harness API, shared by the page (engine on the page thread) and
 // qwen3-moe-worker.mjs (engine in a dedicated worker, the way LocalMind runs engines).
 // Every method returns JSON-able results for a DevTools-protocol client.
-import { Qwen3MoeSsd, removeIngest } from '../qwen3_moe_ssd.js';
-import { Qwen35MoeSsd } from '../qwen35_moe_ssd.js';
-import { Gemma4MoeSsd } from '../gemma4_moe_ssd.js';
+import { Qwen3MoeSsd, removeIngest } from '../src/qwen3_moe_ssd.js';
+import { Qwen35MoeSsd } from '../src/qwen35_moe_ssd.js';
+import { Gemma4MoeSsd } from '../src/gemma4_moe_ssd.js';
 
 const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd };
 

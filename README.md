@@ -82,6 +82,7 @@ python3 -m http.server 8080              # serve your copy, then open http://loc
 scripts/image-server.sh                  # a local stable-diffusion.cpp server for Image mode on 127.0.0.1:7860
 node scripts/bench-engines.mjs           # decode tok/s per engine: drives Chrome, same model and prompt, exact token counts
 node scripts/test-inference-worker.mjs   # UI and worker contracts (the full gate is below)
+node scripts/roll-in.mjs                 # after editing a module in src/: copy every module into index.html
 ```
 
 With Settings → JavaScript API on, `window.localmind` is an OpenAI-shaped client for the loaded model, and
@@ -90,12 +91,13 @@ With Settings → JavaScript API on, `window.localmind` is an OpenAI-shaped clie
 ## Verify it yourself
 
 ```bash
-for t in download-stall endpoint engine-fetch inference-worker moe-expert-stream token-count; do
+for t in rollin download-stall endpoint engine-fetch inference-worker moe-expert-stream token-count; do
   node scripts/test-$t.mjs || { echo "FAILED: $t"; break; }
 done
 ```
 
-These six suites need Node and nothing else: no install, no model download, no browser. They refuse a sidebar or
+These seven suites need Node and nothing else: no install, no model download, no browser. They refuse a page that
+loads any script file besides itself (every module in `src/` is rolled into `index.html`), a sidebar or
 palette command that maps to no real control, a model without its Settings entry, a load failure that shows no Retry,
 a truncated model download that the cache would keep, and a token estimate outside its bounds against each model's
 own tokenizer. Two more suites drive Chrome with WebGPU: `scripts/test-qwen35-kernels.mjs` checks the SSD engine's

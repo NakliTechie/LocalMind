@@ -48,11 +48,11 @@ export function extractImageWorkerSource(html) {
 export async function writeImageWorker() {
   const html = await readFile(new URL('index.html', root), 'utf8');
   const source = extractImageWorkerSource(html);
-  await writeFile(new URL('image-inference-worker.js', root), source);
+  await writeFile(new URL('host/image-inference-worker.js', root), source);
   return source;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const source = await writeImageWorker();
-  console.log(`Wrote image-inference-worker.js (${source.length} bytes)`);
+  console.log(`Wrote host/image-inference-worker.js (${source.length} bytes)`);
 }

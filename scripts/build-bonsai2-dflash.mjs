@@ -48,6 +48,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (!dir) throw new Error('usage: node scripts/build-bonsai2-dflash.mjs <dflash-mlx-bonsai2 checkout>');
   const checkout = new URL(dir.endsWith('/') ? dir : dir + '/', `file://${process.cwd()}/`);
   const source = await buildDFlashModule(checkout);
-  await writeFile(new URL('ternary_bonsai_2_dflash.js', root), source);
-  console.log(`Wrote ternary_bonsai_2_dflash.js (${source.length} bytes)`);
+  await writeFile(new URL('src/ternary_bonsai_2_dflash.js', root), source);
+  console.log(`Wrote src/ternary_bonsai_2_dflash.js (${source.length} bytes); now run node scripts/roll-in.mjs`);
 }

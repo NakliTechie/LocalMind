@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { extractImageWorkerSource } from './extract-image-worker.mjs';
 
-const source = await readFile(new URL('../inference-worker.js', import.meta.url), 'utf8');
-const onnxSource = await readFile(new URL('../onnx-inference-worker.js', import.meta.url), 'utf8');
-const imageSource = await readFile(new URL('../image-inference-worker.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../src/inference-worker.js', import.meta.url), 'utf8');
+const onnxSource = await readFile(new URL('../host/onnx-inference-worker.js', import.meta.url), 'utf8');
+const imageSource = await readFile(new URL('../host/image-inference-worker.js', import.meta.url), 'utf8');
 const indexSource = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const protocol = await readFile(new URL('../docs/INFERENCE-PROTOCOL.md', import.meta.url), 'utf8');
-await import(new URL('../host-model-catalog.js', import.meta.url));
+await import(new URL('../host/host-model-catalog.js', import.meta.url));
 const catalog = globalThis.LocalMindHostCatalog;
 
 assert.match(source, /localmind\.inference\.v1/);
@@ -30,7 +30,7 @@ assert.doesNotMatch(onnxSource, /transformers@4\/\+esm/);
 assert.match(indexSource, /Qwen3_5ForConditionalGeneration/);
 assert.doesNotMatch(indexSource, /transformers@4\/\+esm/);
 // Ternary Bonsai 2 27B: the worker block, its engine file, and the registry entry agree.
-const bonsai2Engine = await readFile(new URL('../ternary_bonsai_2_27b.js', import.meta.url), 'utf8');
+const bonsai2Engine = await readFile(new URL('../src/ternary_bonsai_2_27b.js', import.meta.url), 'utf8');
 assert.match(bonsai2Engine, /export\{[^}]*zl as TernaryBonsai2[^}]*\}/);
 assert.match(bonsai2Engine, /var Ri="prism-ml\/Ternary-Bonsai-2-27B-gguf",Cl="Ternary-Bonsai-2-27B-PTQ1_0\.gguf"/);
 // System-prefix priming survives Qwen3.8's "No user query found" template: on a refused system-only
@@ -46,7 +46,7 @@ assert.match(indexSource, /const emsg = isImageServer\(\) \? endpointErrorMessag
 assert.match(indexSource, /async function syncImageEngineUi\(\) \{[^]*?if \(activeMode === 'image'\) refreshModeUI\(\);\s*if \(!server\) return;/);
 // ...and leaving the server engine clears its readiness line (it kept saying "No image server").
 assert.match(indexSource, /const leaving = [^\n]*\n[^]*?if \(!server && imageStepsWasServer\) \{\s*imageProgressFill\.style\.width = '0%';\s*imageProgressText\.textContent = imageIdleText\(\);/);
-assert.match(indexSource, /new URL\('ternary_bonsai_2_27b\.js', document\.baseURI\)/);
+assert.match(indexSource, /moduleUrl\('ternary_bonsai_2_27b\.js'\)/);
 assert.match(indexSource, /\(\{ TernaryBonsai2 \} = await import\(ENGINE_URL\)\)/);
 assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',\s*label: 'Ternary Bonsai 2 27B',\s*backend: 'bonsai2-webgpu'/);
 assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgpu/);
@@ -58,7 +58,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   assert.match(bonsai2Engine, /Lf\.set\("com\.xenova\.Lut2SmallMGemm"/);
   assert.match(bonsai2Engine, /class \$RewindSession\{/);
   assert.match(bonsai2Engine, /function lh\(e,t,r,\$v\)\{/);
-  const dflashModule = await readFile(new URL('../ternary_bonsai_2_dflash.js', import.meta.url), 'utf8');
+  const dflashModule = await readFile(new URL('../src/ternary_bonsai_2_dflash.js', import.meta.url), 'utf8');
   // Every engine internal the runner reaches for (I.x) is exported by the hook. A stale engine
   // once lacked r2, so release() threw inside its try and leaked the checkpoint slot's buffers.
   const internals = new Set([...(/zl\.__dflashInternals=\{([\s\S]*?)\};/.exec(bonsai2Engine)[1]).matchAll(/get ([\w$]+)\(\)/g)].map((m) => m[1]));
@@ -69,7 +69,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   assert.match(dflashModule, /async \*generate\(tokenIds, cache, generationArgs, beginDecode, eosTokenId\)/);
   assert.match(dflashModule, /release\(cache\)/);
   assert.doesNotMatch(dflashModule, /^import\s/m);
-  assert.match(indexSource, /new URL\('ternary_bonsai_2_dflash\.js', document\.baseURI\)/);
+  assert.match(indexSource, /moduleUrl\('ternary_bonsai_2_dflash\.js'\)/);
   assert.match(indexSource, /const DRAFTER_URL = 'https:\/\/huggingface\.co\/naklitechie\/Qwen3\.8-27B-DFlash2-ternary-bonsai2\/resolve\/main\/Qwen3\.8-27B-DFlash2-r3-Q4_K_M\.gguf'/);
   assert.match(indexSource, /post\(\{ type: 'ready', backend: 'webgpu' \}\);\s*if \(d\.dflash !== false\) attachDFlash\(\)/);
   assert.match(indexSource, /target\.model\.dflashRunner = runner;/);
@@ -103,7 +103,7 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   assert.doesNotMatch(filled, /__MOE_SSD_/);
   new Function(`let hfToken = null; const engineFetch = fetch;\n${filled}`);   // parses, or throws SyntaxError
   for (const [file, cls] of [['gemma4_moe_ssd.js', 'Gemma4MoeSsd'], ['qwen35_moe_ssd.js', 'Qwen35MoeSsd']]) {
-    assert.match(await readFile(new URL(`../${file}`, import.meta.url), 'utf8'), new RegExp(`export class ${cls} extends Qwen3MoeSsd`));
+    assert.match(await readFile(new URL(`../src/${file}`, import.meta.url), 'utf8'), new RegExp(`export class ${cls} extends Qwen3MoeSsd`));
   }
 }
 // Gemma 4 E2B WebGPU kernels (restored 2026-09-24): the engine file is generated by
@@ -114,12 +114,12 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   const { createHash } = await import('node:crypto');
   const build = await readFile(new URL('./build-gemma-4-e2b.mjs', import.meta.url), 'utf8');
   assert.match(build, /UPSTREAM_SHA256 = '0234c0e866bfaa9623e938a7cfa7f5740cca22532cc1112dd4e8915b97f78d62'/);
-  const engine = await readFile(new URL('../gemma-4-e2b.js', import.meta.url));
+  const engine = await readFile(new URL('../src/gemma-4-e2b.js', import.meta.url));
   assert.equal(createHash('sha256').update(engine).digest('hex'), '84540424d55384146e0dd695d303f0d84090809606f6ee77c0d5e44b40609d23', 'gemma-4-e2b.js differs from the last build: rerun scripts/build-gemma-4-e2b.mjs and update this pin');
-  assert.match(indexSource, /new URL\('ple-opfs\.js', document\.baseURI\)/);
+  assert.match(indexSource, /moduleUrl\('ple-opfs\.js'\)/);
   assert.match(indexSource, /'gemma4-e2b-webgpu': \{\s*id: 'google\/gemma-4-E2B-it-qat-mobile-transformers',[^]*?backend: 'gemma4-webgpu'/);
   assert.match(indexSource, /: isGemma4Webgpu \? createGemma4WebgpuWorker\(\)/);
-  assert.match(indexSource, /new URL\('gemma-4-e2b\.js', document\.baseURI\)/);
+  assert.match(indexSource, /moduleUrl\('gemma-4-e2b\.js'\)/);
   const retired = indexSource.slice(indexSource.indexOf('const RETIRED_MODEL_REPOS = ['), indexSource.indexOf('];', indexSource.indexOf('const RETIRED_MODEL_REPOS = [')));
   assert.doesNotMatch(retired, /gemma-4-E2B-it-qat-mobile-transformers/, 'a live model must not be swept as retired');
   assert.match(indexSource, /'gemma4-e4b-webgpu': \{\s*id: 'google\/gemma-4-E4B-it-qat-mobile-transformers',[^]*?backend: 'gemma4-webgpu'/);

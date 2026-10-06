@@ -51,7 +51,7 @@ let model = null;
 let engine = null;
 
 async function importEngine(patches) {
-  const url = new URL('../gemma-4-e2b.js' + self.location.search, self.location.href).href;
+  const url = new URL('../src/gemma-4-e2b.js' + self.location.search, self.location.href).href;
   if (!patches || !patches.length) return import(url);
   let src = await (await fetch(url)).text();
   for (const [from, to] of patches) {
@@ -70,7 +70,7 @@ const handlers = {
     const t0 = performance.now();
     const status = [];
     const ple = mode === 'opfs'
-      ? (await import(new URL('../ple-opfs.js' + self.location.search, self.location.href).href)).createGemmaPle({ source: modelId ? { repo: modelId } : null, ...pleOpts, onStatus: (s) => status.push(s) })
+      ? (await import(new URL('../src/ple-opfs.js' + self.location.search, self.location.href).href)).createGemmaPle({ source: modelId ? { repo: modelId } : null, ...pleOpts, onStatus: (s) => status.push(s) })
       : undefined;
     model = await engine.Gemma4Mobile.load(modelId, { ple, ...loadOpts });
     const loadMs = performance.now() - t0;

@@ -1,12 +1,9 @@
 name: Sync to Hugging Face Space
 
-# Ships index.html plus every sibling file it loads at runtime. The Space is
-# `sdk: static`, so anything not copied here 404s there. Keep the two lists
-# below (paths: and RUNTIME_FILES) identical. To re-derive the list, walk the
-# import graph from index.html:
-#   grep -n "new URL('" index.html          # same-origin worker + engine URLs
-#   grep -n "new URL('./" inference-worker.js   # real (non-blob) worker imports
-#   grep -n "from './" ple-opfs.js              # module imports of the engine helpers
+# LocalMind ships as one file: every runtime module in src/ is rolled into
+# index.html by scripts/roll-in.mjs, so index.html is the only file the Space
+# needs. The Space is `sdk: static`. The step also removes the sibling .js files
+# earlier syncs copied there, so the Space cannot serve a stale engine.
 # The Space's README.md is HF metadata; it is never copied or staged.
 
 on:
@@ -14,20 +11,6 @@ on:
     branches: [main]
     paths:
       - index.html
-      - inference-worker.js
-      - lfm2_5.js
-      - gemma-4-e2b.js
-      - ple-opfs.js
-      - opfs-reader.js
-      - gguf.js
-      - ingest.js
-      - rows.js
-      - qwen3_moe_ssd.js
-      - qwen35_moe_ssd.js
-      - gemma4_moe_ssd.js
-      - moe-expert-stream.js
-      - ternary_bonsai_2_27b.js
-      - ternary_bonsai_2_dflash.js
       - .github/workflows/sync-hf-space.yml
   workflow_dispatch:
 
@@ -37,17 +20,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Check index.html carries src/
+        run: node scripts/roll-in.mjs --check
+
       - name: Push to HF Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          RUNTIME_FILES="index.html inference-worker.js lfm2_5.js gemma-4-e2b.js ple-opfs.js opfs-reader.js gguf.js ingest.js rows.js qwen3_moe_ssd.js qwen35_moe_ssd.js gemma4_moe_ssd.js moe-expert-stream.js ternary_bonsai_2_27b.js ternary_bonsai_2_dflash.js"
+          RETIRED="inference-worker.js lfm2_5.js gemma-4-e2b.js ple-opfs.js opfs-reader.js gguf.js ingest.js rows.js qwen3_moe_ssd.js qwen35_moe_ssd.js gemma4_moe_ssd.js moe-expert-stream.js ternary_bonsai_2_27b.js ternary_bonsai_2_dflash.js"
           git clone https://NakliTechie:$HF_TOKEN@huggingface.co/spaces/naklitechie/LocalMind /tmp/hf-space
-          cp $RUNTIME_FILES /tmp/hf-space/
+          cp index.html /tmp/hf-space/
           cd /tmp/hf-space
           git config user.email "chirag@naklitechie.com"
           git config user.name "NakliTechie"
-          git add $RUNTIME_FILES
+          git rm -q --ignore-unmatch $RETIRED
+          git add index.html
           git diff --cached --quiet && echo "No changes" && exit 0
           git commit -m "Sync from GitHub $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git push

@@ -7,8 +7,8 @@
 import assert from 'node:assert/strict';
 import { openSync, readSync, closeSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { splitQ4, parseGguf, tensorBytes, Q4_BLOCK } from '../qwen3_moe_ssd.js';
-import { planLayoutGemma4, planUnitsGemma4, configFromGgufGemma4 } from '../gemma4_moe_ssd.js';
+import { splitQ4, parseGguf, tensorBytes, Q4_BLOCK } from '../src/qwen3_moe_ssd.js';
+import { planLayoutGemma4, planUnitsGemma4, configFromGgufGemma4 } from '../src/gemma4_moe_ssd.js';
 
 const f16 = (h) => { const s = h >> 15 ? -1 : 1, e = (h >> 10) & 31, m = h & 1023; return e === 0 ? s * m * 2 ** -24 : e === 31 ? NaN : s * (1 + m / 1024) * 2 ** (e - 15); };
 

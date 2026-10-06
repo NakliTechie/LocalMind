@@ -94,16 +94,24 @@ The test suite asserts the retired list never names a live registry entry.
 
 ## Build & deployment
 
-Zero build tooling. One HTML file (~20k lines, ~1 MB), the DOM-free
-`inference-worker.js`, plus four vendored sibling engine modules —
-`lfm2_5.js` (~650 KB), `gemma-4-e2b.js` (~545 KB), `ternary_bonsai_2_27b.js`
-(~1.4 MB) and the DFlash 2 runner `ternary_bonsai_2_dflash.js` (~70 KB) — and
-two small helpers the Gemma 4 engine imports for its PLE-from-disk mode,
-`ple-opfs.js` and `opfs-reader.js`.
-Everything else loads from CDN with SRI where possible.
+LocalMind ships as one file, `index.html` (~4.2 MB, ~770 KB compressed). The
+JavaScript modules it runs live in [`src/`](../src/): the DOM-free
+`inference-worker.js`, the four vendored engines (`lfm2_5.js`, `gemma-4-e2b.js`,
+`ternary_bonsai_2_27b.js` and the DFlash 2 runner `ternary_bonsai_2_dflash.js`),
+the three SSD-streamed MoE engines, and the disk tier they share with
+[diskformer.js](https://github.com/NakliTechie/diskformer.js) (`opfs-reader.js`,
+`moe-expert-stream.js`, `gguf.js`, `ingest.js`, `rows.js`, `ple-opfs.js`).
+[`scripts/roll-in.mjs`](../scripts/roll-in.mjs) copies each one into
+`index.html` as an inert `<script type="text/plain" data-module="…">` block.
+The page's `moduleUrl()` turns a block into a blob URL the first time a worker
+needs it, after rewriting its relative imports to the dependencies' blob URLs.
+The browser downloads the blocks with the page but parses none of them until a
+model needs it. `scripts/test-rollin.mjs` fails when a block differs from its
+`src/` file, when the page builds a URL for a sibling script, or when the
+rewritten module graph does not import. Edit `src/`, then run
+`node scripts/roll-in.mjs`. Everything else loads from CDN with SRI where possible.
 
-Deploy by serving `index.html`, `inference-worker.js`, the four engine
-modules and the two helpers together from any static host.
+Deploy by serving `index.html` from any static host.
 
 `scripts/bench-engines.mjs` measures the engines against each other: it launches Chrome over the
 DevTools protocol, drives the page through `window.localmind` (no tools, greedy, 256 tokens, 3 runs,
@@ -118,15 +126,16 @@ won't work because ES module workers and WebGPU both require an HTTP origin.
 ## Using the workers from another host
 
 The LFM2 engine is exposed through the DOM-free
-[`inference-worker.js`](../inference-worker.js) boundary used by LocalMind
-itself. Hosts can also use the conservative
-[`host-model-catalog.js`](../host-model-catalog.js) and
-[`onnx-inference-worker.js`](../onnx-inference-worker.js) for the supported
+[`inference-worker.js`](../src/inference-worker.js) boundary used by LocalMind
+itself (with its engine [`lfm2_5.js`](../src/lfm2_5.js) beside it). Hosts can also use the conservative
+[`host-model-catalog.js`](../host/host-model-catalog.js) and
+[`onnx-inference-worker.js`](../host/onnx-inference-worker.js) for the supported
 Gemma 4 and Qwen3.5 WebGPU paths. The same catalog publishes the on-device Bonsai
 FLUX.2-Klein model through
-[`image-inference-worker.js`](../image-inference-worker.js); the worker is
+[`image-inference-worker.js`](../host/image-inference-worker.js); the worker is
 generated from LocalMind's inline image engine by
 [`scripts/extract-image-worker.mjs`](../scripts/extract-image-worker.mjs).
+The host-only files live in [`host/`](../host/); LocalMind's own page does not load them.
 NakliOS vendors these tested artifacts for its shared `naklios.ai` broker;
 model selection, cloud/local endpoint credentials, consent, and app isolation
 remain host responsibilities. The worker protocols are documented in

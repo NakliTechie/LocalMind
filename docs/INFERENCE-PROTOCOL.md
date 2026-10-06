@@ -1,13 +1,15 @@
 # LocalMind inference protocol v1
 
-LocalMind exposes DOM-free inference artifacts for hosts. `inference-worker.js`
-runs the default custom-WGSL LFM2.5 engine. `onnx-inference-worker.js` runs the
+LocalMind exposes DOM-free inference artifacts for hosts. `src/inference-worker.js`
+runs the default custom-WGSL LFM2.5 engine (`src/lfm2_5.js`, which it imports from
+its own directory). `host/onnx-inference-worker.js` runs the
 curated Gemma 4 and Qwen3.5 models through pinned Transformers.js
 4.2.0/WebGPU.
-`image-inference-worker.js` runs the Bonsai FLUX.2-Klein image engine through
+`host/image-inference-worker.js` runs the Bonsai FLUX.2-Klein image engine through
 WebGPU. It is generated from LocalMind's inline workbench engine so the
 standalone app and host artifact cannot silently drift.
-`host-model-catalog.js` is the versioned model metadata shared with NakliOS.
+`host/host-model-catalog.js` is the versioned model metadata shared with NakliOS.
+A host copies these files into one directory, as NakliOS does in `vendor/localmind/`.
 This keeps model runtimes independently versioned while allowing NakliOS to own
 selection, consent, endpoint credentials, scheduling, and app isolation.
 

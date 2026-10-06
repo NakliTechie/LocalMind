@@ -133,7 +133,7 @@ if (isMain) {
   if (sha !== UPSTREAM_SHA256) console.error(`warning: upstream sha256 ${sha} != pinned ${UPSTREAM_SHA256}; markers still guard the patches`);
   const helpers = await readFile(fileURLToPath(new URL('./gemma-4-e2b-ple.inc.js', import.meta.url)), 'utf8');
   const out = applyGemmaPatches(src, helpers);
-  const dest = new URL('../gemma-4-e2b.js', import.meta.url);
+  const dest = new URL('../src/gemma-4-e2b.js', import.meta.url);
   await writeFile(dest, out);
-  console.error(`wrote ${dest.pathname} (${out.length} bytes, +${out.length - src.length} over upstream)`);
+  console.error(`wrote ${dest.pathname} (${out.length} bytes, +${out.length - src.length} over upstream); now run node scripts/roll-in.mjs`);
 }

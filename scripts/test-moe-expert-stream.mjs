@@ -4,8 +4,8 @@
 // mapped staging ring (the default upload path) and once through queue.writeBuffer.
 //   node scripts/test-moe-expert-stream.mjs
 import assert from 'node:assert/strict';
-import { ExpertStreamer } from '../moe-expert-stream.js';
-import { ingestProgress } from '../qwen3_moe_ssd.js';
+import { ExpertStreamer } from '../src/moe-expert-stream.js';
+import { ingestProgress } from '../src/qwen3_moe_ssd.js';
 
 // Ingest progress reaches the host as 'weights' with byte counts (the 2026-10-04 bug: the event's own
 // status overwrote it, the worker posted nothing, and the load watchdog killed a 37 GB download).

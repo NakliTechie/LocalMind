@@ -5,8 +5,8 @@
 import assert from 'node:assert/strict';
 import { openSync, readSync, closeSync, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { parseGguf } from '../qwen3_moe_ssd.js';
-import { GemmaTokenizer } from '../gemma4_moe_ssd.js';
+import { parseGguf } from '../src/qwen3_moe_ssd.js';
+import { GemmaTokenizer } from '../src/gemma4_moe_ssd.js';
 
 const path = process.argv[2] || `${homedir()}/.cache/localmind-moe/gemma-4-26B_q4_0-it.gguf`;
 if (!existsSync(path)) { console.log(`gemma4 tokenizer: skipped (${path} not found)`); process.exit(0); }

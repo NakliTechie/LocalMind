@@ -28,7 +28,7 @@ await send('Page.enable');
 await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/scripts/qwen3-moe-harness.html` });
 await sleep(1500);
 const r = await send('Runtime.evaluate', { expression: `(async () => {
-const { QWEN35_KERNELS: KS } = await import('/qwen35_moe_ssd.js?v=' + Date.now());
+const { QWEN35_KERNELS: KS } = await import('/src/qwen35_moe_ssd.js?v=' + Date.now());
 const ad = await navigator.gpu.requestAdapter(); const dev = await ad.requestDevice({ requiredFeatures: ['shader-f16'] });
 let seed = 12345; const rnd = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed / 4294967296 * 2 - 1; };
 const R = (n, s = 1) => Float32Array.from({ length: n }, () => rnd() * s);
