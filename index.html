@@ -7389,7 +7389,7 @@ reply({ type: 'worker-ready' });
 // recipe (fused fp16 for WebGPU) are in reference/MDLM-algorithm.md.
 
 import * as ortDefault from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.26.0/dist/ort.webgpu.min.mjs';
-import { AutoTokenizer } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
+import { AutoTokenizer } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
 
 // Tiny-A2D Qwen3-0.6B MDLM token ids (tokenizer.mask_token_id / <|im_end|>).
 export const MASK_ID = 151669n;
@@ -8499,7 +8499,7 @@ self.onmessage = async (e) => {
 // WASM by default so it never contends with the chat model's WebGPU. On-device
 // only — the sole network touch is the one-time model fetch. (Non-English turns
 // route to the existing Whisper worker on the main thread instead.)
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
 
@@ -8542,7 +8542,7 @@ self.onmessage = async (e) => {
 // every module fp16 (~1.0 GB); Light = q4f16 (~0.36 GB) for phones. (q4f16 was
 // degenerate on the 256M under 4.2.0; the 500M on this 3.7.1 pin is under test.)
 //
-// VERSION PIN — this vision worker pins transformers.js to 3.7.1, NOT the @4.2.0
+// VERSION PIN — this vision worker pins transformers.js to 3.7.1, NOT the @4.3.1
 // the chat/OCR workers use. Verified live 2026-08-21: on 4.2.0 SmolVLM's Idefics3
 // processor preprocesses fine but generation is DEGENERATE (pure gibberish); on
 // 3.7.1 the identical model+image+dtype produces a coherent, image-grounded
@@ -8629,7 +8629,7 @@ import {
   ChatterboxModel,
   AutoProcessor,
   Tensor,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
 
 env.allowLocalModels = true;
 env.localModelPath = '/models/';
@@ -15514,7 +15514,7 @@ import {
   pipeline,
   AutoTokenizer,
   AutoModelForSequenceClassification,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
@@ -15810,7 +15810,7 @@ import {
   Sam3TrackerModel,
   AutoProcessor,
   RawImage,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
@@ -15933,7 +15933,7 @@ self.addEventListener('message', async (e) => {
 
     // ── OCR worker factory (GLM-OCR via @huggingface/transformers, WebGPU) ──
     // GLM-OCR (zai-org, 0.9B, MIT) is a Qwen2.5-VL-family vision→text model;
-    // transformers.js 4.2.0 ships GlmOcrForConditionalGeneration + Glm46VProcessor
+    // transformers.js 4.2.0+ ships GlmOcrForConditionalGeneration + Glm46VProcessor
     // (resolved by AutoProcessor via processor_class). Per-module dtype keeps the
     // CogViT vision encoder in fp16 (encoders are quantization-sensitive) and the
     // GLM-0.5B decoder at q4f16. Independent WebGPU worker — one heavy worker
@@ -15951,7 +15951,7 @@ import {
   RawImage,
   TextStreamer,
   InterruptableStoppingCriteria,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
@@ -16124,7 +16124,7 @@ import {
   AutoTokenizer,
   WhisperForConditionalGeneration,
   full,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
@@ -16606,7 +16606,7 @@ __rdbCleanup();
 let env, AutoTokenizer, AutoModelForCausalLM, AutoProcessor, Gemma4ForConditionalGeneration, Qwen3_5ForConditionalGeneration, load_image, TextStreamer, InterruptableStoppingCriteria;
 let stopping_criteria;
 
-const __modReady = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm').then((m) => {
+const __modReady = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm').then((m) => {
   env = m.env;
   AutoTokenizer = m.AutoTokenizer;
   AutoModelForCausalLM = m.AutoModelForCausalLM;
@@ -16669,7 +16669,7 @@ async function loadMultimodal(modelId, dtype, modelClass) {
     ? Qwen3_5ForConditionalGeneration
     : Gemma4ForConditionalGeneration;
   if (!ConditionalGenerationModel) {
-    throw new Error('Transformers.js 4.2.0 does not export ' + modelClass);
+    throw new Error('Transformers.js 4.3.1 does not export ' + modelClass);
   }
   model = await ConditionalGenerationModel.from_pretrained(modelId, {
     dtype: dtype,
