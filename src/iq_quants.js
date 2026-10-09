@@ -9,6 +9,7 @@
  * Kernels (generated per type, sharing one binding layout):
  *   mvKernel(t)    y[m] = Σ_k W[m][k]·x[k]                 bindings: x, wq, grid, y, P{M, N, rowBytes (GPU layout)}
  *   mmKernel(t)    y[t·M + m] = Σ_k x[t·N + k]·W[m][k]      + Q{T, …}; tiles of 64 rows × 64 tokens
+ *   mmSgKernel(t)  the same on subgroup matrices (f16 in, f32 accumulate) where the adapter has them
  *   embedKernel(t) y[i] = W[token][i]                       bindings: wq, grid, y, Tok, P{N, rowBytes}
  *   embedBKernel(t) the same for T token ids               bindings: wq, grid, ids, y, P, Q
  * The codebooks (iq2 / iq3 / iq1 grids, kvalues_iq4nl) live in one storage buffer: gridData().
@@ -334,6 +335,64 @@ var<workgroup> xs: array<f32, 2048>;   // [k][token]
     let m = m0 + rr + a; if (m >= p.M) { continue; }
     for (var b = 0u; b < 4u; b++) { let t = t0 + tc + b; if (t < qd.T) { y[t * p.M + m] = acc[a][b]; } }
   }
+}`;
+}
+
+// The same GEMM on subgroup matrices (chromium-experimental-subgroup-matrix; Apple's 8×8 simdgroup units): weights and
+// activations go through shared memory as f16, products accumulate in f32 — llama.cpp Metal's mul_mm recipe. A
+// workgroup computes 64 rows × MM_SG_TOKENS tokens. The 256 threads are 8 subgroups of 32; subgroup s owns rows
+// 16·(s/2)..+15 and tokens (MM_SG_TOKENS/2)·(s%2).. as 2 × (MM_SG_TOKENS/16) accumulators
+// of 8 × 8. Results store straight into token-major y; 8-row blocks past M and 8-token blocks past T are skipped
+// (rows T..ceil8(T)-1 of a stored block may receive values: callers size y for whole 8-token blocks and read only
+// t < T). Needs M % 8 == 0 and subgroups of exactly 32. Dispatch (ceil(M / 64), ceil(T / MM_SG_TOKENS)).
+export const MM_SG_TOKENS = 64;   // 128 measured slower on an M4 Pro (3.7 vs 2.8 s per 256-token chunk): register pressure
+export function mmSgKernel(type) {
+  const TB = MM_SG_TOKENS / 16;   // 8-token blocks per subgroup
+  const R = (n) => Array.from({ length: n }, (_, i) => i);
+  const acc = R(2).flatMap((a) => R(TB).map((b) => `c${a}_${b}`));
+  return `enable f16;
+enable subgroups;
+enable chromium_experimental_subgroup_matrix;
+diagnostic(off, chromium.subgroup_matrix_uniformity);
+struct P { M: u32, N: u32, rowBytes: u32, pad: u32 }
+struct Q { T: u32, pos0: u32, S: u32, pad: u32 }
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read> wq: array<u32>;
+@group(0) @binding(2) var<storage, read> grid: array<u32>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@group(0) @binding(5) var<uniform> qd: Q;
+${deqFn(type)}
+var<workgroup> ws: array<f16, 2048>;                    // [row][k], 64 × 32
+var<workgroup> xs: array<f16, ${MM_SG_TOKENS * 32}>;    // [token][k], ${MM_SG_TOKENS} × 32
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  _ = grid[0];
+  let m0 = wg.x * 64u; let t0 = wg.y * ${MM_SG_TOKENS}u; let i = l.x;
+  let lr = i >> 2u; let lg = i & 3u;
+  let sg = i >> 5u; let rb = (sg >> 1u) * 16u; let tb = (sg & 1u) * ${MM_SG_TOKENS / 2}u;
+  let wrow = min(m0 + lr, p.M - 1u) * p.rowBytes;
+  let nc = p.N / 32u;
+${acc.map((v) => `  var ${v}: subgroup_matrix_result<f32, 8, 8>;`).join('\n')}
+  for (var c = 0u; c < nc; c++) {
+    let v = deq8(wrow + (c / ${CPB(type)}u) * ${gpuBlock(type)}u, c % ${CPB(type)}u, lg);
+    for (var j = 0u; j < 8u; j++) { ws[lr * 32u + lg * 8u + j] = f16(v[j]); }
+    for (var e = i; e < ${MM_SG_TOKENS * 32}u; e += 256u) {
+      let t = t0 + (e >> 5u);
+      xs[e] = select(f16(0.0), f16(x[min(t, qd.T - 1u) * p.N + c * 32u + (e & 31u)]), t < qd.T);
+    }
+    workgroupBarrier();
+    for (var k = 0u; k < 32u; k += 8u) {
+      let a0 = subgroupMatrixLoad<subgroup_matrix_left<f16, 8, 8>, row_major>(&ws, rb * 32u + k, 32u);
+      let a1 = subgroupMatrixLoad<subgroup_matrix_left<f16, 8, 8>, row_major>(&ws, (rb + 8u) * 32u + k, 32u);
+${R(TB).map((b) => `      let b${b} = subgroupMatrixLoad<subgroup_matrix_right<f16, 8, 8>, col_major>(&xs, (tb + ${8 * b}u) * 32u + k, 32u);`).join('\n')}
+${R(2).flatMap((a) => R(TB).map((b) => `      c${a}_${b} = subgroupMatrixMultiplyAccumulate(a${a}, b${b}, c${a}_${b});`)).join('\n')}
+    }
+    workgroupBarrier();
+  }
+  let tA = t0 + tb;
+${R(2).map((a) => `  if (m0 + rb + ${8 * a}u < p.M) {
+${R(TB).map((b) => `    if (tA + ${8 * b}u < qd.T) { subgroupMatrixStore<col_major>(&y, (tA + ${8 * b}u) * p.M + m0 + rb + ${8 * a}u, c${a}_${b}, p.M); }`).join('\n')}
+  }`).join('\n')}
 }`;
 }
 

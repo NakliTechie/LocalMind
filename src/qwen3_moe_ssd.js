@@ -561,11 +561,11 @@ export class Qwen3MoeSsd {
     if (!adapter) throw new Error('no WebGPU adapter');
     if (!adapter.features.has('shader-f16')) throw new Error('this GPU lacks shader-f16');
     const L = adapter.limits;
-    // subgroups: optional; an engine may use subgroup kernels when the adapter offers them.
-    const features = ['shader-f16', ...(adapter.features.has('subgroups') ? ['subgroups'] : [])];
+    // subgroups, subgroup matrices: optional; an engine may use subgroup (matrix) kernels when the adapter offers them.
+    const features = ['shader-f16', ...['subgroups', 'chromium-experimental-subgroup-matrix'].filter((f) => adapter.features.has(f))];
     const device = await adapter.requestDevice({
       requiredFeatures: features,
-      requiredLimits: { maxBufferSize: L.maxBufferSize, maxStorageBufferBindingSize: L.maxStorageBufferBindingSize, maxStorageBuffersPerShaderStage: L.maxStorageBuffersPerShaderStage, maxComputeWorkgroupsPerDimension: L.maxComputeWorkgroupsPerDimension },
+      requiredLimits: { maxBufferSize: L.maxBufferSize, maxStorageBufferBindingSize: L.maxStorageBufferBindingSize, maxStorageBuffersPerShaderStage: L.maxStorageBuffersPerShaderStage, maxComputeWorkgroupsPerDimension: L.maxComputeWorkgroupsPerDimension, maxComputeWorkgroupStorageSize: L.maxComputeWorkgroupStorageSize },
     });
     device.lost.then((info) => console.warn('qwen3-moe-ssd: GPU device lost:', info.message));
 

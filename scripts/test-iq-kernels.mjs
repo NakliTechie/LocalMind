@@ -7,7 +7,7 @@
 //      repack — padded types go through repackKernel first, as at engine upload
 //      embed  — every dequantized value, row by row, against gguf-py      (tolerance: f32 rounding)
 //      mv     — W·x for a random x against the float64 product            (relative to Σ|w·x|)
-//      mm     — the 16-row × 5-token tiled GEMM against the same product
+//      mm     — the tiled GEMM (f32, and the subgroup-matrix f16 variant where the adapter has it) against the same product
 //
 //   node scripts/test-iq-kernels.mjs [--gguf path/to/Underdog-Saluki-27B-1.0-IQ2-mix.gguf]
 // Needs python3 with the `gguf` package (pip install gguf).
@@ -21,7 +21,7 @@ import { QTYPES, rowBytes, gpuRowBytes, PADDED, gridData, GRID_OFF } from '../sr
 const argv = process.argv.slice(2);
 const GGUF = argv.includes('--gguf') ? argv[argv.indexOf('--gguf') + 1] : join(homedir(), '.cache/localmind-models/Underdog-Saluki-27B-1.0-IQ2-mix.gguf');
 const URL_ = 'https://huggingface.co/ConwayResearch/Underdog-Saluki-27B-1.0/resolve/main/Underdog-Saluki-27B-1.0-IQ2-mix.gguf';
-const SIZE = 7898369152, ROWS = 16, TOKENS = 5;
+const SIZE = 7898369152, ROWS = 16, TOKENS = 75;   // 75 tokens: past the first 64-token half, ending mid-block
 const tmp = mkdtempSync(join(tmpdir(), 'iqk-'));
 let failed = false;
 const report = (pass, msg) => { failed ||= !pass; console.log(`${pass ? 'ok  ' : 'FAIL'} ${msg}`); };
@@ -97,7 +97,9 @@ const ev = async (expression) => {
 };
 await ev(`(async () => {
   const Q = await import('/src/iq_quants.js?v=' + Date.now());
-  const ad = await navigator.gpu.requestAdapter(); const dev = await ad.requestDevice({ requiredFeatures: ['shader-f16'] });
+  const ad = await navigator.gpu.requestAdapter();
+  const sgm = ['subgroups', 'chromium-experimental-subgroup-matrix'].every((f) => ad.features.has(f)) && ad.info.subgroupMinSize === 32 && ad.info.subgroupMaxSize === 32;
+  const dev = await ad.requestDevice({ requiredFeatures: ['shader-f16', ...(sgm ? ['subgroups', 'chromium-experimental-subgroup-matrix'] : [])] });
   const S = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
   const buf = (arr) => { const b = dev.createBuffer({ size: Math.max(16, Math.ceil(arr.byteLength / 4) * 4), usage: S }); dev.queue.writeBuffer(b, 0, arr.buffer, arr.byteOffset, Math.ceil(arr.byteLength / 4) * 4 <= arr.buffer.byteLength - arr.byteOffset ? Math.ceil(arr.byteLength / 4) * 4 : arr.byteLength); return b; };
   const uni = (words) => { const b = dev.createBuffer({ size: Math.max(16, words.length * 4), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }); dev.queue.writeBuffer(b, 0, Uint32Array.from(words)); return b; };
@@ -109,9 +111,9 @@ await ev(`(async () => {
     const err = await dev.popErrorScope(); if (err) throw new Error(err.message);
   };
   const read = async (b, n) => { const s = dev.createBuffer({ size: n * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }); const e = dev.createCommandEncoder(); e.copyBufferToBuffer(b, 0, s, 0, n * 4); dev.queue.submit([e.finish()]); await s.mapAsync(1); const r = new Float32Array(s.getMappedRange().slice(0)); s.unmap(); return r; };
-  window.__iq = { Q, dev, buf, uni, run, read, grid: buf(Q.gridData()) };
-  return true;
-})()`);
+  window.__iq = { Q, dev, buf, uni, run, read, grid: buf(Q.gridData()), sgm, cfgs: ad.info.subgroupMatrixConfigs };
+  return { sgm, cfgs: JSON.stringify(ad.info.subgroupMatrixConfigs) };
+})()`).then((r) => { console.log(`subgroup matrices: ${r.sgm} ${r.cfgs}`); return r; });
 
 const ROWS_ = ROWS;
 let seed = 7; const rnd = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed / 4294967296 * 2 - 1; };
@@ -140,7 +142,13 @@ for (const fx of fixtures) {
     await run(Q.mvKernel('${type}'), [buf(x.subarray(0, N)), wq, grid, yv, uni([M, N, grb, 0])], Math.ceil(M / Q.MV_ROWS));
     const ym = buf(new Float32Array(T * M));
     await run(Q.mmKernel('${type}'), [buf(x), wq, grid, ym, uni([M, N, grb, 0]), uni([T, 0, T, 0])], Math.ceil(M / Q.MM_TILE), Math.ceil(T / Q.MM_TILE));
-    return { emb: Array.from(emb), mv: Array.from(await read(yv, M)), mm: Array.from(await read(ym, T * M)) };
+    let mmsg = null;
+    if (window.__iq.sgm) {   // y sized for whole 8-token blocks, as the engine's batch buffers are
+      const ys = buf(new Float32Array(Math.ceil(T / 8) * 8 * M));
+      await run(Q.mmSgKernel('${type}'), [buf(x), wq, grid, ys, uni([M, N, grb, 0]), uni([T, 0, T, 0])], Math.ceil(M / Q.MM_TILE), Math.ceil(T / Q.MM_SG_TOKENS));
+      mmsg = Array.from(await read(ys, T * M));
+    }
+    return { emb: Array.from(emb), mv: Array.from(await read(yv, M)), mm: Array.from(await read(ym, T * M)), mmsg };
   })()`);
   // embed: elementwise against gguf-py.
   let maxE = 0, scaleE = 0;
@@ -160,6 +168,11 @@ for (const fx of fixtures) {
   report(wv <= 1e-5, `${type} mv: worst |Δ| / Σ|w·x| ${wv.toExponential(2)}`);
   let wm = 0; for (let t = 0; t < TOKENS; t++) wm = Math.max(wm, check((m) => res.mm[t * ROWS + m], t));
   report(wm <= 1e-5, `${type} mm (${TOKENS} tokens): worst |Δ| / Σ|w·x| ${wm.toExponential(2)}`);
+  if (res.mmsg) {
+    // f16 inputs (weights and activations rounded once, as llama.cpp Metal's mul_mm does), f32 accumulation.
+    let ws = 0; for (let t = 0; t < TOKENS; t++) ws = Math.max(ws, check((m) => res.mmsg[t * ROWS + m], t));
+    report(ws <= 2e-3, `${type} mm subgroup-matrix f16 (${TOKENS} tokens): worst |Δ| / Σ|w·x| ${ws.toExponential(2)}`);
+  }
 }
 console.log(failed ? 'iq kernels: FAIL' : 'iq kernels: ok');
 stop();
