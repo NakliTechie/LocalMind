@@ -13869,6 +13869,31 @@ self.addEventListener('message', async (e) => {
       setTimeout(() => clearInterval(poll), 30000);
     }
 
+    // Inline math, by pandoc's dollar rule: an opening $ followed by a non-space, a closing $ on the same line that
+    // follows a non-space and is not followed by a digit. "$x$", "$2x = 0.10$" and "$\alpha$" are math; prices are
+    // not ("cost $5 and $10", "$5,$10"). A rejected opening moves on by one character, so it never swallows the $
+    // that opens the next span. \$ stays a literal dollar. Display math ($$…$$) is replaced before this runs.
+    function replaceInlineMath(text, toMarker) {
+      let out = '', i = 0;
+      while (i < text.length) {
+        const c = text[i];
+        if (c === '\\' && text[i + 1] === '$') { out += '\\$'; i += 2; continue; }
+        if (c !== '$') { out += c; i++; continue; }
+        const next = text[i + 1];
+        let j = -1;
+        if (next !== undefined && !/\s/.test(next) && next !== '$') {
+          for (let k = i + 1; k < text.length && text[k] !== '\n'; k++) {
+            if (text[k] === '$' && text[k - 1] !== '\\') { j = k; break; }
+          }
+        }
+        if (j > i + 1 && !/\s/.test(text[j - 1]) && !/[0-9]/.test(text[j + 1] || '')) {
+          out += toMarker(text.slice(i + 1, j));
+          i = j + 1;
+        } else { out += c; i++; }
+      }
+      return out;
+    }
+
     function renderMarkdown(text) {
       let thinkContent = '';
       let mainContent = text;
@@ -13944,10 +13969,7 @@ self.addEventListener('message', async (e) => {
           maths.push({ expr, display: true });
           return '\u00A7\u00A7KM' + (maths.length - 1) + '\u00A7\u00A7';
         });
-        part = part.replace(/\$([^\n$]+?)\$/g, (full, expr) => {
-          if (!/[\\^_{}]|\\(alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|sum|int|frac|sqrt)/i.test(expr)) {
-            return full;
-          }
+        part = replaceInlineMath(part, (expr) => {
           maths.push({ expr, display: false });
           return '\u00A7\u00A7KM' + (maths.length - 1) + '\u00A7\u00A7';
         });
@@ -14118,6 +14140,14 @@ self.addEventListener('message', async (e) => {
         .replace(/<tool_call>[\s\S]*$/, '')
         .replace(/<\|tool_call_start\|>[\s\S]*?(<\|tool_call_end\|>|$)/g, '')
         .trim();
+    }
+
+    // What the bubble shows while a reply streams: the text without tool-call blocks, and without a tool-call tag
+    // that has only partly arrived ("<tool_c…" at the very end), so the markup never flashes on screen before the
+    // tools run. Display only: the accumulated text keeps the markup for the agent loop's parser.
+    function streamDisplayText(text) {
+      if (!text) return text;
+      return stripToolCallTags(text.replace(/<(?:\|(?:t(?:o(?:o(?:l(?:_(?:c(?:a(?:l(?:l(?:_(?:s(?:t(?:a(?:r(?:t(?:\|)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?|t(?:o(?:o(?:l(?:_(?:c(?:a(?:l(?:l)?)?)?)?)?)?)?)?)?$/, ''));
     }
 
     function saveChat() {
@@ -17048,7 +17078,7 @@ self.addEventListener('message', async (e) => {
           // API) still receive the full text via the 'complete' handler.
           currentAssistantText += data.token;
           if (currentAssistantEl) {
-            updateAssistantBubble(currentAssistantEl.bubble, currentAssistantText);
+            updateAssistantBubble(currentAssistantEl.bubble, streamDisplayText(currentAssistantText));
           }
           // Streaming consumer (window.localmind.chat.completions.create with
           // stream: true) — route this token to its async iterator.
@@ -17481,7 +17511,7 @@ self.addEventListener('message', async (e) => {
     let endpointAbort = null;
     function emitEndpointToken(token) {
       currentAssistantText += token;
-      if (currentAssistantEl) updateAssistantBubble(currentAssistantEl.bubble, currentAssistantText);
+      if (currentAssistantEl) updateAssistantBubble(currentAssistantEl.bubble, streamDisplayText(currentAssistantText));
       if (currentInferenceContext && typeof currentInferenceContext.onToken === 'function') {
         try { currentInferenceContext.onToken(token); } catch (e) { console.error('streaming onToken threw:', e); }
       }

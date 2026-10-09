@@ -30,6 +30,8 @@ const slice = (startMarker, endMarker) => {
 const endpointBlock = slice('    function normalizeEndpointBase(input) {', '    function clearEndpointModels() {');
 const adapterBlock = slice('    function _adapterRepairJSON(str) {', '    function _adapterFormatToolResultMessage(');
 const sinkBlock = slice('    let endpointAbort = null;', '    // ── Chrome built-in AI');
+// The bubble shows streamed text through streamDisplayText (tool-call markup hidden); slice it in with its helper.
+const displayBlock = slice('    function stripToolCallTags(text) {', '    function saveChat() {');
 const streamBlock = slice('    async function generateViaEndpoint(chatMessages, genConfig) {', '    function generateOnce(chatMessages, attData, enableThinking, genConfig) {');
 
 // Static wiring facts (source-level).
@@ -70,6 +72,7 @@ function showToast(msg) { toasts.push(msg); }
 const LocalMind = { runtime: { _ep: null, getEndpoint() { return this._ep; } } };
 ${endpointBlock}
 ${adapterBlock}
+${displayBlock}
 ${sinkBlock}
 ${streamBlock}
 export const harness = {
@@ -243,6 +246,8 @@ const reset = () => { requests.length = 0; harness.reset(); for (const k of Obje
   assert.equal(full, deltas.join(''));
   assert.deepEqual(tokens, deltas, 'every delta reached the token sink in order');
   assert.equal(harness.bubbles.length, deltas.length);
+  for (const b of harness.bubbles) assert.doesNotMatch(b, /tool_call|"name"/, `tool-call markup reached the bubble: ${JSON.stringify(b)}`);
+  assert.equal(harness.bubbles.at(-1), 'Let me compute that.', 'the bubble keeps the prose');
   const { toolCalls, cleanText } = _adapterParseToolCalls(full, known, tools);
   assert.deepEqual(toolCalls, [{ name: 'calculator', arguments: { expression: '2 + 2 * 3' } }]);
   assert.equal(cleanText, 'Let me compute that.');
