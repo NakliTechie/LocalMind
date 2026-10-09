@@ -55,8 +55,8 @@ with attach and voice stacked beside a taller text box, and everything else move
 ## Pick a model, or bring your own
 
 The picker groups models as on this device, partly downloaded, or to download, with each size. They range from LFM2.5
-230M on hand-written WebGPU kernels (~1,060 tokens/s on an M4 Pro) to Ternary Bonsai 2 27B, plus Chrome's built-in
-Gemini Nano with no download at all. Two experimental engines stream mixture-of-experts models larger than GPU memory
+230M on hand-written WebGPU kernels (~1,060 tokens/s on an M4 Pro) to two 27B models, Ternary Bonsai 2 and Underdog
+Saluki (a 7.9 GB IQ2-mix GGUF tuned for tool calls), plus Chrome's built-in Gemini Nano with no download at all. Two experimental engines stream mixture-of-experts models larger than GPU memory
 (Qwen3.6 35B-A3B, Gemma 4 26B-A4B) from the browser's private storage. Their disk tier and engines are also a library,
 [diskformer.js](https://github.com/NakliTechie/diskformer.js), with a demo at
 [diskformer.naklitechie.com](https://diskformer.naklitechie.com). If their GGUF is already on your disk (a Hugging Face or LM
@@ -101,9 +101,10 @@ These seven suites need Node and nothing else: no install, no model download, no
 loads any script file besides itself (every module in `src/` is rolled into `index.html`), a sidebar or
 palette command that maps to no real control, a model without its Settings entry, a load failure that shows no Retry,
 a truncated model download that the cache would keep, and a token estimate outside its bounds against each model's
-own tokenizer. Two more suites drive Chrome with WebGPU: `scripts/test-qwen35-kernels.mjs` checks the SSD engine's
-WGSL kernels against llama.cpp's CPU ops, and `scripts/test-ple-opfs.mjs` checks Gemma 4 gives identical output with
-its embedding table on disk. `bench-engines.mjs --suite dflash` checks DFlash 2 output is byte-identical to plain decoding.
+own tokenizer. Three more suites drive Chrome with WebGPU: `scripts/test-qwen35-kernels.mjs` checks the SSD engine's
+WGSL kernels against llama.cpp's CPU ops, `scripts/test-iq-kernels.mjs` checks every llama.cpp block type Saluki uses
+against gguf-py's dequantization on real weights, and `scripts/test-ple-opfs.mjs` checks Gemma 4 gives identical output
+with its embedding table on disk. `bench-engines.mjs --suite dflash` checks DFlash 2 output is byte-identical to plain decoding.
 
 ## License
 

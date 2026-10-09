@@ -44,7 +44,7 @@ for (const { file, code } of modules) {
   assert.doesNotMatch(out, /new URL\(['"]\.\.?\/[^'"]+['"]\s*,\s*import\.meta\.url\)/, `${file}: a relative new URL() survived the rewrite`);
 }
 // The SSD engines and the PLE module import their dependencies at load; prove those links resolve in a real loader.
-const expect = { 'gemma4_moe_ssd.js': 'Gemma4MoeSsd', 'qwen35_moe_ssd.js': 'Qwen35MoeSsd', 'qwen3_moe_ssd.js': 'Qwen3MoeSsd', 'ple-opfs.js': 'createGemmaPle' };
+const expect = { 'gemma4_moe_ssd.js': 'Gemma4MoeSsd', 'qwen35_moe_ssd.js': 'Qwen35MoeSsd', 'qwen3_moe_ssd.js': 'Qwen3MoeSsd', 'qwen35_dense.js': 'Qwen35Dense', 'ple-opfs.js': 'createGemmaPle' };
 for (const [file, name] of Object.entries(expect)) {
   const mod = await import(dataUrl(file));
   assert.equal(typeof mod[name], 'function', `${file} does not export ${name} once rolled in`);

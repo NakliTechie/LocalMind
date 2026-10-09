@@ -1,6 +1,6 @@
 // Node proof that "Load .gguf from disk…" can feed an SSD-streamed model (LOCAL-GGUF-SSD block, index.html):
 //   1. a picked file of exactly a pinned GGUF's size routes to that model; any other size stays a wllama load;
-//   2. the catalog's gguf { file, size } equal the engines' pinned sources (qwen35_moe_ssd.js, gemma4_moe_ssd.js);
+//   2. the catalog's gguf { file, size } equal the engines' pinned sources (qwen35_moe_ssd.js, gemma4_moe_ssd.js, qwen35_dense.js);
 //   3. the file reaches the engine: runtime options → load message → worker → Engine.load({ localFile }), and
 //      the engine ingests it through diskformer's fileFetch after a size check.
 // fileFetch itself (same store bytes as a download, resume from the same file) is tested in diskformer:
@@ -39,6 +39,7 @@ const catalog = (key) => {
 };
 assert.deepEqual(catalog('qwen36-35b-a3b-ssd'), pinned(await read('src/qwen35_moe_ssd.js'), 'QWEN36_35B_A3B'));
 assert.deepEqual(catalog('gemma4-26b-a4b-ssd'), pinned(await read('src/gemma4_moe_ssd.js'), 'GEMMA4_26B_A4B'));
+assert.deepEqual(catalog('underdog-saluki-27b'), pinned(await read('src/qwen35_dense.js'), 'UNDERDOG_SALUKI_27B'));
 
 // 3. Wiring.
 assert.match(src, /const ssdId = ssdModelForFile\(file, MODELS\);/);
