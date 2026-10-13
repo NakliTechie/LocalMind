@@ -85,7 +85,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'));
   const keys = [...registry.slice(0, registry.indexOf('\n    };')).matchAll(/^      '([^']+)': \{/gm)].map((m) => m[1]);
   assert.deepEqual([...options].sort(), [...keys].sort(), 'picker options and MODELS registry keys must match');
-  assert.equal(options.length, 15);
+  assert.equal(options.length, 16);
 }
 // window.localmind.load() sets the select before loading, so the composer's picker names the loaded model.
 assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ modelSelect\.value = key; \} catch \{\}\s*loadModel\(key\);/);
@@ -96,6 +96,10 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   assert.match(indexSource, /'qwen36-35b-a3b-ssd': \{\s*id: 'unsloth\/Qwen3\.6-35B-A3B-GGUF',[^]*?backend: 'qwen35moe-ssd'/);
   assert.match(indexSource, /'gemma4moe-ssd': \{ engine: 'gemma4_moe_ssd\.js', exportName: 'Gemma4MoeSsd'/);
   assert.match(indexSource, /'qwen35moe-ssd': \{ engine: 'qwen35_moe_ssd\.js', exportName: 'Qwen35MoeSsd'/);
+  // LFM2.5 24B-A2B (rung 2d) on the same worker; reasoning-only, so the worker marks every reply as reasoning.
+  assert.match(indexSource, /'lfm25-24b-a2b-ssd': \{\s*id: 'LiquidAI\/LFM2\.5-24B-A2B-GGUF',[^]*?backend: 'lfm2moe-ssd'/);
+  assert.match(indexSource, /'lfm2moe-ssd': \{ engine: 'lfm2_moe_ssd\.js', exportName: 'Lfm2MoeSsd'/);
+  assert.match(indexSource, /let inThink = \(wantThink \|\| model\.alwaysThinks === true\) && model\.thinkInPrompt !== false;/);
   // Dense qwen35 from an IQ-mix GGUF (Underdog Saluki 27B) rides the same worker and on-disk store.
   assert.match(indexSource, /'underdog-saluki-27b': \{\s*id: 'ConwayResearch\/Underdog-Saluki-27B-1\.0',[^]*?backend: 'qwen35dense'/);
   assert.match(indexSource, /'qwen35dense': \{ engine: 'qwen35_dense\.js', exportName: 'Qwen35Dense'/);

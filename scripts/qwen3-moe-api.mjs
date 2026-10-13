@@ -5,13 +5,14 @@ import { Qwen3MoeSsd, removeIngest } from '../src/qwen3_moe_ssd.js';
 import { Qwen35MoeSsd } from '../src/qwen35_moe_ssd.js';
 import { Gemma4MoeSsd } from '../src/gemma4_moe_ssd.js';
 import { Qwen35Dense } from '../src/qwen35_dense.js';
+import { Lfm2MoeSsd } from '../src/lfm2_moe_ssd.js';
 
-const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd, qwen35dense: Qwen35Dense };
+const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd, qwen35dense: Qwen35Dense, lfm2moe: Lfm2MoeSsd };
 
 export function makeApi(log = () => {}) {
   let m = null;
   const api = {
-    // engine: 'qwen3' (rung 2a, qwen3moe GGUFs), 'qwen35' (rung 2b, qwen35moe), 'gemma4' (rung 2c, Gemma 4 MoE) or
+    // engine: 'qwen3' (rung 2a, qwen3moe GGUFs), 'qwen35' (rung 2b, qwen35moe), 'gemma4' (rung 2c, Gemma 4 MoE), 'lfm2moe' (rung 2d, LFM2.5-24B-A2B) or
     // 'qwen35dense' (dense qwen35 from an IQ-mix GGUF, qwen35_dense.js; no expert pool, so bench with clearPool: false).
     // capture (gemma4): keep each layer's states of the last step for states().
     async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, gpuBudgetGB, root } = {}) {
