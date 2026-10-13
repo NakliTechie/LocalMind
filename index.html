@@ -10675,8 +10675,14 @@ self.addEventListener('message', async (e) => {
           }
           if (metaStore) {
             for (const key of await idbReq(db.transaction(metaStore, 'readonly').objectStore(metaStore).getAllKeys())) {
-              const meta = measure ? await idbReq(db.transaction(metaStore, 'readonly').objectStore(metaStore).get(key)) : null;
-              add(repoOfUrl(key) || key, dbName, (meta && meta.size) || 0, async () => {
+              // Bytes held = the stored chunk ranges ([url, start, end] keys), not meta.size: the meta row (the whole
+              // file's size) is written as soon as the header is read, so a load that stopped there (an iPhone that
+              // cannot run Bonsai 2 27B, 2026-10-14) would otherwise list the model as on this device.
+              let held = 0;
+              if (measure && chunkStore) {
+                for (const k of await idbReq(db.transaction(chunkStore, 'readonly').objectStore(chunkStore).getAllKeys(IDBKeyRange.bound([key], [key, [], []])))) held += Math.max(0, k[2] - k[1]);
+              }
+              add(repoOfUrl(key) || key, dbName, held, async () => {
                 if (chunkStore) await idbReq(db.transaction(chunkStore, 'readwrite').objectStore(chunkStore).delete(IDBKeyRange.bound([key], [key, [], []])));
                 await idbReq(db.transaction(metaStore, 'readwrite').objectStore(metaStore).delete(key));
                 // Drop the database once nothing is left in it; an engine that still
