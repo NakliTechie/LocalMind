@@ -256,3 +256,21 @@ export async function removeOpfs(path) {
   const dir = await opfsDir(parts.slice(0, -1).join('/'));
   await dir.removeEntry(parts[parts.length - 1], { recursive: true });
 }
+
+// Size in bytes of an OPFS file, or null when it does not exist.
+export async function opfsFileSize(path) {
+  const parts = path.split('/').filter(Boolean);
+  try {
+    const dir = await opfsDir(parts.slice(0, -1).join('/'));
+    return (await (await dir.getFileHandle(parts[parts.length - 1])).getFile()).size;
+  } catch (_) { return null; }
+}
+
+// Names of the directories directly under an OPFS path; [] when the path does not exist.
+export async function opfsSubdirs(path) {
+  let dir;
+  try { dir = await opfsDir(path); } catch (_) { return []; }
+  const out = [];
+  for await (const [name, h] of dir.entries()) if (h.kind === 'directory') out.push(name);
+  return out.sort();
+}

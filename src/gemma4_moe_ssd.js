@@ -1119,7 +1119,7 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
   async prefillChunk(ids, want = 'none') {
     const c = this.cfg, dev = this.device, K = c.topK, H = c.hidden, T = ids.length, pos0 = this.position, S = pos0 + T;
     if (T > this.chunkTokens) throw new Error(`chunk of ${T} > ${this.chunkTokens}`);
-    if (S > this.maxCtx) throw new Error(`context full (${this.maxCtx} tokens)`);
+    if (S > this.maxCtx) throw this.contextFull();
     const tStart = performance.now();
     dev.queue.writeBuffer(this.b.ids, 0, Uint32Array.from(ids));
     dev.queue.writeBuffer(this.qb, 0, new Uint32Array([T, pos0, S, 0]));

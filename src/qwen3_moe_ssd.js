@@ -20,11 +20,12 @@
  * so the engine computes the same dot products llama.cpp does, up to summation order.
  */
 
-import { OpfsReaderPool, readOpfsText } from './opfs-reader.js';
+import { OpfsReaderPool } from './opfs-reader.js';
 import { ExpertStreamer } from './moe-expert-stream.js';
 // The store layer is diskformer.js's (github.com/NakliTechie/diskformer.js), byte-identical copies: gguf.js, ingest.js.
 import { GGML, Q8_BLOCK, Q4_BLOCK, Q6K_BLOCK, parseGguf, tensorBytes } from './gguf.js';
-import { ingestGguf as ingestStore, ingestProgress, fileFetch, storeKey, removeStore } from './ingest.js';
+import { ingestGguf as ingestStore, ingestProgress, fileFetch, storeKey, readStore, removeStore } from './ingest.js';
+import { DiskformerError, isDiskformerError, codedError } from './errors.js';
 export { GGML, Q4_BLOCK, Q6K_BLOCK, parseGguf, tensorBytes, splitQ4 } from './gguf.js';
 export { ingestProgress } from './ingest.js';
 
@@ -541,7 +542,13 @@ export class Qwen3MoeSsd {
   static get ingestPlan() { return undefined; }
   static tokenizerFrom(kv) { return new BpeTokenizer(kv); }
 
+  // Errors are coded (errors.js): UNSUPPORTED_DEVICE, BUDGET_TOO_SMALL, LOAD_ABORTED when opts.signal aborted, else
+  // LOAD_FAILED with the original as `cause`. A failed load destroys the GPU device it opened.
   static async load(modelId = QWEN3_30B_A3B.repo, opts = {}) {
+    try { return await this.open(modelId, opts); } catch (e) { throw codedError(e, { signal: opts.signal }); }
+  }
+
+  static async open(modelId, opts) {
     const { onProgress = () => {}, signal, localFile } = opts;
     const src = opts.source || (modelId === QWEN3_30B_A3B.repo || !modelId ? QWEN3_30B_A3B : { repo: modelId, file: opts.file, revision: opts.revision || 'main' });
     // localFile: the same GGUF already on disk (a File the user picked), ingested instead of downloaded. A size
@@ -556,10 +563,11 @@ export class Qwen3MoeSsd {
     const dir = `${root}/${key}`;
 
     onProgress({ status: 'init' });
-    if (!navigator.gpu) throw new Error('WebGPU is not available');
+    const unsupported = (m) => new DiskformerError('UNSUPPORTED_DEVICE', m);
+    if (typeof navigator === 'undefined' || !navigator.gpu) throw unsupported('WebGPU is not available');
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-    if (!adapter) throw new Error('no WebGPU adapter');
-    if (!adapter.features.has('shader-f16')) throw new Error('this GPU lacks shader-f16');
+    if (!adapter) throw unsupported('no WebGPU adapter');
+    if (!adapter.features.has('shader-f16')) throw unsupported('this GPU lacks shader-f16');
     const L = adapter.limits;
     // subgroups, subgroup matrices: optional; an engine may use subgroup (matrix) kernels when the adapter offers them.
     const features = ['shader-f16', ...['subgroups', 'chromium-experimental-subgroup-matrix'].filter((f) => adapter.features.has(f))];
@@ -569,21 +577,25 @@ export class Qwen3MoeSsd {
     });
     device.lost.then((info) => console.warn('qwen3-moe-ssd: GPU device lost:', info.message));
 
-    let manifest = null;
-    try { manifest = JSON.parse(await readOpfsText(`${dir}/manifest.json`) || 'null'); } catch (_) { manifest = null; }
-    if (opts.reingest || !manifest || !manifest.complete || manifest.format !== FORMAT) {
-      manifest = await ingestGguf({
-        url, key, root, fetch: fetchFn, signal, source: { repo: src.repo, file: src.file, revision: src.revision, sha256: src.sha256, size: src.size, ...(localFile ? { localFile: localFile.name } : {}) },
-        onProgress: (e) => onProgress(ingestProgress(e)),
-        plan: this.ingestPlan,
-      });
-    }
-    const headerFile = await (await (await navigator.storage.getDirectory()).getDirectoryHandle(root)).getDirectoryHandle(key);
-    const headerBytes = new Uint8Array(await (await (await headerFile.getFileHandle('header.bin')).getFile()).arrayBuffer());
-    const gguf = parseGguf(headerBytes);
-    const engine = new this(device, manifest, gguf, { ...opts, dir, key, url, adapterInfo: adapter.info || {} });
-    await engine.init(onProgress);
-    return engine;
+    try {
+      // Only a complete store with every file at full size is used; a partial one resumes, an invalid one (zero-byte
+      // or short files left by a crash) is ingested again.
+      const store = await readStore(key, { root, format: FORMAT });
+      let manifest = store.state === 'complete' ? store.manifest : null;
+      if (opts.reingest || !manifest) {
+        manifest = await ingestGguf({
+          url, key, root, fetch: fetchFn, signal, source: { repo: src.repo, file: src.file, revision: src.revision, sha256: src.sha256, size: src.size, ...(localFile ? { localFile: localFile.name } : {}) },
+          onProgress: (e) => onProgress(ingestProgress(e)),
+          plan: this.ingestPlan,
+        });
+      }
+      const headerFile = await (await (await navigator.storage.getDirectory()).getDirectoryHandle(root)).getDirectoryHandle(key);
+      const headerBytes = new Uint8Array(await (await (await headerFile.getFileHandle('header.bin')).getFile()).arrayBuffer());
+      const gguf = parseGguf(headerBytes);
+      const engine = new this(device, manifest, gguf, { ...opts, dir, key, url, adapterInfo: adapter.info || {} });
+      await engine.init(onProgress);
+      return engine;
+    } catch (e) { try { device.destroy(); } catch (_) {} throw e; }
   }
 
   constructor(device, manifest, gguf, opts) {
@@ -697,7 +709,7 @@ export class Qwen3MoeSsd {
     const fixed = this.gpuBytes.dense + this.kvBytes() + (o.workBytes ?? 512 * 2 ** 20);
     const rest = o.gpuBudgetBytes - fixed;
     const min = this.cfg.topK * 2 * this.manifest.experts.record;
-    if (rest < min) throw new Error(`GPU budget ${gb(o.gpuBudgetBytes)} is too small: weights that stay on the GPU, the KV cache and working buffers need ${gb(fixed)}, and the expert cache at least ${gb(min)} more`);
+    if (rest < min) throw new DiskformerError('BUDGET_TOO_SMALL', `GPU budget ${gb(o.gpuBudgetBytes)} is too small: weights that stay on the GPU, the KV cache and working buffers need ${gb(fixed)}, and the expert cache at least ${gb(min)} more`, { detail: { budget: o.gpuBudgetBytes, fixed, minCache: min } });
     return rest;
   }
   // KV cache bytes at this.maxCtx (f16 K and V for every layer); engines with other layouts override it.
@@ -881,7 +893,7 @@ export class Qwen3MoeSsd {
   // One token through all layers at position this.position. want: 'none' | 'argmax' | 'logits'.
   async step(token, want = 'argmax') {
     const c = this.cfg, dev = this.device, K = c.topK;
-    if (this.position >= this.maxCtx) throw new Error(`context full (${this.maxCtx} tokens)`);
+    if (this.position >= this.maxCtx) throw this.contextFull();
     const tStart = performance.now();
     const pos = this.position, seqLen = pos + 1;
     this.writeTokenUniforms(token, pos);
@@ -960,7 +972,11 @@ export class Qwen3MoeSsd {
 
   // Diagnostics for the llama.cpp comparison: greedy continuation of raw token ids, with the
   // top-n logits at every generated position.
-  async greedy(ids, n, { top = 5 } = {}) {
+  async greedy(ids, n, opts) {
+    const release = await this.acquire();
+    try { this.inflight = this.greedyTurn(ids, n, opts); return await this.inflight; } catch (e) { throw this.stepError(e); } finally { this.inflight = null; release(); }
+  }
+  async greedyTurn(ids, n, { top = 5 } = {}) {
     this.reset();
     const out = [], tops = [];
     let logits = await this.prefill(ids, 'logits');
@@ -979,7 +995,45 @@ export class Qwen3MoeSsd {
     return { ids: out, tops };
   }
 
-  async *generate(messages, { maxNewTokens = 512, signal, enableThinking = true } = {}) {
+  // generate() and greedy() share one KV cache, so calls on one engine run one at a time. A generate() takes its turn
+  // on its first next() (an async generator runs nothing before that), so turns follow iteration order. A caller
+  // that stops iterating early must end the loop (break / return()) so the next call can start. Errors are coded:
+  // EXECUTION_FAILED (original as `cause`), CONTEXT_FULL, RESOURCE_DISPOSED after dispose().
+  async *generate(messages, opts) {
+    const release = await this.acquire();
+    const it = this.generateTurn(messages, opts);
+    try {
+      for (;;) {
+        if (this.disposed) throw this.disposedError();
+        this.inflight = it.next();
+        const r = await this.inflight;
+        this.inflight = null;
+        if (r.done) return;
+        yield r.value;
+      }
+    } catch (e) { throw this.stepError(e); } finally { this.inflight = null; await it.return(); release(); }
+  }
+
+  // The turn lock: resolves with a release function once every earlier call has finished.
+  async acquire() {
+    if (this.disposed) throw this.disposedError();
+    const prev = this.turn;
+    let release;
+    this.turn = new Promise((r) => { release = r; });
+    await prev;
+    if (this.disposed) { release(); throw this.disposedError(); }
+    return release;
+  }
+  disposedError() { return new DiskformerError('RESOURCE_DISPOSED', 'this engine was disposed'); }
+  contextFull() { return new DiskformerError('CONTEXT_FULL', `context full (${this.maxCtx} tokens)`, { detail: { maxCtx: this.maxCtx } }); }
+  stepError(e) { return isDiskformerError(e) ? e : new DiskformerError('EXECUTION_FAILED', `generate failed: ${(e && e.message) || e}`, { cause: e }); }
+  // Marks the engine disposed and waits for a step in flight, so the device is never destroyed under a running step.
+  async retire() {
+    this.disposed = true;
+    if (this.inflight) await this.inflight.catch(() => {});
+  }
+
+  async *generateTurn(messages, { maxNewTokens = 512, signal, enableThinking = true } = {}) {
     const ids = this.tokenizer.encode(this.chatPrompt(messages, { enableThinking }));
     const stops = new Set(this.stopTokenIds);
     let next = await this.prefill(ids, 'argmax');
@@ -1019,6 +1073,7 @@ export class Qwen3MoeSsd {
   async warmup() {}
 
   async dispose() {
+    await this.retire();
     try { await this.xs.drain(); } catch (_) {}
     try { await this.expertReader.close(); } catch (_) {}
     try { this.device.destroy(); } catch (_) {}

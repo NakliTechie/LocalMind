@@ -469,7 +469,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
   // One token through every layer at this.position, in one submit. want: 'none' | 'argmax' | 'logits'.
   async step(token, want = 'argmax') {
     const c = this.cfg, dev = this.device;
-    if (this.position >= this.maxCtx) throw new Error(`context full (${this.maxCtx} tokens)`);
+    if (this.position >= this.maxCtx) throw this.contextFull();
     const tStart = performance.now(), pos = this.position;
     this.writeTokenUniforms(token, pos);
     const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
@@ -598,7 +598,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
   async prefillChunk(ids, want = 'none') {
     const c = this.cfg, dev = this.device, H = c.hidden, T = ids.length, pos0 = this.position, S = pos0 + T;
     if (T > this.chunkTokens) throw new Error(`chunk of ${T} > ${this.chunkTokens}`);
-    if (S > this.maxCtx) throw new Error(`context full (${this.maxCtx} tokens)`);
+    if (S > this.maxCtx) throw this.contextFull();
     const tStart = performance.now();
     dev.queue.writeBuffer(this.b.ids, 0, Uint32Array.from(ids));
     dev.queue.writeBuffer(this.qb, 0, new Uint32Array([T, pos0, S, 0]));
@@ -678,7 +678,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     const c = this.counters, n = Math.max(1, c.tokens);
     return { tokens: c.tokens, tokPerSec: c.tokens / (c.wallMs / 1000), msPerToken: c.wallMs / n, gpuWaitMsPerToken: c.gpuWaitMs / n, gpuBytes: { ...this.gpuBytes } };
   }
-  async dispose() { try { this.device.destroy(); } catch (_) {} }
+  async dispose() { await this.retire(); try { this.device.destroy(); } catch (_) {} }
 }
 
 // For kernel tests (scripts/test-qwen35-dense-kernels.mjs).

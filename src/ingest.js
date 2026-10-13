@@ -11,8 +11,9 @@
  *   // OPFS: <root>/<key>/{header.bin, dense.bin, experts.bin, manifest.json}
  */
 
-import { OpfsWriter, readOpfsText, writeOpfsText, removeOpfs } from './opfs-reader.js';
+import { OpfsWriter, readOpfsText, writeOpfsText, removeOpfs, opfsFileSize, opfsSubdirs } from './opfs-reader.js';
 import { parseGguf, splitQ8, splitQ4, Q8_BLOCK, Q4_BLOCK } from './gguf.js';
+import { codedError } from './errors.js';
 
 export const ROOT = 'diskformer';
 export const FORMAT = 'diskformer-gguf/1';
@@ -59,7 +60,12 @@ const textId = (s) => fnv((i) => s.charCodeAt(i), s.length);
 // An interrupted ingest resumes only when the GGUF header, the plan's output layout, and the source's size and ETag
 // (when the server sends them) match its checkpoint; otherwise it starts over. `rangeBytes` and `io` are for tests:
 // smaller range requests, and fake OPFS files.
-export async function ingestGguf({ url, key, plan, root = ROOT, format = FORMAT, fetch: fetchFn = fetch, onProgress = () => {}, signal, source = {},
+// Errors are coded (errors.js): LOAD_ABORTED when `signal` aborted, else LOAD_FAILED with the original as `cause`.
+export async function ingestGguf(opts) {
+  try { return await ingest(opts); } catch (e) { throw codedError(e, { signal: opts && opts.signal, what: 'ingest' }); }
+}
+
+async function ingest({ url, key, plan, root = ROOT, format = FORMAT, fetch: fetchFn = fetch, onProgress = () => {}, signal, source = {},
   rangeBytes = 1 << 30, io = { OpfsWriter, readOpfsText, writeOpfsText } }) {
   if (!plan || !plan.layout || !plan.units) throw new Error('ingestGguf: plan { layout, units } is required');
   const t0 = performance.now();
@@ -188,4 +194,41 @@ export function ingestProgress(e) {
   return e && e.status === 'ingest' ? { ...e, status: 'weights', loaded: e.loaded, total: e.total } : e;
 }
 
+// ── The stores on disk: which are usable, which to remove ──
+// A store is usable only when its manifest is complete, in `format`, and every file it names is on disk at its full
+// size. A crash can leave zero-byte or short files behind a complete manifest; those count as invalid, never as a
+// model. Dense files end with up to 255 bytes of alignment padding that is never written, hence the slack.
+// `format` null skips the format check. → { key, state: 'complete' | 'partial' | 'invalid' | 'missing', manifest, bytes, problem }
+const PAD = 255;
+export async function readStore(key, { root = ROOT, format = FORMAT, io = { readOpfsText, opfsFileSize } } = {}) {
+  const dir = `${root}/${key}`;
+  let manifest = null;
+  try { manifest = JSON.parse(await io.readOpfsText(`${dir}/manifest.json`) || 'null'); } catch (_) { manifest = null; }
+  // [file, expected bytes, slack]: the header, then every layout entry the manifest names ({ file, bytes }).
+  const files = manifest
+    ? [['header.bin', manifest.source && manifest.source.dataStart, 0],
+      ...Object.values(manifest).filter((v) => v && typeof v.file === 'string' && typeof v.bytes === 'number').map((v) => [v.file, v.bytes, v.file === 'dense.bin' ? PAD : 0])]
+    : [['header.bin'], ['dense.bin'], ['experts.bin']];
+  const sizes = await Promise.all(files.map(([name]) => io.opfsFileSize(`${dir}/${name}`)));
+  const bytes = sizes.reduce((a, b) => a + (b || 0), 0);
+  const out = (state, problem) => ({ key, state, manifest, bytes, problem });
+  if (!manifest) return out(bytes ? 'invalid' : 'missing', bytes ? 'no readable manifest' : null);
+  if (!manifest.complete) return out('partial', 'ingest not finished');
+  if (format && manifest.format !== format) return out('invalid', `format ${manifest.format}, expected ${format}`);
+  for (let i = 0; i < files.length; i++) {
+    const [name, want, slack] = files[i], have = sizes[i];
+    if (want === 0 && have !== null) continue;                   // a layout entry with no bytes (a dense model's experts.bin)
+    if (!have) return out('invalid', `${name} is ${have === null ? 'missing' : 'empty'}`);
+    if (typeof want === 'number' && have < want - slack) return out('invalid', `${name} is ${have} bytes, expected ${want}`);
+  }
+  return out('complete', null);
+}
+
+// Every store under `root`, for a "models in this browser" list where the user removes one and keeps the rest.
+// `format` null accepts any format (engines write their own; the chat page lists them all).
+export async function listStores({ root = ROOT, format = null, io = { readOpfsText, opfsFileSize, opfsSubdirs } } = {}) {
+  return Promise.all((await io.opfsSubdirs(root)).map((key) => readStore(key, { root, format, io })));
+}
+
+// Removes one store by key; the others under `root` stay.
 export async function removeStore(key, { root = ROOT } = {}) { await removeOpfs(`${root}/${key}`); }

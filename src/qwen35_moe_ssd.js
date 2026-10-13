@@ -964,7 +964,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
   async prefillChunk(ids, want = 'none') {
     const c = this.cfg, dev = this.device, K = c.topK, H = c.hidden, T = ids.length, pos0 = this.position, S = pos0 + T;
     if (T > this.chunkTokens) throw new Error(`chunk of ${T} > ${this.chunkTokens}`);
-    if (S > this.maxCtx) throw new Error(`context full (${this.maxCtx} tokens)`);
+    if (S > this.maxCtx) throw this.contextFull();
     const tStart = performance.now();
     dev.queue.writeBuffer(this.a.stop, 0, new Uint32Array(4));   // the head below uses guarded kernels
     dev.queue.writeBuffer(this.b.ids, 0, Uint32Array.from(ids));
@@ -1099,7 +1099,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
   async step(token, want = 'argmax') {
     if (!this.gpuRouting) return super.step(token, want);
     const c = this.cfg, dev = this.device, K = c.topK, L = c.layers, seg = this.seg;
-    if (this.position >= this.maxCtx) throw new Error(`context full (${this.maxCtx} tokens)`);
+    if (this.position >= this.maxCtx) throw this.contextFull();
     const tStart = performance.now();
     const pos = this.position, seqLen = pos + 1;
     this.writeTokenUniforms(token, pos);
