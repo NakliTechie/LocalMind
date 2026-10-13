@@ -56,8 +56,9 @@ with attach and voice stacked beside a taller text box, and everything else move
 
 The picker groups models as on this device, partly downloaded, or to download, with each size. They range from LFM2.5
 230M on hand-written WebGPU kernels (~1,060 tokens/s on an M4 Pro) to two 27B models, Ternary Bonsai 2 and Underdog
-Saluki (a 7.9 GB IQ2-mix GGUF tuned for tool calls), plus Chrome's built-in Gemini Nano with no download at all. Two experimental engines stream mixture-of-experts models larger than GPU memory
-(Qwen3.6 35B-A3B, Gemma 4 26B-A4B) from the browser's private storage. Their disk tier and engines are also a library,
+Saluki (a 7.9 GB IQ2-mix GGUF tuned for tool calls), plus Chrome's built-in Gemini Nano with no download at all. Three
+experimental engines stream mixture-of-experts models larger than GPU memory (Qwen3.6 35B-A3B, Gemma 4 26B-A4B and
+Liquid AI's LFM2.5 24B-A2B) from the browser's private storage. Ten engines in all serve 16 models. Their disk tier and engines are also a library,
 [diskformer.js](https://github.com/NakliTechie/diskformer.js), with a demo at
 [diskformer.naklitechie.com](https://diskformer.naklitechie.com). If their GGUF is already on your disk (a Hugging Face or LM
 Studio folder), Settings → Models → Load .gguf from disk… copies it in instead of downloading it.
