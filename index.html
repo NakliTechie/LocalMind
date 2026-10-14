@@ -509,6 +509,11 @@
       color: var(--gray-600);
       border-color: var(--gray-400);
     }
+    /* Copy on every message: always shown (no hover reveal), so it works on touch screens; a bigger target there. */
+    .copy-msg-btn { margin-right: 6px; }
+    .msg-actions { text-align: right; }
+    .msg-actions .copy-msg-btn { margin-right: 0; }
+    @media (pointer: coarse) { .copy-msg-btn { padding: 6px 12px; font-size: 0.75rem; } }
 
     /* 🔊 Read-aloud (Voice v1.0) */
     .speak-btn.tts-speaking {
@@ -14105,6 +14110,35 @@ self.addEventListener('message', async (e) => {
     }
 
     // ── Chat rendering ──────────────────────────────────────────
+    // One-click copy for a message. An assistant reply copies its answer without the reasoning block.
+    // navigator.clipboard needs a secure context; the textarea path covers browsers that refuse it.
+    function addCopyButton(container, getText, { before = null } = {}) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'save-md-btn copy-msg-btn'; b.textContent = 'Copy'; b.title = 'Copy this message';
+      b.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const text = String(getText() || '').replace(/<\|think\|>[\s\S]*?(?:<\|\/think\|>|$)/g, '').trim();
+        let ok = false;
+        try { await navigator.clipboard.writeText(text); ok = true; } catch {
+          try {
+            const ta = document.createElement('textarea');
+            ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select(); ok = document.execCommand('copy'); ta.remove();
+          } catch {}
+        }
+        b.textContent = ok ? 'Copied' : 'Copy failed';
+        setTimeout(() => { b.textContent = 'Copy'; }, 1200);
+      });
+      container.insertBefore(b, before);
+      return b;
+    }
+    function addUserCopyButton(el, text) {
+      const row = document.createElement('div');
+      row.className = 'msg-actions';
+      addCopyButton(row, () => text);
+      el.appendChild(row);
+    }
+
     function renderRestoredMessages() {
       if (messages.length === 0) return;
       welcomeMsg.style.display = 'none';
@@ -14124,9 +14158,11 @@ self.addEventListener('message', async (e) => {
         } else {
           bubble.innerHTML = renderMarkdown(msg.content);
           postProcessBubble(bubble);
+          addCopyButton(bubble, () => (typeof msg.content === 'string' ? msg.content : ''));
           addSpeakButton(bubble, typeof msg.content === 'string' ? msg.content : '');
         }
         el.appendChild(bubble);
+        if (role === 'user') addUserCopyButton(el, bubble.textContent);
         chatArea.appendChild(el);
       }
       chatArea.scrollTop = chatArea.scrollHeight;
@@ -14171,6 +14207,7 @@ self.addEventListener('message', async (e) => {
       textNode.textContent = text;
       bubble.appendChild(textNode);
       el.appendChild(bubble);
+      addUserCopyButton(el, text);
       chatArea.appendChild(el);
       chatArea.scrollTop = chatArea.scrollHeight;
     }
@@ -17121,6 +17158,7 @@ self.addEventListener('message', async (e) => {
         else if (data.type === 'ready') {
           disarm();
           modelReady = true;
+          rememberModel(activeModelKey);
           progressSection.classList.remove('visible');
           statusBadge.className = 'status-badge ready';
           statusSpinner.style.display = 'none';
@@ -17362,6 +17400,7 @@ self.addEventListener('message', async (e) => {
       currentDownloadFile = '';
       LocalMind.runtime.useEndpoint(m);
       modelReady = true;
+      rememberModel(key);
       progressSection.classList.remove('visible');
       statusBadge.className = 'status-badge ready';
       statusSpinner.style.display = 'none';
@@ -17603,6 +17642,22 @@ self.addEventListener('message', async (e) => {
     // or null. 'downloadable' is deliberately excluded — defaulting to it would stall
     // first-run on a Chrome-managed model download, worse than the ~140 MB LFM2 fallback.
     // Feature-detected + async; any failure (no API, mobile, throw) falls back cleanly.
+    // The last model that finished loading, restored on the next visit (Chirag, 2026-10-14: "if you refresh, the last
+    // loaded model should load"). Only when it needs no download: an endpoint, Gemini Nano, or a model whose files are
+    // all on this device. A refresh never starts a multi-GB download on its own.
+    function rememberModel(key) { try { if (key && MODELS[key]) localStorage.setItem('lm_last_model', key); } catch {} }
+    async function pickLastModel() {
+      try {
+        const key = localStorage.getItem('lm_last_model'), m = key && MODELS[key];
+        if (!m) return null;
+        const opt = [...modelSelect.options].find((o) => o.value === key);
+        if (!opt || opt.disabled) return null;
+        if (noWebGPU && !['wllama', 'endpoint', 'chrome-ai'].includes(m.backend)) return null;
+        if (m.backend === 'chrome-ai') return chromeAISupported() ? key : null;
+        if (m.backend === 'endpoint') return key;
+        return modelCacheState(m, await inventoryModelCaches()) === 'device' ? key : null;
+      } catch { return null; }
+    }
     async function pickNanoDefault() {
       try {
         if (!chromeAISupported() || !MODELS['gemini-nano']) return null;
@@ -17679,6 +17734,7 @@ self.addEventListener('message', async (e) => {
         }
       }
       modelReady = true;
+      rememberModel(key);
       progressSection.classList.remove('visible');
       statusBadge.className = 'status-badge ready';
       statusSpinner.style.display = 'none';
@@ -19338,6 +19394,7 @@ self.addEventListener('message', async (e) => {
           badge.appendChild(escBadge);
           escalatedThisMessage = null;
         }
+        if (response) addCopyButton(bubble, () => response);
         // Save as Markdown button
         if (response && response.length > 20) {
           const saveBtn = document.createElement('button');
@@ -21527,7 +21584,8 @@ self.addEventListener('message', async (e) => {
     // a first token with no model download. Nano is a chrome-ai backend (no WebGPU needed),
     // so this preference applies in both branches; if Nano isn't ready we fall back to the
     // existing WebGPU/CPU steering.
-    const nanoDefaultKey = await pickNanoDefault();
+    const lastModelKey = await pickLastModel();
+    const nanoDefaultKey = lastModelKey || await pickNanoDefault();
     // A load that started during the awaits above (window.localmind.load(), or the user picking a model)
     // wins. Loading the default now terminated that worker, and a chat already sent to it never ended
     // (2026-10-14: load() resolved at 0.6 s, this line reloaded at 1.9 s, the first chat hung).
