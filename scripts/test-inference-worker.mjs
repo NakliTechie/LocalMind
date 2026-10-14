@@ -98,6 +98,7 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   assert.match(indexSource, /'qwen35moe-ssd': \{ engine: 'qwen35_moe_ssd\.js', exportName: 'Qwen35MoeSsd'/);
   assert.match(indexSource, /'minicpm-v47-35b-a3b-ssd': \{\s*id: 'openbmb\/MiniCPM-V-4\.7-35B-A3B-gguf',[^]*?backend: 'minicpmv-ssd'/);
   assert.match(indexSource, /'minicpmv-ssd': \{ engine: 'qwen35_moe_ssd\.js', exportName: 'MiniCpmV47Ssd'/);
+  assert.match(indexSource, /'minicpm-v47-35b-a3b-ssd': \{(?:(?!genConfig)[^])*?agentCapable: true,/);
   // LFM2.5 24B-A2B (rung 2d) on the same worker; reasoning-only, so the worker marks every reply as reasoning.
   assert.match(indexSource, /'lfm25-24b-a2b-ssd': \{\s*id: 'LiquidAI\/LFM2\.5-24B-A2B-GGUF',[^]*?backend: 'lfm2moe-ssd'/);
   assert.match(indexSource, /'lfm2moe-ssd': \{ engine: 'lfm2_moe_ssd\.js', exportName: 'Lfm2MoeSsd'/);
