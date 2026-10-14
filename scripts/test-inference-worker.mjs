@@ -99,6 +99,14 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   // LFM2.5 24B-A2B (rung 2d) on the same worker; reasoning-only, so the worker marks every reply as reasoning.
   assert.match(indexSource, /'lfm25-24b-a2b-ssd': \{\s*id: 'LiquidAI\/LFM2\.5-24B-A2B-GGUF',[^]*?backend: 'lfm2moe-ssd'/);
   assert.match(indexSource, /'lfm2moe-ssd': \{ engine: 'lfm2_moe_ssd\.js', exportName: 'Lfm2MoeSsd'/);
+  // Tools on, decided by scripts/tool-battery.mjs (2026-10-14).
+  assert.match(indexSource, /'lfm25-24b-a2b-ssd': \{(?:(?!genConfig)[^])*?agentCapable: true,/);
+  // SSD worker: a character split across tokens (trailing U+FFFD) is held back, not streamed.
+  assert.match(indexSource, /const partial = full\.endsWith\('\\uFFFD'\);/);
+  // Boot: a load started during startup (window.localmind.load()) is not replaced by the default model.
+  assert.match(indexSource, /const loadStarted = activeModelKey !== null;[^]*?else if \(loadStarted\)/);
+  // A worker swap ends the generation still waiting on the old worker.
+  assert.match(indexSource, /if \(generateResolve\) \{ const r = generateResolve; generateResolve = null; r\(currentAssistantText\); \}\n\n      activeModelKey = key;/);
   assert.match(indexSource, /let inThink = \(wantThink \|\| model\.alwaysThinks === true\) && model\.thinkInPrompt !== false;/);
   // Dense qwen35 from an IQ-mix GGUF (Underdog Saluki 27B) rides the same worker and on-disk store.
   assert.match(indexSource, /'underdog-saluki-27b': \{\s*id: 'ConwayResearch\/Underdog-Saluki-27B-1\.0',[^]*?backend: 'qwen35dense'/);

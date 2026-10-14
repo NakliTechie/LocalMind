@@ -2649,7 +2649,7 @@
               <li><strong>MiniCPM5 2B &middot; GGUF</strong> (~1.6 GB) &mdash; text + agent (tool calling). OpenBMB&rsquo;s MiniCPM5-2B (Sept 2026, Apache-2.0) loaded from its first-party GGUF through wllama (llama.cpp &rarr; WebAssembly) &mdash; there is no ONNX export, so this is the only way to run it in the tab. WebGPU when your browser has it, CPU otherwise. Gets <strong>16K context</strong>, twice the other GGUF models, because its 2 KV heads make the cache unusually cheap; its native 131K is capped since wllama reserves the whole cache up front. Long-document retrieval is what it is best at. It emits tool calls in its own XML format rather than the <code>&lt;tool_call&gt;</code> JSON the other models use; LocalMind parses both. Short-horizon tool use is its strength &mdash; don&rsquo;t expect long multi-step agent runs to hold up.</li>
               <li><strong>Qwen3.6 35B-A3B &middot; SSD-streamed (experimental)</strong> (~37 GB) &mdash; text, with reasoning. Alibaba's Qwen3.6-35B-A3B mixture-of-experts at Q8_0 (36.9 GB, more than most laptops' RAM) on a from-scratch WebGPU engine: the dense layers, router, KV cache and Gated-DeltaNet state stay on the GPU while the 10,240 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~37 GB of disk; a Hugging Face token in Settings speeds the download). About 9 tokens/s on an M4 Pro with 24 GB; prompts are read one token at a time for now. Greedy output matches llama.cpp. Flip <strong>Show reasoning</strong> for its chain-of-thought.</li>
               <li><strong>Gemma 4 26B-A4B &middot; SSD-streamed (experimental)</strong> (~14 GB) &mdash; text, with reasoning. Google's Gemma 4 26B-A4B mixture-of-experts (128 experts, 8 active per token) from its official 4-bit QAT GGUF (14.4 GB) on the same from-scratch WebGPU engine family: attention, the dense MLP, routers and KV cache stay on the GPU (~1.6 GB plus a 4 GB expert pool) while the 3,840 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~14 GB of disk; about 12 minutes on a fast connection). About 23 tokens/s on an M4 Pro with 24 GB, and prompts are read in chunks at about 55 tokens/s. Greedy output matches llama.cpp. Flip <strong>Show reasoning</strong> for its thinking.</li>
-              <li><strong>LFM2.5 24B-A2B &middot; SSD-streamed (experimental)</strong> (~13.6 GB) &mdash; text, reasoning-only. Liquid AI's LFM2.5-24B-A2B (released 2026-10-13): a 24B mixture-of-experts (64 experts, 4 active per token, about 2.4B parameters per token) with short-convolution and attention layers, from Liquid's own 4-bit GGUF. Short-convolution and attention layers, routers and KV cache stay on the GPU while the 2,432 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~13.6 GB of disk). About 16 tokens/s on an M4 Pro with 24 GB, and prompts are read in chunks at about 50 tokens/s. Greedy output matches llama.cpp (8 of 8 prompts). It always reasons before it answers, so every reply opens with its reasoning.</li>
+              <li><strong>LFM2.5 24B-A2B &middot; SSD-streamed (experimental)</strong> (~13.6 GB) &mdash; text, reasoning-only. Liquid AI's LFM2.5-24B-A2B (released 2026-10-13): a 24B mixture-of-experts (64 experts, 4 active per token, about 2.4B parameters per token) with short-convolution and attention layers, from Liquid's own 4-bit GGUF. Short-convolution and attention layers, routers and KV cache stay on the GPU while the 2,432 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~13.6 GB of disk). About 16 tokens/s on an M4 Pro with 24 GB, and prompts are read in chunks at about 50 tokens/s. Greedy output matches llama.cpp (8 of 8 prompts). It always reasons before it answers, so every reply opens with its reasoning. It can use tools (calculator, time, memory, reminders): it called the right tool on 6 of 6 test prompts and answered 5 of 5 plain questions without one.</li>
             </ul>
           </details>
         </div>
@@ -8387,7 +8387,7 @@ self.onmessage = async (e) => {
       // A reasoning-only model (LFM2.5 24B: alwaysThinks) opens <think> in every prompt, so its reply always starts as reasoning.
       let inThink = (wantThink || model.alwaysThinks === true) && model.thinkInPrompt !== false;
       if (inThink) post({ type: 'token', token: '<|think|>' });
-      let prev = '', skip = '';
+      let prev = '', skip = '', last = '';
       try {
         const stream = model.generate(msgs, {
           maxNewTokens: cfg.max_new_tokens || cfg.max_tokens || 1024,
@@ -8397,8 +8397,13 @@ self.onmessage = async (e) => {
         for await (const out of stream) {
           if (stopFlag) break;
           const full = out && typeof out.text === 'string' ? out.text : '';
-          let delta = full.length > prev.length ? full.slice(prev.length) : '';
-          prev = full;
+          last = full;
+          // A multi-byte character split across tokens decodes as a trailing U+FFFD until its last byte
+          // arrives. Hold the delta back until then: posting it sent '\uFFFD' and then cut the next delta
+          // one code unit late, so 🍂 arrived as '\uFFFD\uDF42' (2026-10-14).
+          const partial = full.endsWith('\uFFFD');
+          let delta = !partial && full.length > prev.length ? full.slice(prev.length) : '';
+          if (!partial) prev = full;
           if (!inThink && open != null && out && out.token === open) { post({ type: 'token', token: '<|think|>' }); inThink = true; skip = model.thinkPreamble || ''; continue; }
           if (inThink && out && out.token === close) { post({ type: 'token', token: '<|/think|>\n' }); inThink = false; continue; }
           if (skip && delta) {
@@ -8412,6 +8417,7 @@ self.onmessage = async (e) => {
         const s = String((err && err.message) || err);
         if (!(stopFlag || s.toLowerCase().includes('abort'))) throw err;
       }
+      if (last.length > prev.length) post({ type: 'token', token: last.slice(prev.length) });
       if (inThink) post({ type: 'token', token: '<|/think|>' });
       post({ type: 'complete' });
     } else if (d.type === 'stop') {
@@ -9033,7 +9039,9 @@ self.addEventListener('message', async (e) => {
         gguf: { file: 'LFM2.5-24B-A2B-QAD-Q4_0.gguf', size: 13578190880 },   // LFM25_24B_A2B in lfm2_moe_ssd.js
         type: 'causal',
         multimodal: false,
-        agentCapable: false,
+        // Decided by scripts/tool-battery.mjs through the app (2026-10-14): 6/6 calls with right arguments,
+        // 5/5 plain answers without a tool, and a live calculate round trip that used the result.
+        agentCapable: true,
         thinking: true,
         contextSize: 4096,
         genConfig: { max_new_tokens: 2048 },
@@ -17246,6 +17254,9 @@ self.addEventListener('message', async (e) => {
         const r = loadResolvers; loadResolvers = null;
         try { r.reject(new Error('Load superseded by another load')); } catch {}
       }
+      // A generation still running on the worker about to be replaced never gets its 'complete', so its
+      // caller waited forever and the inference queue behind it stalled. End it with the text it has.
+      if (generateResolve) { const r = generateResolve; generateResolve = null; r(currentAssistantText); }
 
       activeModelKey = key;
       modelReady = false;
@@ -21475,6 +21486,10 @@ self.addEventListener('message', async (e) => {
     // so this preference applies in both branches; if Nano isn't ready we fall back to the
     // existing WebGPU/CPU steering.
     const nanoDefaultKey = await pickNanoDefault();
+    // A load that started during the awaits above (window.localmind.load(), or the user picking a model)
+    // wins. Loading the default now terminated that worker, and a chat already sent to it never ended
+    // (2026-10-14: load() resolved at 0.6 s, this line reloaded at 1.9 s, the first chat hung).
+    const loadStarted = activeModelKey !== null;
     if (noWebGPU) {
       // Reveal the soft banner, mark WebGPU-only models in the picker, and steer
       // the default load to a CPU-capable GGUF (wllama) — or, if none, leave it
@@ -21493,8 +21508,11 @@ self.addEventListener('message', async (e) => {
         else { opt.disabled = true; if (!/needs WebGPU/.test(opt.textContent)) opt.textContent += ' — needs WebGPU'; }
       }
       const bootKey = nanoDefaultKey || firstCpuKey;
-      if (bootKey) { modelSelect.value = bootKey; loadModel(bootKey); }
+      if (loadStarted) { /* keep the load already under way */ }
+      else if (bootKey) { modelSelect.value = bootKey; loadModel(bootKey); }
       else { statusText.textContent = 'Connect a server'; chatInput.placeholder = 'Connect a local endpoint in Settings to start…'; }
+    } else if (loadStarted) {
+      // keep the load already under way
     } else if (nanoDefaultKey) {
       modelSelect.value = nanoDefaultKey; loadModel(nanoDefaultKey);
     } else {
