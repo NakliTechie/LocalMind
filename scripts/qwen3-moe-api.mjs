@@ -2,12 +2,12 @@
 // qwen3-moe-worker.mjs (engine in a dedicated worker, the way LocalMind runs engines).
 // Every method returns JSON-able results for a DevTools-protocol client.
 import { Qwen3MoeSsd, removeIngest } from '../src/qwen3_moe_ssd.js';
-import { Qwen35MoeSsd } from '../src/qwen35_moe_ssd.js';
+import { Qwen35MoeSsd, MiniCpmV47Ssd } from '../src/qwen35_moe_ssd.js';
 import { Gemma4MoeSsd } from '../src/gemma4_moe_ssd.js';
 import { Qwen35Dense } from '../src/qwen35_dense.js';
 import { Lfm2MoeSsd } from '../src/lfm2_moe_ssd.js';
 
-const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd, qwen35dense: Qwen35Dense, lfm2moe: Lfm2MoeSsd };
+const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd, qwen35dense: Qwen35Dense, lfm2moe: Lfm2MoeSsd, minicpmv: MiniCpmV47Ssd };
 
 export function makeApi(log = () => {}) {
   let m = null;

@@ -2648,6 +2648,7 @@
               <li><strong>LFM2.5 230M &middot; GGUF</strong> (~170 MB) &mdash; the same LFM2.5 230M through wllama (llama.cpp &rarr; WebAssembly), reading a Q5_K_M GGUF. WebGPU when your browser has it, CPU otherwise, so it also runs where WebGPU is missing.</li>
               <li><strong>MiniCPM5 2B &middot; GGUF</strong> (~1.6 GB) &mdash; text + agent (tool calling). OpenBMB&rsquo;s MiniCPM5-2B (Sept 2026, Apache-2.0) loaded from its first-party GGUF through wllama (llama.cpp &rarr; WebAssembly) &mdash; there is no ONNX export, so this is the only way to run it in the tab. WebGPU when your browser has it, CPU otherwise. Gets <strong>16K context</strong>, twice the other GGUF models, because its 2 KV heads make the cache unusually cheap; its native 131K is capped since wllama reserves the whole cache up front. Long-document retrieval is what it is best at. It emits tool calls in its own XML format rather than the <code>&lt;tool_call&gt;</code> JSON the other models use; LocalMind parses both. Short-horizon tool use is its strength &mdash; don&rsquo;t expect long multi-step agent runs to hold up.</li>
               <li><strong>Qwen3.6 35B-A3B &middot; SSD-streamed (experimental)</strong> (~37 GB) &mdash; text, with reasoning. Alibaba's Qwen3.6-35B-A3B mixture-of-experts at Q8_0 (36.9 GB, more than most laptops' RAM) on a from-scratch WebGPU engine: the dense layers, router, KV cache and Gated-DeltaNet state stay on the GPU while the 10,240 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~37 GB of disk; a Hugging Face token in Settings speeds the download). About 9 tokens/s on an M4 Pro with 24 GB; prompts are read one token at a time for now. Greedy output matches llama.cpp. Flip <strong>Show reasoning</strong> for its chain-of-thought.</li>
+              <li><strong>MiniCPM-V 4.7 35B-A3B &middot; SSD-streamed (experimental)</strong> (~20 GB) &mdash; text only for now, with reasoning. OpenBMB's MiniCPM-V 4.7 (released 2026-10): a 35B mixture-of-experts (256 experts, 8 active per token, about 3B parameters per token) built on the same architecture as Qwen3.6 35B-A3B, from OpenBMB's own 4-bit (Q4_0) GGUF. Attention, the recurrent layers, routers and KV cache stay on the GPU while the routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~20 GB of disk). Its image input is not wired in yet: LocalMind runs the language model only.</li>
               <li><strong>Gemma 4 26B-A4B &middot; SSD-streamed (experimental)</strong> (~14 GB) &mdash; text, with reasoning. Google's Gemma 4 26B-A4B mixture-of-experts (128 experts, 8 active per token) from its official 4-bit QAT GGUF (14.4 GB) on the same from-scratch WebGPU engine family: attention, the dense MLP, routers and KV cache stay on the GPU (~1.6 GB plus a 4 GB expert pool) while the 3,840 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~14 GB of disk; about 12 minutes on a fast connection). About 23 tokens/s on an M4 Pro with 24 GB, and prompts are read in chunks at about 55 tokens/s. Greedy output matches llama.cpp. Flip <strong>Show reasoning</strong> for its thinking.</li>
               <li><strong>LFM2.5 24B-A2B &middot; SSD-streamed (experimental)</strong> (~13.6 GB) &mdash; text, reasoning-only. Liquid AI's LFM2.5-24B-A2B (released 2026-10-13): a 24B mixture-of-experts (64 experts, 4 active per token, about 2.4B parameters per token) with short-convolution and attention layers, from Liquid's own 4-bit GGUF. Short-convolution and attention layers, routers and KV cache stay on the GPU while the 2,432 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~13.6 GB of disk). About 16 tokens/s on an M4 Pro with 24 GB, and prompts are read in chunks at about 50 tokens/s. Greedy output matches llama.cpp (8 of 8 prompts). It always reasons before it answers, so every reply opens with its reasoning. It can use tools (calculator, time, memory, reminders): it called the right tool on 6 of 6 test prompts and answered 5 of 5 plain questions without one.</li>
             </ul>
@@ -2927,6 +2928,7 @@
           <option value="gemma4-e4b-webgpu">Gemma 4 E4B &middot; WebGPU kernels (~3.6 GB)</option>
           <option value="minicpm5-2b-gguf">MiniCPM5 2B &middot; GGUF (~1.6 GB)</option>
           <option value="qwen36-35b-a3b-ssd">Qwen3.6 35B-A3B &middot; SSD-streamed, experimental (~37 GB)</option>
+          <option value="minicpm-v47-35b-a3b-ssd">MiniCPM-V 4.7 35B-A3B &middot; SSD-streamed, experimental, text only (~20 GB)</option>
           <option value="gemma4-26b-a4b-ssd">Gemma 4 26B-A4B &middot; SSD-streamed, experimental (~14 GB)</option>
           <option value="lfm25-24b-a2b-ssd">LFM2.5 24B-A2B &middot; SSD-streamed, experimental (~13.6 GB)</option>
         </select>
@@ -9020,6 +9022,23 @@ self.addEventListener('message', async (e) => {
         // (2026-10-05: "Is 91 a prime number?" ran out mid-thought at 1024). Generation also stops at the 4K context.
         genConfig: { max_new_tokens: 2048 },
       },
+      // backend:'minicpmv-ssd' → MiniCpmV47Ssd (qwen35_moe_ssd.js): OpenBMB's MiniCPM-V 4.7 35B-A3B. Its language model is
+      // a qwen35moe with Qwen3.6's shapes, so it runs on the Qwen3.6 engine with its own pinned file, chat template and
+      // tokenizer rule. OpenBMB's Q4_0 GGUF (19.7 GB): Q4_0 matrices and experts, a Q6_K output matrix (the Gemma 4 rung's
+      // kernels). Text only: the vision encoder (mmproj, projector minicpmv4_7) is not wired.
+      'minicpm-v47-35b-a3b-ssd': {
+        id: 'openbmb/MiniCPM-V-4.7-35B-A3B-gguf',
+        label: 'MiniCPM-V 4.7 35B-A3B · SSD-streamed (experimental)',
+        backend: 'minicpmv-ssd',
+        size: '~20 GB',
+        gguf: { file: 'MiniCPM-V-4_7-35B-A3B-Q4_0.gguf', size: 19714550688 },   // MINICPM_V47_35B_A3B in qwen35_moe_ssd.js
+        type: 'causal',
+        multimodal: false,
+        agentCapable: false,
+        thinking: true,
+        contextSize: 4096,
+        genConfig: { max_new_tokens: 2048 },
+      },
       // backend:'gemma4moe-ssd' → the custom-WGSL Gemma4MoeSsd engine (gemma4_moe_ssd.js, on the same base
       // as Qwen3.6's): Gemma 4 26B-A4B from Google's QAT Q4_0 GGUF (14.4 GB, not gated). Attention, the dense
       // MLP, routers and KV stay on the GPU (~1.6 GB + a 4 GB expert pool); the 3,840 routed experts (3.3 MB
@@ -9773,6 +9792,7 @@ self.addEventListener('message', async (e) => {
       'ternary-bonsai-2-27b-webgpu': 'qwen',
       'underdog-saluki-27b': 'qwen',
       'qwen36-35b-a3b-ssd': 'qwen',
+      'minicpm-v47-35b-a3b-ssd': 'qwen',
       'gemma4-26b-a4b-ssd': 'gemma',
       'bonsai-ternary-4b': 'bonsai4b',
       'lfm2-1.2b': 'lfm2',
@@ -15828,6 +15848,7 @@ self.addEventListener('message', async (e) => {
     function moeSsdEngine(backend) {
       return ({
         'qwen35moe-ssd': { engine: 'qwen35_moe_ssd.js', exportName: 'Qwen35MoeSsd', label: 'Qwen3.6 35B-A3B (Q8_0)' },
+        'minicpmv-ssd': { engine: 'qwen35_moe_ssd.js', exportName: 'MiniCpmV47Ssd', label: 'MiniCPM-V 4.7 35B-A3B (Q4_0)' },
         'gemma4moe-ssd': { engine: 'gemma4_moe_ssd.js', exportName: 'Gemma4MoeSsd', label: 'Gemma 4 26B-A4B (Q4_0)' },
         'lfm2moe-ssd': { engine: 'lfm2_moe_ssd.js', exportName: 'Lfm2MoeSsd', label: 'LFM2.5 24B-A2B (Q4_0)' },
         'qwen35dense': { engine: 'qwen35_dense.js', exportName: 'Qwen35Dense', label: 'Underdog Saluki 27B (IQ2-mix)' },
@@ -17389,7 +17410,7 @@ self.addEventListener('message', async (e) => {
     const ENGINE_STORES = {
       'transformers': ['transformers-cache'], 'wllama': ['wllama'], 'lfm2-webgpu': ['gguf-v1'],
       'bonsai2-webgpu': ['gguf-cache-v1'], 'gemma4-webgpu': ['safetensors-cache-v1', 'bonsai-pipeline-v1'],
-      'qwen35moe-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
+      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
     };
     function parseSizeBytes(size) {
       const m = /([\d.]+)\s*(GB|MB)/i.exec(String(size || ''));
@@ -27273,7 +27294,7 @@ function So(e){let n=Array.isArray(e)&&Array.isArray(e[0])?e[0]:e;return Uint32A
  * and `ffn_down_exps` [F, H, E], both Q4_0, plus `ffn_down_exps.scale` [E].
  */
 
-import { Qwen3MoeSsd, GGML, Q4_BLOCK, Q6K_BLOCK, tensorBytes, TOK, STORAGE, COPY_SRC, COPY_DST, MAP_READ } from './qwen3_moe_ssd.js';
+import { Qwen3MoeSsd, GGML, Q4_BLOCK, Q6K_BLOCK, tensorBytes, TOK, STORAGE, COPY_SRC, COPY_DST, MAP_READ, Q4_KERNELS, Q4_SG_KERNELS, Q4_BATCH_KERNELS } from './qwen3_moe_ssd.js';
 import { OpfsReaderPool } from './opfs-reader.js';
 import { QWEN35_BATCH_KERNELS } from './qwen35_moe_ssd.js';
 
@@ -27482,37 +27503,6 @@ export class GemmaTokenizer {
   }
 }
 
-// ── WGSL ────────────────────────────────────────────────────────────────────
-// Q4_0 as two planes (ingest's splitQ4): nibbles, 16 bytes per 32 values (byte j holds values j and j + 16),
-// and one f16 scale per 32. Value = (nibble − 8) · scale, as ggml dequantizes it. Each thread reads one u32 of
-// nibbles: values 4m..4m+3 (low nibbles) and 16+4m..16+4m+3 (high nibbles) of block b.
-const Q4DOT = `
-fn q4dot(wd: u32, d: f32, xb: u32) -> f32 {
-  let lo = (f32(wd & 15u) - 8.0) * xin[xb] + (f32((wd >> 8u) & 15u) - 8.0) * xin[xb + 1u]
-         + (f32((wd >> 16u) & 15u) - 8.0) * xin[xb + 2u] + (f32((wd >> 24u) & 15u) - 8.0) * xin[xb + 3u];
-  let hi = (f32((wd >> 4u) & 15u) - 8.0) * xin[xb + 16u] + (f32((wd >> 12u) & 15u) - 8.0) * xin[xb + 17u]
-         + (f32((wd >> 20u) & 15u) - 8.0) * xin[xb + 18u] + (f32((wd >> 28u) & 15u) - 8.0) * xin[xb + 19u];
-  return d * (lo + hi);
-}`;
-// Q6_K (ggml block_q6_K: ql[128], qh[64], int8 scales[16], f16 d per 256 values). The GGUF's 210-byte blocks
-// sit at 2-byte alignment, so at load q6kPlanes splits the table on the GPU into aligned planes: ql (32 words
-// per block), qh (16), scales (4) and d as f32. q6v reads value t of block bi exactly as dequantize_row_q6_K
-// forms it: (d · scale) · (q − 32).
-const Q6P = `
-@group(0) @binding(0) var<storage, read> ql: array<u32>;
-@group(0) @binding(1) var<storage, read> qh: array<u32>;
-@group(0) @binding(2) var<storage, read> sc: array<u32>;
-@group(0) @binding(3) var<storage, read> dd: array<f32>;
-fn sc8(bi: u32, si: u32) -> f32 { let s8 = (sc[bi * 4u + (si >> 2u)] >> ((si & 3u) * 8u)) & 0xffu; return f32(select(i32(s8), i32(s8) - 256, s8 >= 128u)); }
-fn q6v(bi: u32, t: u32) -> f32 {
-  let n = t >> 7u; let r = t & 127u; let qd = r >> 5u; let l = r & 31u;
-  let qb = n * 64u + l + (qd & 1u) * 32u;
-  let lo = (ql[bi * 32u + (qb >> 2u)] >> ((qb & 3u) * 8u)) & 0xffu;
-  let q4 = select(lo & 15u, lo >> 4u, qd >= 2u);
-  let hb = n * 32u + l;
-  let h = (qh[bi * 16u + (hb >> 2u)] >> ((hb & 3u) * 8u + qd * 2u)) & 3u;
-  return dd[bi] * sc8(bi, n * 8u + (l >> 4u) + qd * 2u) * f32(i32(q4 | (h << 4u)) - 32);
-}`;
 // tanh with its argument clamped: tanh(±10) is ±1 in f32, and a naive exp-based tanh would give NaN past ~44.
 const TANH = 'fn tanhc(a: f32) -> f32 { return tanh(clamp(a, -10.0, 10.0)); }';
 const GELU = `${TANH}
@@ -27521,124 +27511,6 @@ fn gelu(x: f32) -> f32 { return 0.5 * x * (1.0 + tanhc(0.7978845608 * x * (1.0 +
 const WIN = 'fn winStart(n: u32, win: u32) -> u32 { return select(0u, n - win, win > 0u && n > win); }';
 
 const G4 = {
-  // The GGUF's Q6_K bytes (raw) → aligned planes; one thread per block.
-  q6kPlanes: `
-struct P { blocks: u32 }
-@group(0) @binding(0) var<storage, read> raw: array<u32>;
-@group(0) @binding(1) var<storage, read_write> ql: array<u32>;
-@group(0) @binding(2) var<storage, read_write> qh: array<u32>;
-@group(0) @binding(3) var<storage, read_write> sc: array<u32>;
-@group(0) @binding(4) var<storage, read_write> dd: array<f32>;
-@group(0) @binding(5) var<uniform> p: P;
-fn byteAt(i: u32) -> u32 { return (raw[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu; }
-fn wordAt(i: u32) -> u32 { return byteAt(i) | (byteAt(i + 1u) << 8u) | (byteAt(i + 2u) << 16u) | (byteAt(i + 3u) << 24u); }
-@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>) {
-  let b = g.y * ng.x * 256u + g.x; if (b >= p.blocks) { return; }
-  let o = b * 210u;
-  for (var i = 0u; i < 32u; i++) { ql[b * 32u + i] = wordAt(o + 4u * i); }
-  for (var i = 0u; i < 16u; i++) { qh[b * 16u + i] = wordAt(o + 128u + 4u * i); }
-  for (var i = 0u; i < 4u; i++) { sc[b * 4u + i] = wordAt(o + 192u + 4u * i); }
-  dd[b] = unpack2x16float(byteAt(o + 208u) | (byteAt(o + 209u) << 8u)).x;
-}`,
-  embedQ6K: `
-${TOK}
-struct P { n: u32, nb: u32, scale: f32 }
-${Q6P}
-@group(0) @binding(4) var<storage, read_write> y: array<f32>;
-@group(0) @binding(5) var<uniform> tok: Tok;
-@group(0) @binding(6) var<uniform> p: P;
-@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
-  let i = g.x; if (i >= p.n) { return; }
-  y[i] = q6v(tok.token * p.nb + (i >> 8u), i & 255u) * p.scale;
-}`,
-  // Logits over the Q6_K planes: 4 rows per 256-thread workgroup, 64 threads per row; thread j takes quad j
-  // (4 consecutive values: one ql word, one qh word, one scale) of every block of the row.
-  matmulQ6K: `
-struct P { M: u32, N: u32 }
-${Q6P}
-@group(0) @binding(4) var<storage, read> x: array<vec4<f32>>;
-@group(0) @binding(5) var<storage, read_write> y: array<f32>;
-@group(0) @binding(6) var<uniform> p: P;
-var<workgroup> part: array<f32, 256>;
-@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
-  let j = l.x & 63u; let m = (wg.y * ng.x + wg.x) * 4u + (l.x >> 6u); let mr = min(m, p.M - 1u);
-  let nb = p.N / 256u; let n = j >> 5u; let w = j & 31u; let qd = w >> 3u; let k = w & 7u;
-  var acc = 0.0;
-  for (var bb = 0u; bb < nb; bb++) {
-    let bi = mr * nb + bb;
-    let lo = unpack4xU8(ql[bi * 32u + n * 16u + (qd & 1u) * 8u + k]);
-    let q4 = select(lo & vec4<u32>(15u), lo >> vec4<u32>(4u), qd >= 2u);
-    let h = (unpack4xU8(qh[bi * 16u + n * 8u + k]) >> vec4<u32>(qd * 2u)) & vec4<u32>(3u);
-    let q = vec4<f32>(vec4<i32>(q4 | (h << vec4<u32>(4u))) - vec4<i32>(32));
-    acc += (dd[bi] * sc8(bi, n * 8u + (k >> 2u) + qd * 2u)) * dot(q, x[bb * 64u + j]);
-  }
-  part[l.x] = acc; workgroupBarrier();
-  for (var s = 32u; s > 0u; s >>= 1u) { if (j < s) { part[l.x] += part[l.x + s]; } workgroupBarrier(); }
-  if (j == 0u && m < p.M) { y[m] = part[l.x]; }
-}`,
-  // Dense Q4_0 GEMV, 4 output rows per workgroup (2-D dispatch ok).
-  matmulQ4: `enable f16;
-struct P { M: u32, N: u32 }
-@group(0) @binding(0) var<storage, read> xin: array<f32>;
-@group(0) @binding(1) var<storage, read> qw: array<u32>;
-@group(0) @binding(2) var<storage, read> qs: array<f16>;
-@group(0) @binding(3) var<storage, read_write> y: array<f32>;
-@group(0) @binding(4) var<uniform> p: P;
-${Q4DOT}
-var<workgroup> part: array<f32, 1024>;
-@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
-  let m0 = (wg.y * ng.x + wg.x) * 4u; let t = l.x; let M = p.M; let nw = p.N / 8u; let nb = p.N / 32u;
-  if (m0 >= M) { return; }
-  let r0 = min(m0, M - 1u); let r1 = min(m0 + 1u, M - 1u); let r2 = min(m0 + 2u, M - 1u); let r3 = min(m0 + 3u, M - 1u);
-  var a0 = 0.0; var a1 = 0.0; var a2 = 0.0; var a3 = 0.0;
-  for (var w = t; w < nw; w += 256u) {
-    let b = w >> 2u; let xb = b * 32u + (w & 3u) * 4u;
-    a0 += q4dot(qw[r0 * nw + w], f32(qs[r0 * nb + b]), xb);
-    a1 += q4dot(qw[r1 * nw + w], f32(qs[r1 * nb + b]), xb);
-    a2 += q4dot(qw[r2 * nw + w], f32(qs[r2 * nb + b]), xb);
-    a3 += q4dot(qw[r3 * nw + w], f32(qs[r3 * nb + b]), xb);
-  }
-  part[t] = a0; part[256u + t] = a1; part[512u + t] = a2; part[768u + t] = a3;
-  workgroupBarrier();
-  for (var s = 128u; s > 0u; s >>= 1u) {
-    if (t < s) { part[t] += part[t + s]; part[256u + t] += part[256u + t + s]; part[512u + t] += part[512u + t + s]; part[768u + t] += part[768u + t + s]; }
-    workgroupBarrier();
-  }
-  if (t < 4u && m0 + t < M) { y[m0 + t] = part[t * 256u]; }
-}`,
-  // Routed experts, all k at once (workgroup z = top-k position); slots[z] picks the expert's rows in the pool.
-  expertQ4: `enable f16;
-struct P { M: u32, N: u32, rowsPerExpert: u32, inputPerSlot: u32 }
-@group(0) @binding(0) var<storage, read> xin: array<f32>;
-@group(0) @binding(1) var<storage, read> qw: array<u32>;
-@group(0) @binding(2) var<storage, read> qs: array<f16>;
-@group(0) @binding(3) var<storage, read_write> y: array<f32>;
-@group(0) @binding(4) var<uniform> p: P;
-@group(0) @binding(5) var<storage, read> slots: array<u32>;
-${Q4DOT}
-var<workgroup> part: array<f32, 1024>;
-@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
-  let z = wg.z; let m0 = (wg.y * ng.x + wg.x) * 4u; let t = l.x; let M = p.M; let nw = p.N / 8u; let nb = p.N / 32u;
-  if (m0 >= M) { return; }
-  let rb = slots[z] * p.rowsPerExpert;
-  let xo = select(0u, z * p.N, p.inputPerSlot == 1u);
-  let r0 = rb + min(m0, M - 1u); let r1 = rb + min(m0 + 1u, M - 1u); let r2 = rb + min(m0 + 2u, M - 1u); let r3 = rb + min(m0 + 3u, M - 1u);
-  var a0 = 0.0; var a1 = 0.0; var a2 = 0.0; var a3 = 0.0;
-  for (var w = t; w < nw; w += 256u) {
-    let b = w >> 2u; let xb = xo + b * 32u + (w & 3u) * 4u;
-    a0 += q4dot(qw[r0 * nw + w], f32(qs[r0 * nb + b]), xb);
-    a1 += q4dot(qw[r1 * nw + w], f32(qs[r1 * nb + b]), xb);
-    a2 += q4dot(qw[r2 * nw + w], f32(qs[r2 * nb + b]), xb);
-    a3 += q4dot(qw[r3 * nw + w], f32(qs[r3 * nb + b]), xb);
-  }
-  part[t] = a0; part[256u + t] = a1; part[512u + t] = a2; part[768u + t] = a3;
-  workgroupBarrier();
-  for (var s = 128u; s > 0u; s >>= 1u) {
-    if (t < s) { part[t] += part[t + s]; part[256u + t] += part[256u + t + s]; part[512u + t] += part[512u + t + s]; part[768u + t] += part[768u + t + s]; }
-    workgroupBarrier();
-  }
-  if (t < 4u && m0 + t < M) { y[z * M + m0 + t] = part[t * 256u]; }
-}`,
   // gu = k × [gate F | up F] → act = k × F of GELU(gate)·up (ggml_geglu_split).
   geglu: `
 struct P { F: u32, k: u32 }
@@ -27812,146 +27684,12 @@ struct P { n: u32, off: u32 }
 }`,
 };
 
-// ── Subgroup Q4_0 GEMVs (decode) ─────────────────────────────────────────────────
-// One 32-lane subgroup per output row, 4 rows per 128-thread workgroup (the scalar kernels' dispatch
-// geometry). A lane takes whole blocks: one vec4<u32> of nibbles, unpack4xU8 of the low and high nibble
-// masks, vec4 dot products against the activations, the block scale once; subgroupAdd reduces the row.
-// Used only when the adapter's subgroups are exactly 32 wide.
-const Q4BLK = `
-fn q4blk(w: vec4<u32>, xb: u32) -> f32 {
-  let m = 0x0f0f0f0fu;
-  return dot(vec4<f32>(unpack4xU8(w.x & m)) - 8.0, x[xb]) + dot(vec4<f32>(unpack4xU8((w.x >> 4u) & m)) - 8.0, x[xb + 4u])
-       + dot(vec4<f32>(unpack4xU8(w.y & m)) - 8.0, x[xb + 1u]) + dot(vec4<f32>(unpack4xU8((w.y >> 4u) & m)) - 8.0, x[xb + 5u])
-       + dot(vec4<f32>(unpack4xU8(w.z & m)) - 8.0, x[xb + 2u]) + dot(vec4<f32>(unpack4xU8((w.z >> 4u) & m)) - 8.0, x[xb + 6u])
-       + dot(vec4<f32>(unpack4xU8(w.w & m)) - 8.0, x[xb + 3u]) + dot(vec4<f32>(unpack4xU8((w.w >> 4u) & m)) - 8.0, x[xb + 7u]);
-}`;
-const G4SG = {
-  matmulQ4: `enable f16;
-enable subgroups;
-struct P { M: u32, N: u32 }
-@group(0) @binding(0) var<storage, read> x: array<vec4<f32>>;
-@group(0) @binding(1) var<storage, read> qw: array<vec4<u32>>;
-@group(0) @binding(2) var<storage, read> qs: array<f16>;
-@group(0) @binding(3) var<storage, read_write> y: array<f32>;
-@group(0) @binding(4) var<uniform> p: P;
-${Q4BLK}
-@compute @workgroup_size(128) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
-  let m = (wg.y * ng.x + wg.x) * 4u + l.x / 32u; let lane = l.x % 32u;
-  let nb = p.N / 32u; let rb = min(m, p.M - 1u) * nb;
-  var acc = 0.0;
-  for (var b = lane; b < nb; b += 32u) { acc += q4blk(qw[rb + b], b * 8u) * f32(qs[rb + b]); }
-  let total = subgroupAdd(acc);
-  if (lane == 0u && m < p.M) { y[m] = total; }
-}`,
-  expertQ4: `enable f16;
-enable subgroups;
-struct P { M: u32, N: u32, rowsPerExpert: u32, inputPerSlot: u32 }
-@group(0) @binding(0) var<storage, read> x: array<vec4<f32>>;
-@group(0) @binding(1) var<storage, read> qw: array<vec4<u32>>;
-@group(0) @binding(2) var<storage, read> qs: array<f16>;
-@group(0) @binding(3) var<storage, read_write> y: array<f32>;
-@group(0) @binding(4) var<uniform> p: P;
-@group(0) @binding(5) var<storage, read> slots: array<u32>;
-${Q4BLK}
-@compute @workgroup_size(128) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
-  let z = wg.z; let m = (wg.y * ng.x + wg.x) * 4u + l.x / 32u; let lane = l.x % 32u;
-  let nb = p.N / 32u; let rb = (slots[z] * p.rowsPerExpert + min(m, p.M - 1u)) * nb;
-  let xo = select(0u, z * p.N / 4u, p.inputPerSlot == 1u);
-  var acc = 0.0;
-  for (var b = lane; b < nb; b += 32u) { acc += q4blk(qw[rb + b], xo + b * 8u) * f32(qs[rb + b]); }
-  let total = subgroupAdd(acc);
-  if (lane == 0u && m < p.M) { y[z * p.M + m] = total; }
-}`,
-};
 
 // ── Chunked prefill: T tokens per layer pass (rung 2b's pattern) ────────────────
 // Rows are tokens, token-major. Generic kernels come from rung 2b (rmsnormB, matmulF32T, topkB, kvStoreB,
 // softmaxB, attnOutB); these are Gemma's.
 const QB = 'struct Q { T: u32, pos0: u32, S: u32, pad: u32 }';
 const G4B = {
-  embedQ6KB: `
-struct P { n: u32, nb: u32, scale: f32 }
-${QB}
-${Q6P}
-@group(0) @binding(4) var<storage, read> ids: array<u32>;
-@group(0) @binding(5) var<storage, read_write> y: array<f32>;
-@group(0) @binding(6) var<uniform> p: P;
-@group(0) @binding(7) var<uniform> qd: Q;
-@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
-  let i = g.x; let t = g.y; if (i >= p.n || t >= qd.T) { return; }
-  y[t * p.n + i] = q6v(ids[t] * p.nb + (i >> 8u), i & 255u) * p.scale;
-}`,
-  // Tiled Q4_0 GEMM: y[t·M + m] = Σ_k x[t·N + k]·W[m][k]. 16 rows × 16 tokens per workgroup; each 32-wide
-  // block of W (decoded from its nibbles) and of x goes through shared memory, so a weight serves 16 tokens.
-  // Dispatch (ceil(M/16), ceil(T/16)).
-  matmulQ4T: `enable f16;
-struct P { M: u32, N: u32 }
-${QB}
-@group(0) @binding(0) var<storage, read> x: array<f32>;
-@group(0) @binding(1) var<storage, read> qw: array<u32>;
-@group(0) @binding(2) var<storage, read> qs: array<f16>;
-@group(0) @binding(3) var<storage, read_write> y: array<f32>;
-@group(0) @binding(4) var<uniform> p: P;
-@group(0) @binding(5) var<uniform> qd: Q;
-var<workgroup> ws: array<f32, 512>;
-var<workgroup> xs: array<f32, 512>;
-@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
-  let m0 = wg.x * 16u; let t0 = wg.y * 16u; let r = l.x / 16u; let c = l.x % 16u;
-  let nb = p.N / 32u; let nw = p.N / 8u; var acc = 0.0;
-  for (var b = 0u; b < nb; b++) {
-    for (var i = l.x; i < 512u; i += 256u) {
-      let rr = i / 32u; let kk = i % 32u;
-      let m = m0 + rr; var wv = 0.0;
-      if (m < p.M) {
-        let wd = qw[m * nw + b * 4u + ((kk & 15u) >> 2u)];
-        wv = (f32((wd >> ((kk & 3u) * 8u + (kk >> 4u) * 4u)) & 15u) - 8.0) * f32(qs[m * nb + b]);
-      }
-      ws[i] = wv;
-      let t = t0 + rr; var xv = 0.0;
-      if (t < qd.T) { xv = x[t * p.N + b * 32u + kk]; }
-      xs[i] = xv;
-    }
-    workgroupBarrier();
-    for (var kk = 0u; kk < 32u; kk++) { acc += ws[r * 32u + kk] * xs[c * 32u + kk]; }
-    workgroupBarrier();
-  }
-  let m = m0 + r; let t = t0 + c;
-  if (m < p.M && t < qd.T) { y[t * p.M + m] = acc; }
-}`,
-  // Routed experts for every (token, pick) pair: z = t·K + j, slots[z] its pool slot. Input: the token's row
-  // (gate/up, inputMode 0) or the pair's own row (down, inputMode 1).
-  expertQ4B: `enable f16;
-struct P { M: u32, N: u32, rowsPerExpert: u32, inputMode: u32, K: u32 }
-@group(0) @binding(0) var<storage, read> xin: array<f32>;
-@group(0) @binding(1) var<storage, read> qw: array<u32>;
-@group(0) @binding(2) var<storage, read> qs: array<f16>;
-@group(0) @binding(3) var<storage, read_write> y: array<f32>;
-@group(0) @binding(4) var<uniform> p: P;
-@group(0) @binding(5) var<storage, read> slots: array<u32>;
-${Q4DOT}
-var<workgroup> part: array<f32, 1024>;
-@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
-  let z = wg.z; let m0 = (wg.y * ng.x + wg.x) * 4u; let t = l.x; let M = p.M; let nw = p.N / 8u; let nb = p.N / 32u;
-  if (m0 >= M) { return; }
-  let rb = slots[z] * p.rowsPerExpert;
-  let xo = select((z / p.K) * p.N, z * p.N, p.inputMode == 1u);
-  let r0 = rb + min(m0, M - 1u); let r1 = rb + min(m0 + 1u, M - 1u); let r2 = rb + min(m0 + 2u, M - 1u); let r3 = rb + min(m0 + 3u, M - 1u);
-  var a0 = 0.0; var a1 = 0.0; var a2 = 0.0; var a3 = 0.0;
-  for (var w = t; w < nw; w += 256u) {
-    let b = w >> 2u; let xb = xo + b * 32u + (w & 3u) * 4u;
-    a0 += q4dot(qw[r0 * nw + w], f32(qs[r0 * nb + b]), xb);
-    a1 += q4dot(qw[r1 * nw + w], f32(qs[r1 * nb + b]), xb);
-    a2 += q4dot(qw[r2 * nw + w], f32(qs[r2 * nb + b]), xb);
-    a3 += q4dot(qw[r3 * nw + w], f32(qs[r3 * nb + b]), xb);
-  }
-  part[t] = a0; part[256u + t] = a1; part[512u + t] = a2; part[768u + t] = a3;
-  workgroupBarrier();
-  for (var s = 128u; s > 0u; s >>= 1u) {
-    if (t < s) { part[t] += part[t + s]; part[256u + t] += part[256u + t + s]; part[512u + t] += part[512u + t + s]; part[768u + t] += part[768u + t + s]; }
-    workgroupBarrier();
-  }
-  if (t < 4u && m0 + t < M) { y[z * M + m0 + t] = part[t * 256u]; }
-}`,
   // Per-head RMS norm and NeoX RoPE in place for (head wg.x, token wg.y); rope holds hd values per token.
   qkNormRopeB: `
 struct P { hd: u32, row: u32, eps: f32 }
@@ -28109,8 +27847,8 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
 
   get kernels() {
     return (this._kernels ||= {
-      ...super.kernels, ...G4, ...(this.subgroupKernels ? G4SG : {}),
-      ...(this.batchPrefill ? { ...Object.fromEntries(REUSED_B.map((k) => [k, QWEN35_BATCH_KERNELS[k]])), ...G4B } : {}),
+      ...super.kernels, ...Q4_KERNELS, ...G4, ...(this.subgroupKernels ? Q4_SG_KERNELS : {}),
+      ...(this.batchPrefill ? { ...Object.fromEntries(REUSED_B.map((k) => [k, QWEN35_BATCH_KERNELS[k]])), ...Q4_BATCH_KERNELS, ...G4B } : {}),
     });
   }
   // Subgroup GEMVs replace the scalar Q4_0 ones when subgroups are exactly 32 wide (Apple, most others).
@@ -37592,7 +37330,7 @@ export { PREFILL_KERNELS as QWEN35_DENSE_PREFILL_KERNELS };
  *   const m = await Qwen35MoeSsd.load(null, { url: '…/Qwen3.6-35B-A3B-Q8_0.gguf', poolBytes });
  */
 
-import { Qwen3MoeSsd, STORAGE, COPY_SRC, COPY_DST, MAP_READ, UNIFORM, I8 } from './qwen3_moe_ssd.js';
+import { Qwen3MoeSsd, STORAGE, COPY_SRC, COPY_DST, MAP_READ, UNIFORM, I8, TOK, Q6K_BLOCK, Q4_KERNELS, Q4_SG_KERNELS, Q4_BATCH_KERNELS } from './qwen3_moe_ssd.js';
 
 export const QWEN36_35B_A3B = {
   repo: 'unsloth/Qwen3.6-35B-A3B-GGUF',
@@ -37741,6 +37479,26 @@ ${SIGMOID}
 }`,
 };
 
+
+// Q4_0 token embedding (the Q4_0 files): value e of the table from the nibble plane (byte j of a 32-value block
+// holds values j and j + 16, as matmulQ4T reads it) times its block's f16 scale.
+const Q4AT = 'fn q4at(e: u32) -> f32 { let by = (e >> 5u) * 16u + (e & 15u); return f32((q[by >> 2u] >> ((by & 3u) * 8u + ((e >> 4u) & 1u) * 4u)) & 15u) - 8.0; }';
+const Q4_EMBED = {
+  embedQ4: `enable f16;
+${TOK}
+struct P { n: u32 }
+@group(0) @binding(0) var<storage, read> q: array<u32>;
+@group(0) @binding(1) var<storage, read> s: array<f16>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+@group(0) @binding(3) var<uniform> tok: Tok;
+@group(0) @binding(4) var<uniform> p: P;
+${Q4AT}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let i = g.x; if (i >= p.n) { return; }
+  let e = tok.token * p.n + i;
+  y[i] = q4at(e) * f32(s[e >> 5u]);
+}`,
+};
 
 // ── Batched prefill: a chunk of T prompt tokens per layer ───────────────────────────────────
 // Every batched buffer is token-major (row t holds token pos0 + t). Q is the per-chunk uniform.
@@ -38143,6 +37901,23 @@ ${SIGMOID}
   x[r] = (acc + sh[r] * sigm(sg[t])) + x[r];
 }`,
 };
+const Q4_EMBED_B = {
+  embedQ4B: `enable f16;
+struct P { n: u32 }
+${QB}
+@group(0) @binding(0) var<storage, read> q: array<u32>;
+@group(0) @binding(1) var<storage, read> s: array<f16>;
+@group(0) @binding(2) var<storage, read> ids: array<u32>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@group(0) @binding(5) var<uniform> qd: Q;
+${Q4AT}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let i = g.x; let t = g.y; if (i >= p.n || t >= qd.T) { return; }
+  let e = ids[t] * p.n + i;
+  y[t * p.n + i] = q4at(e) * f32(s[e >> 5u]);
+}`,
+};
 
 // ── Subgroup Q8_0 GEMV (the LFM2.5 / Gemma 4 kernels' pattern) ──────────────────────────────
 // One 32-lane subgroup per output row, 4 rows per 128-thread workgroup (the same dispatch
@@ -38251,6 +38026,19 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     if (c.arch !== 'qwen35moe') throw new Error(`Qwen35MoeSsd needs a qwen35moe GGUF, got ${c.arch}`);
     if (c.ssm.dConv !== 4) throw new Error(`gdnConv assumes a 4-tap conv, got ${c.ssm.dConv}`);
     if (c.ssm.dState !== 128 || c.ssm.dInner !== c.ssm.vHeads * c.ssm.dState) throw new Error('gdnStep assumes 128-wide heads');
+    // Weight type: Q8_0 (Qwen3.6, MiniCPM-V Q8_0) or Q4_0 (MiniCPM-V Q4_0: Q4_0 matrices and experts, Q6_K output).
+    // Every projection and the experts share one type, so one set of kernel names serves the whole graph.
+    const dt = manifest.dense.tensors, q4 = dt['token_embd.weight'].type === 'q4';
+    for (const [name, d] of Object.entries(dt)) {
+      if (d.type !== 'f32' && name !== 'output.weight' && d.type !== (q4 ? 'q4' : 'q8')) throw new Error(`${name}: ${d.type} in a ${q4 ? 'Q4_0' : 'Q8_0'} file`);
+    }
+    if (q4 !== (manifest.experts.parts.dQ.bytes * 2 === c.expertFf * c.hidden)) throw new Error('experts and dense weights differ in type');
+    const lm = dt['output.weight'].type;
+    if (!(q4 ? ['q4', 'q6k'] : ['q8']).includes(lm)) throw new Error(`output.weight: ${lm} is not supported in a ${q4 ? 'Q4_0' : 'Q8_0'} file`);
+    this.q4 = q4;
+    this.qk = q4
+      ? { mm: 'matmulQ4', mmT: 'matmulQ4T', ex: 'expertQ4', exB: 'expertQ4B', emb: 'embedQ4', embB: 'embedQ4B', lm: lm === 'q6k' ? 'matmulQ6K' : 'matmulQ4' }
+      : { mm: 'matmulQ8', mmT: 'matmulQ8T', ex: 'expertQ8', exB: 'expertQ8B', emb: 'embedQ8', embB: 'embedQ8B', lm: 'matmulQ8' };
     this.recurrent = Array.from({ length: c.layers }, (_, l) => (l + 1) % c.attnInterval !== 0);
     // Prompts go through in chunks of up to chunkTokens tokens per layer (one routing readback per
     // layer per chunk); decode stays one token at a time.
@@ -38269,6 +38057,22 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     this.routeWindow = Math.max(1, Math.floor(opts.routeWindow ?? 2));
   }
 
+  // A Q6_K output matrix (the Q4_0 files) is split on the GPU into aligned planes for matmulQ6K, and the raw copy freed.
+  async uploadDense(onProgress) {
+    await super.uploadDense(onProgress);
+    const o = this.w['output.weight'];
+    if (!o.raw) return;
+    const dev = this.device, raw = o.raw, blocks = raw.size / Q6K_BLOCK | 0;
+    const P = (n) => this.buffer(n, STORAGE, 'dense');
+    this.q6 = { ql: P(blocks * 128), qh: P(blocks * 64), sc: P(blocks * 16), dd: P(blocks * 4) };
+    const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
+    const wg = Math.ceil(blocks / 256), x = Math.min(wg, 65535);
+    this.dispatch(pass, 'q6kPlanes', this.bind('q6kPlanes', [raw, this.q6.ql, this.q6.qh, this.q6.sc, this.q6.dd, this.uniform([blocks])]), x, Math.ceil(wg / x));
+    pass.end(); dev.queue.submit([enc.finish()]);
+    await dev.queue.onSubmittedWorkDone();
+    this.gpuBytes.dense -= raw.size; raw.destroy(); o.raw = null;
+  }
+
   // Subgroup GEMVs replace the scalar ones when subgroups are exactly 32 wide (Apple, most others).
   get subgroupKernels() {
     const i = this.device.adapterInfo || this.opts.adapterInfo || {};
@@ -38277,13 +38081,14 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
   // With gpuRouting, every one-token kernel carries the stop guard (chunked prefill's do not).
   get kernels() {
     if (!this._kernels) {
-      const k = { ...super.kernels, ...KERNELS, ...(this.subgroupKernels ? SG_KERNELS : {}) };
+      const q4 = this.q4 ? { ...Q4_KERNELS, ...Q4_EMBED, ...(this.subgroupKernels ? Q4_SG_KERNELS : {}) } : {};
+      const k = { ...super.kernels, ...KERNELS, ...(this.subgroupKernels ? SG_KERNELS : {}), ...q4 };
       if (this.routeGuards) for (const n of Object.keys(k)) k[n] = guarded(k[n]);
-      this._kernels = { ...k, ...BATCH_KERNELS, route: ROUTE_KERNEL };
+      this._kernels = { ...k, ...BATCH_KERNELS, ...(this.q4 ? { ...Q4_BATCH_KERNELS, ...Q4_EMBED_B, q6kPlanes: Q4_KERNELS.q6kPlanes } : {}), route: ROUTE_KERNEL };
     }
     return this._kernels;
   }
-  isGuarded(name) { return this.routeGuards && name !== 'route' && !(name in BATCH_KERNELS); }
+  isGuarded(name) { return this.routeGuards && name !== 'route' && !(name in BATCH_KERNELS) && !(name in Q4_BATCH_KERNELS) && !(name in Q4_EMBED_B) && name !== 'q6kPlanes'; }
 
   bind(name, buffers) { return super.bind(name, this.isGuarded(name) ? [...buffers, this.a.stop] : buffers); }
   // Like bind(), but a resource may be { buffer, offset, size }.
@@ -38355,9 +38160,10 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
       lm: U([c.vocab, H]), am: U([c.vocab]),
     };
     const a = this.a, W = this.w;
-    const q8 = (name, x, y, uni) => { const t = W[name]; if (!t || !t.q) throw new Error(`missing Q8_0 tensor ${name}`); return this.bind('matmulQ8', [x, t.q, t.s, y, uni]); };
+    const QK = this.qk;
+    const q8 = (name, x, y, uni) => { const t = W[name]; if (!t || !t.q) throw new Error(`missing quantized tensor ${name}`); return this.bind(QK.mm, [x, t.q, t.s, y, uni]); };
     const raw = (name) => { const t = W[name]; if (!t || !t.raw) throw new Error(`missing F32 tensor ${name}`); return t.raw; };
-    this.g = { embed: this.bind('embedQ8', [W['token_embd.weight'].q, W['token_embd.weight'].s, a.x, this.tok, u.nH]) };
+    this.g = { embed: this.bind(QK.emb, [W['token_embd.weight'].q, W['token_embd.weight'].s, a.x, this.tok, u.nH]) };
     this.layers = [];
     for (let l = 0; l < c.layers; l++) {
       const n = (t) => `blk.${l}.${t}`;
@@ -38402,21 +38208,23 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
           };
         }),
         // Shared expert: [gate | up] into shgu, SiLU·up, down; its scalar gate logit into sg.
-        shg: this.bindR('matmulQ8', [a.xn, W[n('ffn_gate_shexp.weight')].q, W[n('ffn_gate_shexp.weight')].s, { buffer: a.shgu, offset: 0, size: SF * 4 }, u.shgu]),
-        shu: this.bindR('matmulQ8', [a.xn, W[n('ffn_up_shexp.weight')].q, W[n('ffn_up_shexp.weight')].s, { buffer: a.shgu, offset: SF * 4, size: SF * 4 }, u.shgu]),
+        shg: this.bindR(QK.mm, [a.xn, W[n('ffn_gate_shexp.weight')].q, W[n('ffn_gate_shexp.weight')].s, { buffer: a.shgu, offset: 0, size: SF * 4 }, u.shgu]),
+        shu: this.bindR(QK.mm, [a.xn, W[n('ffn_up_shexp.weight')].q, W[n('ffn_up_shexp.weight')].s, { buffer: a.shgu, offset: SF * 4, size: SF * 4 }, u.shgu]),
         shsilu: this.bind('siluMulMoe', [a.shgu, a.shact, u.shsilu]),
         shd: q8(n('ffn_down_shexp.weight'), a.shact, a.sh, u.shd),
         shgate: this.bind('matmulF32', [a.xn, raw(n('ffn_gate_inp_shexp.weight')), a.sg, u.shgate]),
-        gu: this.bind('expertQ8', [a.xn, this.pool.guQ, this.pool.guS, a.gu, u.gu, a.slots]),
+        gu: this.bind(QK.ex, [a.xn, this.pool.guQ, this.pool.guS, a.gu, u.gu, a.slots]),
         silu: this.bind('siluMulMoe', [a.gu, a.act, u.silu]),
-        dn: this.bind('expertQ8', [a.act, this.pool.dQ, this.pool.dS, a.dn, u.dn, a.slots]),
+        dn: this.bind(QK.ex, [a.act, this.pool.dQ, this.pool.dS, a.dn, u.dn, a.slots]),
         acc: this.bind('moeAccumShared', [a.dn, a.sel, a.sh, a.sg, a.x, u.acc]),
         route: this.bind('route', [a.sel, a.rmap, a.slots, a.stop, a.used, U([l, c.experts, K, 0])]),
       });
       this.layers.push(g);
     }
     this.g.rmsOut = this.bind('rmsnorm', [a.x, raw('output_norm.weight'), a.xn, u.rmsH]);
-    this.g.lm = this.bind('matmulQ8', [a.xn, W['output.weight'].q, W['output.weight'].s, a.logits, u.lm]);
+    this.g.lm = QK.lm === 'matmulQ6K'
+      ? this.bind('matmulQ6K', [this.q6.ql, this.q6.qh, this.q6.sc, this.q6.dd, a.xn, a.logits, u.lm])
+      : this.bind(QK.lm, [a.xn, W['output.weight'].q, W['output.weight'].s, a.logits, u.lm]);
     this.g.am = this.bind('argmax', [a.logits, a.am, u.am]);
     // A chunk pins min(experts, T·K) experts per layer at once; keep that under half the pool.
     if (Math.min(c.experts, this.chunkTokens * K) > this.poolSlots / 2) this.chunkTokens = Math.max(2, Math.floor(this.poolSlots / 2 / K));
@@ -38450,8 +38258,9 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
       shgu: U([SF, H]), shd: U([H, SF]), sh2: U([SF]), shgate: U([1, H]),
     };
     const raw = (name) => W[name].raw;
-    const q8 = (name, x, y, uni) => this.bind('matmulQ8T', [x, W[name].q, W[name].s, y, uni, qb]);
-    this.gB = { embed: this.bind('embedQ8B', [W['token_embd.weight'].q, W['token_embd.weight'].s, b.ids, b.x, u.nH, qb]) };
+    const QK = this.qk;
+    const q8 = (name, x, y, uni) => this.bind(QK.mmT, [x, W[name].q, W[name].s, y, uni, qb]);
+    this.gB = { embed: this.bind(QK.embB, [W['token_embd.weight'].q, W['token_embd.weight'].s, b.ids, b.x, u.nH, qb]) };
     for (let l = 0; l < c.layers; l++) {
       const n = (t) => `blk.${l}.${t}`, g = { rmsA: this.bind('rmsnormB', [b.x, raw(n('attn_norm.weight')), b.xn, u.rmsH]) };
       if (this.recurrent[l]) {
@@ -38485,9 +38294,9 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
         shact: this.bind('siluMul2B', [b.shg, b.shu, b.shact, u.sh2, qb]),
         shd: q8(n('ffn_down_shexp.weight'), b.shact, b.sh, u.shd),
         shgate: this.bind('matmulF32T', [b.xn, raw(n('ffn_gate_inp_shexp.weight')), b.sg, u.shgate]),
-        gu: this.bind('expertQ8B', [b.xn, this.pool.guQ, this.pool.guS, b.gu, u.gu, b.slots]),
+        gu: this.bind(QK.exB, [b.xn, this.pool.guQ, this.pool.guS, b.gu, u.gu, b.slots]),
         silu: this.bind('siluMulMoe', [b.gu, b.act, u.silu]),
-        dn: this.bind('expertQ8B', [b.act, this.pool.dQ, this.pool.dS, b.dn, u.dn, b.slots]),
+        dn: this.bind(QK.exB, [b.act, this.pool.dQ, this.pool.dS, b.dn, u.dn, b.slots]),
         acc: this.bind('moeAccumSharedB', [b.dn, b.sel, b.sh, b.sg, b.x, u.acc, qb]),
       });
       this.layers[l].B = g;
@@ -38501,37 +38310,37 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     const tt = Math.ceil(T / 16), mm = (n) => Math.ceil(n / 16);
     d('rmsnormB', g.rmsA, T);
     if (this.recurrent[l]) {
-      d('matmulQ8T', g.qkv, mm(convDim), tt); d('matmulQ8T', g.z, mm(s.dInner), tt);
-      d('matmulQ8T', g.beta, mm(s.vHeads), tt); d('matmulQ8T', g.alpha, mm(s.vHeads), tt);
+      d(this.qk.mmT, g.qkv, mm(convDim), tt); d(this.qk.mmT, g.z, mm(s.dInner), tt);
+      d(this.qk.mmT, g.beta, mm(s.vHeads), tt); d(this.qk.mmT, g.alpha, mm(s.vHeads), tt);
       d('gdnConvB', g.conv, Math.ceil(convDim / 256));
       d('gdnStepB', g.step, s.vHeads);
       d('gdnNormGateB', g.norm, s.vHeads, T);
-      d('matmulQ8T', g.out, mm(H), tt);
+      d(this.qk.mmT, g.out, mm(H), tt);
     } else {
-      d('matmulQ8T', g.q, mm(2 * QN), tt); d('matmulQ8T', g.k, mm(kvn), tt); d('matmulQ8T', g.v, mm(kvn), tt);
+      d(this.qk.mmT, g.q, mm(2 * QN), tt); d(this.qk.mmT, g.k, mm(kvn), tt); d(this.qk.mmT, g.v, mm(kvn), tt);
       d('qkNormRopePB', g.ropeQ, c.heads, T); d('qkNormRopePB', g.ropeK, c.kvHeads, T);
       d('kvStoreB', g.kv, Math.ceil(kvn / 256), T);
       d('attnScoreB', g.score, Math.ceil(c.heads * T * S / 256));
       d('softmaxB', g.soft, c.heads * T);
       d('attnOutB', g.attOut, Math.ceil(QN / 256), T);
       d('sigmoidMulB', g.gate, Math.ceil(QN / 256), T);
-      d('matmulQ8T', g.o, mm(H), tt);
+      d(this.qk.mmT, g.o, mm(H), tt);
     }
     d('addInPlaceB', g.addO, Math.ceil(H / 256), T);
     d('rmsnormB', g.rmsF, T);
     d('matmulF32T', g.router, c.experts, T);
     d('topkB', g.topk, T);
-    d('matmulQ8T', g.shg, mm(c.shexpFf), tt); d('matmulQ8T', g.shu, mm(c.shexpFf), tt);
+    d(this.qk.mmT, g.shg, mm(c.shexpFf), tt); d(this.qk.mmT, g.shu, mm(c.shexpFf), tt);
     d('siluMul2B', g.shact, Math.ceil(c.shexpFf / 256), T);
-    d('matmulQ8T', g.shd, mm(H), tt);
+    d(this.qk.mmT, g.shd, mm(H), tt);
     d('matmulF32T', g.shgate, 1, T);
   }
 
   encodeExpertsB(pass, l, T) {
     const c = this.cfg, g = this.layers[l].B, d = (nm, gr, x, y, z) => this.dispatch(pass, nm, gr, x, y, z);
-    d('expertQ8B', g.gu, Math.ceil(2 * c.expertFf / 4), 1, T * c.topK);
+    d(this.qk.exB, g.gu, Math.ceil(2 * c.expertFf / 4), 1, T * c.topK);
     d('siluMulMoe', g.silu, Math.ceil(T * c.topK * c.expertFf / 256));
-    d('expertQ8B', g.dn, Math.ceil(c.hidden / 4), 1, T * c.topK);
+    d(this.qk.exB, g.dn, Math.ceil(c.hidden / 4), 1, T * c.topK);
     d('moeAccumSharedB', g.acc, Math.ceil(c.hidden / 256), T);
   }
 
@@ -38554,7 +38363,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     dev.queue.writeBuffer(this.b.rope, 0, r);
     const selBytes = T * 2 * K * 4;
     let enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
-    this.dispatch(pass, 'embedQ8B', this.gB.embed, Math.ceil(H / 256), T);
+    this.dispatch(pass, this.qk.embB, this.gB.embed, Math.ceil(H / 256), T);
     this.encodeTrunkB(pass, 0, T, S);
     pass.end();
     enc.copyBufferToBuffer(this.b.sel, 0, this.rbSelB, 0, selBytes);
@@ -38586,7 +38395,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
         if (want !== 'none') {
           pass = enc.beginComputePass();
           this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);
-          this.dispatch(pass, 'matmulQ8', this.g.lm, Math.ceil(c.vocab / 4));
+          this.dispatch(pass, this.qk.lm, this.g.lm, Math.ceil(c.vocab / 4));
           if (want === 'argmax') this.dispatch(pass, 'argmax', this.g.am, 1);
           pass.end();
           if (want === 'argmax') enc.copyBufferToBuffer(this.a.am, 0, this.rbArg, 0, 4);
@@ -38622,38 +38431,38 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     const H = c.hidden, QN = c.heads * c.headDim, kvn = c.kvHeads * c.headDim, convDim = 2 * s.kHeads * s.dState + s.dInner;
     d('rmsnorm', g.rmsA, 1);
     if (g.recur) {
-      d('matmulQ8', g.qkv, Math.ceil(convDim / 4)); d('matmulQ8', g.z, Math.ceil(s.dInner / 4));
-      d('matmulQ8', g.beta, Math.ceil(s.vHeads / 4)); d('matmulQ8', g.alpha, Math.ceil(s.vHeads / 4));
+      d(this.qk.mm, g.qkv, Math.ceil(convDim / 4)); d(this.qk.mm, g.z, Math.ceil(s.dInner / 4));
+      d(this.qk.mm, g.beta, Math.ceil(s.vHeads / 4)); d(this.qk.mm, g.alpha, Math.ceil(s.vHeads / 4));
       d('gdnConv', g.conv, Math.ceil(convDim / 256));
       d('gdnStep', g.step, s.vHeads);
       d('gdnNormGate', g.norm, s.vHeads);
-      d('matmulQ8', g.out, Math.ceil(H / 4));
+      d(this.qk.mm, g.out, Math.ceil(H / 4));
     } else {
-      d('matmulQ8', g.q, Math.ceil(2 * QN / 4)); d('matmulQ8', g.k, Math.ceil(kvn / 4)); d('matmulQ8', g.v, Math.ceil(kvn / 4));
+      d(this.qk.mm, g.q, Math.ceil(2 * QN / 4)); d(this.qk.mm, g.k, Math.ceil(kvn / 4)); d(this.qk.mm, g.v, Math.ceil(kvn / 4));
       d('qkNormRopeP', g.ropeQ, c.heads); d('qkNormRopeP', g.ropeK, c.kvHeads);
       d('kvStore', g.kv, Math.ceil(kvn / 256));
       d('attnScore', g.score, Math.ceil(c.heads * seqLen / 256));
       d('softmax', g.soft, c.heads);
       d('attnOut', g.attOut, Math.ceil(QN / 256));
       d('sigmoidMul', g.gate, Math.ceil(QN / 256));
-      d('matmulQ8', g.o, Math.ceil(H / 4));
+      d(this.qk.mm, g.o, Math.ceil(H / 4));
     }
     d('addInPlace', g.addO, Math.ceil(H / 256));
     if (this.prefetch) for (const p of g.pf) { d('rmsnorm', p.rms, 1); d('matmulF32', p.router, c.experts); d('topk', p.topk, 1); }
     d('rmsnorm', g.rmsF, 1);
     d('matmulF32', g.router, c.experts);
     d('topk', g.topk, 1);
-    d('matmulQ8', g.shg, Math.ceil(c.shexpFf / 4)); d('matmulQ8', g.shu, Math.ceil(c.shexpFf / 4));
+    d(this.qk.mm, g.shg, Math.ceil(c.shexpFf / 4)); d(this.qk.mm, g.shu, Math.ceil(c.shexpFf / 4));
     d('siluMulMoe', g.shsilu, Math.ceil(c.shexpFf / 256));
-    d('matmulQ8', g.shd, Math.ceil(H / 4));
+    d(this.qk.mm, g.shd, Math.ceil(H / 4));
     d('matmulF32', g.shgate, 1);
   }
 
   encodeExperts(pass, l) {
     const c = this.cfg, g = this.layers[l], d = (nm, gr, x, y, z) => this.dispatch(pass, nm, gr, x, y, z);
-    d('expertQ8', g.gu, Math.ceil(2 * c.expertFf / 4), 1, c.topK);
+    d(this.qk.ex, g.gu, Math.ceil(2 * c.expertFf / 4), 1, c.topK);
     d('siluMulMoe', g.silu, Math.ceil(c.topK * c.expertFf / 256));
-    d('expertQ8', g.dn, Math.ceil(c.hidden / 4), 1, c.topK);
+    d(this.qk.ex, g.dn, Math.ceil(c.hidden / 4), 1, c.topK);
     d('moeAccumShared', g.acc, Math.ceil(c.hidden / 256));
   }
 
@@ -38690,7 +38499,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
       if (slots) dev.queue.writeBuffer(this.a.slots, 0, slots);
       const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
       if (resume < 0) {
-        this.dispatch(pass, 'embedQ8', this.g.embed, Math.ceil(c.hidden / 256));
+        this.dispatch(pass, this.qk.emb, this.g.embed, Math.ceil(c.hidden / 256));
         this.encodeAttention(pass, 0, seqLen);
         this.dispatch(pass, 'route', this.layers[0].route, 1);
       }
@@ -38701,7 +38510,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
       }
       if (last === L - 1 && want !== 'none') {
         this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);
-        this.dispatch(pass, 'matmulQ8', this.g.lm, Math.ceil(c.vocab / 4));
+        this.dispatch(pass, this.qk.lm, this.g.lm, Math.ceil(c.vocab / 4));
         if (want === 'argmax') this.dispatch(pass, 'argmax', this.g.am, 1);
       }
       pass.end();
@@ -38804,6 +38613,45 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
   }
 }
 
+// OpenBMB's MiniCPM-V 4.7 35B-A3B (2026-10): its language model is a qwen35moe with Qwen3.6's shapes, so it runs on
+// this engine; its Q4_0 GGUF (Q4_0 matrices and experts, a Q6_K output) on the Q4_0 kernels. Text only: the vision
+// encoder (mmproj, projector `minicpmv4_7`) is a separate file this engine does not read.
+export const MINICPM_V47_35B_A3B = {
+  repo: 'openbmb/MiniCPM-V-4.7-35B-A3B-gguf',
+  file: 'MiniCPM-V-4_7-35B-A3B-Q4_0.gguf',
+  revision: '3c3f7e84f14a760ff26d17ab5932d4aa996227c0',
+  sha256: 'fbc90b193ea8b7fefbb04f46af583e1dd80177be91671f624036c2ec77639488',
+  size: 19714550688,
+};
+
+export class MiniCpmV47Ssd extends Qwen35MoeSsd {
+  static async load(modelId = null, opts = {}) {
+    return super.load(modelId, opts.source || opts.url ? opts : { ...opts, source: MINICPM_V47_35B_A3B });
+  }
+
+  // OpenBMB's tokenizer.json splits words with Qwen2's rule (\p{L}+, no \p{M}); the GGUF header says `qwen35`, whose
+  // rule keeps combining marks in the word. Follow the model's own tokenizer: Hindi and Tamil differ, 15/15 strings
+  // match HF `tokenizers` this way (2026-10-14). llama.cpp follows the header, so its ids differ on those scripts.
+  static tokenizerFrom(kv) { return super.tokenizerFrom({ ...kv, 'tokenizer.ggml.pre': 'qwen2' }); }
+
+  // MiniCPM-V's template: earlier replies carry an empty think block and lose their reasoning (the model's
+  // own </think> and LocalMind's <|think|> … <|/think|> markers); the reply after the last question keeps it.
+  chatPrompt(messages, { enableThinking = true } = {}) {
+    const lastUser = messages.map((m) => m.role).lastIndexOf('user');
+    let p = '';
+    messages.forEach((m, i) => {
+      let c = String(m.content ?? '').trim();
+      if (m.role === 'assistant' && i < lastUser) {
+        c = c.replace(/<\|think\|>[\s\S]*?<\|\/think\|>/g, '');
+        if (c.includes('</think>')) c = c.split('</think>').pop();
+        c = '<think>\n\n</think>\n\n' + c.trim();
+      }
+      p += `<|im_start|>${m.role}\n${c}<|im_end|>\n`;
+    });
+    return p + '<|im_start|>assistant\n' + (enableThinking ? '<think>\n' : '<think>\n\n</think>\n\n');
+  }
+}
+
 // For kernel tests (scripts): the WGSL this module adds.
 export { KERNELS as QWEN35_KERNELS, BATCH_KERNELS as QWEN35_BATCH_KERNELS, SG_KERNELS as QWEN35_SG_KERNELS };
 </script>
@@ -38875,10 +38723,13 @@ export function configFromGguf(kv) {
 }
 
 // The engine's OPFS layout, derived from the header alone (ingest and load agree on it).
+// Q8_0 experts: an int8 plane and an f16 scale plane per projection. Q4_0 experts (the qwen35moe Q4_0 files): a
+// nibble plane (16 B per 32 values) and an f16 scale plane, as Gemma 4's. Dense tensors keep their GGUF type.
 export function planLayout(gguf) {
   const cfg = configFromGguf(gguf.kv);
   const H = cfg.hidden, F = cfg.expertFf;
-  const qBytes = F * H;                  // one projection's int8 plane
+  const q4 = gguf.tensors.find((t) => /_exps\.weight$/.test(t.name))?.type === GGML.Q4_0;
+  const qBytes = q4 ? F * H / 2 : F * H; // one projection's int8 or nibble plane
   const sBytes = (F * H / 32) * 2;       // its f16 scale plane
   const parts = {
     guQ: { off: 0, bytes: 2 * qBytes },               // gate rows 0..F-1, up rows F..2F-1
@@ -38895,6 +38746,10 @@ export function planLayout(gguf) {
     const n = t.dims.reduce((a, b) => a * b, 1);
     if (t.type === GGML.Q8_0) {
       dense[t.name] = { type: 'q8', dims: t.dims, q: { off: take(n), bytes: n }, s: { off: take(n / 16), bytes: n / 16 } };
+    } else if (t.type === GGML.Q4_0) {
+      dense[t.name] = { type: 'q4', dims: t.dims, q: { off: take(n / 2), bytes: n / 2 }, s: { off: take(n / 16), bytes: n / 16 } };
+    } else if (t.type === GGML.Q6_K) {
+      dense[t.name] = { type: 'q6k', dims: t.dims, raw: { off: take(tensorBytes(t)), bytes: tensorBytes(t) } };
     } else if (t.type === GGML.F32) {
       dense[t.name] = { type: 'f32', dims: t.dims, raw: { off: take(n * 4), bytes: n * 4 } };
     } else throw new Error(`dense tensor ${t.name}: unsupported type ${t.type}`);
@@ -38909,7 +38764,7 @@ export function planLayout(gguf) {
 // ── Ingest: GGUF (over HTTP Range) → OPFS, in the engine layout ─────────────
 // Every byte range of the GGUF the engine keeps, as units small enough to transform in
 // memory: one unit per expert slice, row bands for dense Q8_0, whole F32 tensors.
-function planUnits(gguf, layout) {
+export function planUnits(gguf, layout) {
   const units = [];
   const { record, parts, perLayer } = layout.experts;
   const qBytes = parts.dQ.bytes, sBytes = parts.dS.bytes;
@@ -38918,23 +38773,25 @@ function planUnits(gguf, layout) {
     const m = /^blk\.(\d+)\.ffn_(gate|up|down)_exps\.weight$/.exec(t.name);
     if (m) {
       const layer = Number(m[1]), which = m[2];
-      if (t.type !== GGML.Q8_0) throw new Error(`${t.name}: experts must be Q8_0`);
+      if (t.type !== GGML.Q8_0 && t.type !== GGML.Q4_0) throw new Error(`${t.name}: experts must be Q8_0 or Q4_0`);
+      const kind = t.type === GGML.Q4_0 ? { kind: 'q4' } : {};
       const slice = tensorBytes(t) / perLayer;
       const qOff = which === 'gate' ? parts.guQ.off : which === 'up' ? parts.guQ.off + qBytes : parts.dQ.off;
       const sOff = which === 'gate' ? parts.guS.off : which === 'up' ? parts.guS.off + sBytes : parts.dS.off;
       for (let e = 0; e < perLayer; e++) {
         const rec = (layer * perLayer + e) * record;
-        units.push({ src: abs + e * slice, len: slice, file: 'experts', q: rec + qOff, s: rec + sOff });
+        units.push({ ...kind, src: abs + e * slice, len: slice, file: 'experts', q: rec + qOff, s: rec + sOff });
       }
       continue;
     }
     const d = layout.dense.tensors[t.name];
-    if (d.type === 'f32') { units.push({ src: abs, len: d.raw.bytes, file: 'dense', raw: d.raw.off }); continue; }
-    const cols = t.dims[0], rows = d.q.bytes / cols, rowBytes = (cols / 32) * Q8_BLOCK;
+    if (d.raw) { units.push({ src: abs, len: d.raw.bytes, file: 'dense', raw: d.raw.off }); continue; }
+    const q4 = d.type === 'q4', cols = t.dims[0], rows = (q4 ? 2 * d.q.bytes : d.q.bytes) / cols;
+    const rowBytes = (cols / 32) * (q4 ? Q4_BLOCK : Q8_BLOCK), qRow = q4 ? cols / 2 : cols;
     const band = Math.max(1, Math.floor((8 << 20) / rowBytes));
     for (let r = 0; r < rows; r += band) {
       const nr = Math.min(band, rows - r);
-      units.push({ src: abs + r * rowBytes, len: nr * rowBytes, file: 'dense', q: d.q.off + r * cols, s: d.s.off + r * cols / 16 });
+      units.push({ ...(q4 ? { kind: 'q4' } : {}), src: abs + r * rowBytes, len: nr * rowBytes, file: 'dense', q: d.q.off + r * qRow, s: d.s.off + r * cols / 16 });
     }
   }
   units.sort((a, b) => a.src - b.src);
@@ -39342,6 +39199,295 @@ var<workgroup> bi: array<u32, 256>;
 }`,
 };
 
+// ── Q4_0 / Q6_K kernels (Gemma 4 26B-A4B's, shared: Gemma 4, LFM2.5 24B-A2B and the qwen35moe Q4_0 files) ──
+// Q4_0 as two planes (ingest's splitQ4): nibbles, 16 bytes per 32 values (byte j holds values j and j + 16),
+// and one f16 scale per 32. Value = (nibble − 8) · scale, as ggml dequantizes it. Each thread reads one u32 of
+// nibbles: values 4m..4m+3 (low nibbles) and 16+4m..16+4m+3 (high nibbles) of block b.
+export const Q4DOT = `
+fn q4dot(wd: u32, d: f32, xb: u32) -> f32 {
+  let lo = (f32(wd & 15u) - 8.0) * xin[xb] + (f32((wd >> 8u) & 15u) - 8.0) * xin[xb + 1u]
+         + (f32((wd >> 16u) & 15u) - 8.0) * xin[xb + 2u] + (f32((wd >> 24u) & 15u) - 8.0) * xin[xb + 3u];
+  let hi = (f32((wd >> 4u) & 15u) - 8.0) * xin[xb + 16u] + (f32((wd >> 12u) & 15u) - 8.0) * xin[xb + 17u]
+         + (f32((wd >> 20u) & 15u) - 8.0) * xin[xb + 18u] + (f32((wd >> 28u) & 15u) - 8.0) * xin[xb + 19u];
+  return d * (lo + hi);
+}`;
+// Q6_K (ggml block_q6_K: ql[128], qh[64], int8 scales[16], f16 d per 256 values). The GGUF's 210-byte blocks
+// sit at 2-byte alignment, so at load q6kPlanes splits the table on the GPU into aligned planes: ql (32 words
+// per block), qh (16), scales (4) and d as f32. q6v reads value t of block bi exactly as dequantize_row_q6_K
+// forms it: (d · scale) · (q − 32).
+export const Q6P = `
+@group(0) @binding(0) var<storage, read> ql: array<u32>;
+@group(0) @binding(1) var<storage, read> qh: array<u32>;
+@group(0) @binding(2) var<storage, read> sc: array<u32>;
+@group(0) @binding(3) var<storage, read> dd: array<f32>;
+fn sc8(bi: u32, si: u32) -> f32 { let s8 = (sc[bi * 4u + (si >> 2u)] >> ((si & 3u) * 8u)) & 0xffu; return f32(select(i32(s8), i32(s8) - 256, s8 >= 128u)); }
+fn q6v(bi: u32, t: u32) -> f32 {
+  let n = t >> 7u; let r = t & 127u; let qd = r >> 5u; let l = r & 31u;
+  let qb = n * 64u + l + (qd & 1u) * 32u;
+  let lo = (ql[bi * 32u + (qb >> 2u)] >> ((qb & 3u) * 8u)) & 0xffu;
+  let q4 = select(lo & 15u, lo >> 4u, qd >= 2u);
+  let hb = n * 32u + l;
+  let h = (qh[bi * 16u + (hb >> 2u)] >> ((hb & 3u) * 8u + qd * 2u)) & 3u;
+  return dd[bi] * sc8(bi, n * 8u + (l >> 4u) + qd * 2u) * f32(i32(q4 | (h << 4u)) - 32);
+}`;
+// ── Subgroup Q4_0 GEMVs (decode) ─────────────────────────────────────────────────
+// One 32-lane subgroup per output row, 4 rows per 128-thread workgroup (the scalar kernels' dispatch
+// geometry). A lane takes whole blocks: one vec4<u32> of nibbles, unpack4xU8 of the low and high nibble
+// masks, vec4 dot products against the activations, the block scale once; subgroupAdd reduces the row.
+// Used only when the adapter's subgroups are exactly 32 wide.
+const Q4BLK = `
+fn q4blk(w: vec4<u32>, xb: u32) -> f32 {
+  let m = 0x0f0f0f0fu;
+  return dot(vec4<f32>(unpack4xU8(w.x & m)) - 8.0, x[xb]) + dot(vec4<f32>(unpack4xU8((w.x >> 4u) & m)) - 8.0, x[xb + 4u])
+       + dot(vec4<f32>(unpack4xU8(w.y & m)) - 8.0, x[xb + 1u]) + dot(vec4<f32>(unpack4xU8((w.y >> 4u) & m)) - 8.0, x[xb + 5u])
+       + dot(vec4<f32>(unpack4xU8(w.z & m)) - 8.0, x[xb + 2u]) + dot(vec4<f32>(unpack4xU8((w.z >> 4u) & m)) - 8.0, x[xb + 6u])
+       + dot(vec4<f32>(unpack4xU8(w.w & m)) - 8.0, x[xb + 3u]) + dot(vec4<f32>(unpack4xU8((w.w >> 4u) & m)) - 8.0, x[xb + 7u]);
+}`;
+const QB4 = 'struct Q { T: u32, pos0: u32, S: u32, pad: u32 }';
+export const Q4_KERNELS = {
+  // The GGUF's Q6_K bytes (raw) → aligned planes; one thread per block.
+  q6kPlanes: `
+struct P { blocks: u32 }
+@group(0) @binding(0) var<storage, read> raw: array<u32>;
+@group(0) @binding(1) var<storage, read_write> ql: array<u32>;
+@group(0) @binding(2) var<storage, read_write> qh: array<u32>;
+@group(0) @binding(3) var<storage, read_write> sc: array<u32>;
+@group(0) @binding(4) var<storage, read_write> dd: array<f32>;
+@group(0) @binding(5) var<uniform> p: P;
+fn byteAt(i: u32) -> u32 { return (raw[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu; }
+fn wordAt(i: u32) -> u32 { return byteAt(i) | (byteAt(i + 1u) << 8u) | (byteAt(i + 2u) << 16u) | (byteAt(i + 3u) << 24u); }
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>) {
+  let b = g.y * ng.x * 256u + g.x; if (b >= p.blocks) { return; }
+  let o = b * 210u;
+  for (var i = 0u; i < 32u; i++) { ql[b * 32u + i] = wordAt(o + 4u * i); }
+  for (var i = 0u; i < 16u; i++) { qh[b * 16u + i] = wordAt(o + 128u + 4u * i); }
+  for (var i = 0u; i < 4u; i++) { sc[b * 4u + i] = wordAt(o + 192u + 4u * i); }
+  dd[b] = unpack2x16float(byteAt(o + 208u) | (byteAt(o + 209u) << 8u)).x;
+}`,
+  embedQ6K: `
+${TOK}
+struct P { n: u32, nb: u32, scale: f32 }
+${Q6P}
+@group(0) @binding(4) var<storage, read_write> y: array<f32>;
+@group(0) @binding(5) var<uniform> tok: Tok;
+@group(0) @binding(6) var<uniform> p: P;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let i = g.x; if (i >= p.n) { return; }
+  y[i] = q6v(tok.token * p.nb + (i >> 8u), i & 255u) * p.scale;
+}`,
+  // Logits over the Q6_K planes: 4 rows per 256-thread workgroup, 64 threads per row; thread j takes quad j
+  // (4 consecutive values: one ql word, one qh word, one scale) of every block of the row.
+  matmulQ6K: `
+struct P { M: u32, N: u32 }
+${Q6P}
+@group(0) @binding(4) var<storage, read> x: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read_write> y: array<f32>;
+@group(0) @binding(6) var<uniform> p: P;
+var<workgroup> part: array<f32, 256>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let j = l.x & 63u; let m = (wg.y * ng.x + wg.x) * 4u + (l.x >> 6u); let mr = min(m, p.M - 1u);
+  let nb = p.N / 256u; let n = j >> 5u; let w = j & 31u; let qd = w >> 3u; let k = w & 7u;
+  var acc = 0.0;
+  for (var bb = 0u; bb < nb; bb++) {
+    let bi = mr * nb + bb;
+    let lo = unpack4xU8(ql[bi * 32u + n * 16u + (qd & 1u) * 8u + k]);
+    let q4 = select(lo & vec4<u32>(15u), lo >> vec4<u32>(4u), qd >= 2u);
+    let h = (unpack4xU8(qh[bi * 16u + n * 8u + k]) >> vec4<u32>(qd * 2u)) & vec4<u32>(3u);
+    let q = vec4<f32>(vec4<i32>(q4 | (h << vec4<u32>(4u))) - vec4<i32>(32));
+    acc += (dd[bi] * sc8(bi, n * 8u + (k >> 2u) + qd * 2u)) * dot(q, x[bb * 64u + j]);
+  }
+  part[l.x] = acc; workgroupBarrier();
+  for (var s = 32u; s > 0u; s >>= 1u) { if (j < s) { part[l.x] += part[l.x + s]; } workgroupBarrier(); }
+  if (j == 0u && m < p.M) { y[m] = part[l.x]; }
+}`,
+  // Dense Q4_0 GEMV, 4 output rows per workgroup (2-D dispatch ok).
+  matmulQ4: `enable f16;
+struct P { M: u32, N: u32 }
+@group(0) @binding(0) var<storage, read> xin: array<f32>;
+@group(0) @binding(1) var<storage, read> qw: array<u32>;
+@group(0) @binding(2) var<storage, read> qs: array<f16>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+${Q4DOT}
+var<workgroup> part: array<f32, 1024>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let m0 = (wg.y * ng.x + wg.x) * 4u; let t = l.x; let M = p.M; let nw = p.N / 8u; let nb = p.N / 32u;
+  if (m0 >= M) { return; }
+  let r0 = min(m0, M - 1u); let r1 = min(m0 + 1u, M - 1u); let r2 = min(m0 + 2u, M - 1u); let r3 = min(m0 + 3u, M - 1u);
+  var a0 = 0.0; var a1 = 0.0; var a2 = 0.0; var a3 = 0.0;
+  for (var w = t; w < nw; w += 256u) {
+    let b = w >> 2u; let xb = b * 32u + (w & 3u) * 4u;
+    a0 += q4dot(qw[r0 * nw + w], f32(qs[r0 * nb + b]), xb);
+    a1 += q4dot(qw[r1 * nw + w], f32(qs[r1 * nb + b]), xb);
+    a2 += q4dot(qw[r2 * nw + w], f32(qs[r2 * nb + b]), xb);
+    a3 += q4dot(qw[r3 * nw + w], f32(qs[r3 * nb + b]), xb);
+  }
+  part[t] = a0; part[256u + t] = a1; part[512u + t] = a2; part[768u + t] = a3;
+  workgroupBarrier();
+  for (var s = 128u; s > 0u; s >>= 1u) {
+    if (t < s) { part[t] += part[t + s]; part[256u + t] += part[256u + t + s]; part[512u + t] += part[512u + t + s]; part[768u + t] += part[768u + t + s]; }
+    workgroupBarrier();
+  }
+  if (t < 4u && m0 + t < M) { y[m0 + t] = part[t * 256u]; }
+}`,
+  // Routed experts, all k at once (workgroup z = top-k position); slots[z] picks the expert's rows in the pool.
+  expertQ4: `enable f16;
+struct P { M: u32, N: u32, rowsPerExpert: u32, inputPerSlot: u32 }
+@group(0) @binding(0) var<storage, read> xin: array<f32>;
+@group(0) @binding(1) var<storage, read> qw: array<u32>;
+@group(0) @binding(2) var<storage, read> qs: array<f16>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@group(0) @binding(5) var<storage, read> slots: array<u32>;
+${Q4DOT}
+var<workgroup> part: array<f32, 1024>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let z = wg.z; let m0 = (wg.y * ng.x + wg.x) * 4u; let t = l.x; let M = p.M; let nw = p.N / 8u; let nb = p.N / 32u;
+  if (m0 >= M) { return; }
+  let rb = slots[z] * p.rowsPerExpert;
+  let xo = select(0u, z * p.N, p.inputPerSlot == 1u);
+  let r0 = rb + min(m0, M - 1u); let r1 = rb + min(m0 + 1u, M - 1u); let r2 = rb + min(m0 + 2u, M - 1u); let r3 = rb + min(m0 + 3u, M - 1u);
+  var a0 = 0.0; var a1 = 0.0; var a2 = 0.0; var a3 = 0.0;
+  for (var w = t; w < nw; w += 256u) {
+    let b = w >> 2u; let xb = xo + b * 32u + (w & 3u) * 4u;
+    a0 += q4dot(qw[r0 * nw + w], f32(qs[r0 * nb + b]), xb);
+    a1 += q4dot(qw[r1 * nw + w], f32(qs[r1 * nb + b]), xb);
+    a2 += q4dot(qw[r2 * nw + w], f32(qs[r2 * nb + b]), xb);
+    a3 += q4dot(qw[r3 * nw + w], f32(qs[r3 * nb + b]), xb);
+  }
+  part[t] = a0; part[256u + t] = a1; part[512u + t] = a2; part[768u + t] = a3;
+  workgroupBarrier();
+  for (var s = 128u; s > 0u; s >>= 1u) {
+    if (t < s) { part[t] += part[t + s]; part[256u + t] += part[256u + t + s]; part[512u + t] += part[512u + t + s]; part[768u + t] += part[768u + t + s]; }
+    workgroupBarrier();
+  }
+  if (t < 4u && m0 + t < M) { y[z * M + m0 + t] = part[t * 256u]; }
+}`,
+};
+export const Q4_SG_KERNELS = {
+  matmulQ4: `enable f16;
+enable subgroups;
+struct P { M: u32, N: u32 }
+@group(0) @binding(0) var<storage, read> x: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> qw: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read> qs: array<f16>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+${Q4BLK}
+@compute @workgroup_size(128) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let m = (wg.y * ng.x + wg.x) * 4u + l.x / 32u; let lane = l.x % 32u;
+  let nb = p.N / 32u; let rb = min(m, p.M - 1u) * nb;
+  var acc = 0.0;
+  for (var b = lane; b < nb; b += 32u) { acc += q4blk(qw[rb + b], b * 8u) * f32(qs[rb + b]); }
+  let total = subgroupAdd(acc);
+  if (lane == 0u && m < p.M) { y[m] = total; }
+}`,
+  expertQ4: `enable f16;
+enable subgroups;
+struct P { M: u32, N: u32, rowsPerExpert: u32, inputPerSlot: u32 }
+@group(0) @binding(0) var<storage, read> x: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> qw: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read> qs: array<f16>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@group(0) @binding(5) var<storage, read> slots: array<u32>;
+${Q4BLK}
+@compute @workgroup_size(128) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let z = wg.z; let m = (wg.y * ng.x + wg.x) * 4u + l.x / 32u; let lane = l.x % 32u;
+  let nb = p.N / 32u; let rb = (slots[z] * p.rowsPerExpert + min(m, p.M - 1u)) * nb;
+  let xo = select(0u, z * p.N / 4u, p.inputPerSlot == 1u);
+  var acc = 0.0;
+  for (var b = lane; b < nb; b += 32u) { acc += q4blk(qw[rb + b], xo + b * 8u) * f32(qs[rb + b]); }
+  let total = subgroupAdd(acc);
+  if (lane == 0u && m < p.M) { y[z * p.M + m] = total; }
+}`,
+};
+export const Q4_BATCH_KERNELS = {
+  embedQ6KB: `
+struct P { n: u32, nb: u32, scale: f32 }
+${QB4}
+${Q6P}
+@group(0) @binding(4) var<storage, read> ids: array<u32>;
+@group(0) @binding(5) var<storage, read_write> y: array<f32>;
+@group(0) @binding(6) var<uniform> p: P;
+@group(0) @binding(7) var<uniform> qd: Q;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let i = g.x; let t = g.y; if (i >= p.n || t >= qd.T) { return; }
+  y[t * p.n + i] = q6v(ids[t] * p.nb + (i >> 8u), i & 255u) * p.scale;
+}`,
+  // Tiled Q4_0 GEMM: y[t·M + m] = Σ_k x[t·N + k]·W[m][k]. 16 rows × 16 tokens per workgroup; each 32-wide
+  // block of W (decoded from its nibbles) and of x goes through shared memory, so a weight serves 16 tokens.
+  // Dispatch (ceil(M/16), ceil(T/16)).
+  matmulQ4T: `enable f16;
+struct P { M: u32, N: u32 }
+${QB4}
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read> qw: array<u32>;
+@group(0) @binding(2) var<storage, read> qs: array<f16>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@group(0) @binding(5) var<uniform> qd: Q;
+var<workgroup> ws: array<f32, 512>;
+var<workgroup> xs: array<f32, 512>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let m0 = wg.x * 16u; let t0 = wg.y * 16u; let r = l.x / 16u; let c = l.x % 16u;
+  let nb = p.N / 32u; let nw = p.N / 8u; var acc = 0.0;
+  for (var b = 0u; b < nb; b++) {
+    for (var i = l.x; i < 512u; i += 256u) {
+      let rr = i / 32u; let kk = i % 32u;
+      let m = m0 + rr; var wv = 0.0;
+      if (m < p.M) {
+        let wd = qw[m * nw + b * 4u + ((kk & 15u) >> 2u)];
+        wv = (f32((wd >> ((kk & 3u) * 8u + (kk >> 4u) * 4u)) & 15u) - 8.0) * f32(qs[m * nb + b]);
+      }
+      ws[i] = wv;
+      let t = t0 + rr; var xv = 0.0;
+      if (t < qd.T) { xv = x[t * p.N + b * 32u + kk]; }
+      xs[i] = xv;
+    }
+    workgroupBarrier();
+    for (var kk = 0u; kk < 32u; kk++) { acc += ws[r * 32u + kk] * xs[c * 32u + kk]; }
+    workgroupBarrier();
+  }
+  let m = m0 + r; let t = t0 + c;
+  if (m < p.M && t < qd.T) { y[t * p.M + m] = acc; }
+}`,
+  // Routed experts for every (token, pick) pair: z = t·K + j, slots[z] its pool slot. Input: the token's row
+  // (gate/up, inputMode 0) or the pair's own row (down, inputMode 1).
+  expertQ4B: `enable f16;
+struct P { M: u32, N: u32, rowsPerExpert: u32, inputMode: u32, K: u32 }
+@group(0) @binding(0) var<storage, read> xin: array<f32>;
+@group(0) @binding(1) var<storage, read> qw: array<u32>;
+@group(0) @binding(2) var<storage, read> qs: array<f16>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@group(0) @binding(5) var<storage, read> slots: array<u32>;
+${Q4DOT}
+var<workgroup> part: array<f32, 1024>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let z = wg.z; let m0 = (wg.y * ng.x + wg.x) * 4u; let t = l.x; let M = p.M; let nw = p.N / 8u; let nb = p.N / 32u;
+  if (m0 >= M) { return; }
+  let rb = slots[z] * p.rowsPerExpert;
+  let xo = select((z / p.K) * p.N, z * p.N, p.inputMode == 1u);
+  let r0 = rb + min(m0, M - 1u); let r1 = rb + min(m0 + 1u, M - 1u); let r2 = rb + min(m0 + 2u, M - 1u); let r3 = rb + min(m0 + 3u, M - 1u);
+  var a0 = 0.0; var a1 = 0.0; var a2 = 0.0; var a3 = 0.0;
+  for (var w = t; w < nw; w += 256u) {
+    let b = w >> 2u; let xb = xo + b * 32u + (w & 3u) * 4u;
+    a0 += q4dot(qw[r0 * nw + w], f32(qs[r0 * nb + b]), xb);
+    a1 += q4dot(qw[r1 * nw + w], f32(qs[r1 * nb + b]), xb);
+    a2 += q4dot(qw[r2 * nw + w], f32(qs[r2 * nb + b]), xb);
+    a3 += q4dot(qw[r3 * nw + w], f32(qs[r3 * nb + b]), xb);
+  }
+  part[t] = a0; part[256u + t] = a1; part[512u + t] = a2; part[768u + t] = a3;
+  workgroupBarrier();
+  for (var s = 128u; s > 0u; s >>= 1u) {
+    if (t < s) { part[t] += part[t + s]; part[256u + t] += part[256u + t + s]; part[512u + t] += part[512u + t + s]; part[768u + t] += part[768u + t + s]; }
+    workgroupBarrier();
+  }
+  if (t < 4u && m0 + t < M) { y[z * M + m0 + t] = part[t * 256u]; }
+}`,
+};
+
 export const STORAGE = 0x80, COPY_SRC = 0x04, COPY_DST = 0x08, UNIFORM = 0x40, MAP_READ = 0x01;
 
 // ── Engine ──────────────────────────────────────────────────────────────────
@@ -39648,10 +39794,10 @@ export class Qwen3MoeSsd {
   }
   // The token's embedding into a.x, and the head (final norm, logits, argmax when wanted): a subclass
   // with another embedding or head format overrides these two.
-  encodeEmbed(pass) { this.dispatch(pass, 'embedQ8', this.g.embed, Math.ceil(this.cfg.hidden / 256)); }
+  encodeEmbed(pass) { this.dispatch(pass, this.qk ? this.qk.emb : 'embedQ8', this.g.embed, Math.ceil(this.cfg.hidden / 256)); }
   encodeHead(pass, want) {
     this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);
-    this.dispatch(pass, 'matmulQ8', this.g.lm, Math.ceil(this.cfg.vocab / 4));
+    this.dispatch(pass, this.qk ? this.qk.lm : 'matmulQ8', this.g.lm, Math.ceil(this.cfg.vocab / 4));
     if (want === 'argmax') this.dispatch(pass, 'argmax', this.g.am, 1);
   }
   encodeExperts(pass, l) {

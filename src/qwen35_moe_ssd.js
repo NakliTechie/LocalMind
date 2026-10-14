@@ -15,7 +15,7 @@
  *   const m = await Qwen35MoeSsd.load(null, { url: '…/Qwen3.6-35B-A3B-Q8_0.gguf', poolBytes });
  */
 
-import { Qwen3MoeSsd, STORAGE, COPY_SRC, COPY_DST, MAP_READ, UNIFORM, I8 } from './qwen3_moe_ssd.js';
+import { Qwen3MoeSsd, STORAGE, COPY_SRC, COPY_DST, MAP_READ, UNIFORM, I8, TOK, Q6K_BLOCK, Q4_KERNELS, Q4_SG_KERNELS, Q4_BATCH_KERNELS } from './qwen3_moe_ssd.js';
 
 export const QWEN36_35B_A3B = {
   repo: 'unsloth/Qwen3.6-35B-A3B-GGUF',
@@ -164,6 +164,26 @@ ${SIGMOID}
 }`,
 };
 
+
+// Q4_0 token embedding (the Q4_0 files): value e of the table from the nibble plane (byte j of a 32-value block
+// holds values j and j + 16, as matmulQ4T reads it) times its block's f16 scale.
+const Q4AT = 'fn q4at(e: u32) -> f32 { let by = (e >> 5u) * 16u + (e & 15u); return f32((q[by >> 2u] >> ((by & 3u) * 8u + ((e >> 4u) & 1u) * 4u)) & 15u) - 8.0; }';
+const Q4_EMBED = {
+  embedQ4: `enable f16;
+${TOK}
+struct P { n: u32 }
+@group(0) @binding(0) var<storage, read> q: array<u32>;
+@group(0) @binding(1) var<storage, read> s: array<f16>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+@group(0) @binding(3) var<uniform> tok: Tok;
+@group(0) @binding(4) var<uniform> p: P;
+${Q4AT}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let i = g.x; if (i >= p.n) { return; }
+  let e = tok.token * p.n + i;
+  y[i] = q4at(e) * f32(s[e >> 5u]);
+}`,
+};
 
 // ── Batched prefill: a chunk of T prompt tokens per layer ───────────────────────────────────
 // Every batched buffer is token-major (row t holds token pos0 + t). Q is the per-chunk uniform.
@@ -566,6 +586,23 @@ ${SIGMOID}
   x[r] = (acc + sh[r] * sigm(sg[t])) + x[r];
 }`,
 };
+const Q4_EMBED_B = {
+  embedQ4B: `enable f16;
+struct P { n: u32 }
+${QB}
+@group(0) @binding(0) var<storage, read> q: array<u32>;
+@group(0) @binding(1) var<storage, read> s: array<f16>;
+@group(0) @binding(2) var<storage, read> ids: array<u32>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@group(0) @binding(5) var<uniform> qd: Q;
+${Q4AT}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let i = g.x; let t = g.y; if (i >= p.n || t >= qd.T) { return; }
+  let e = ids[t] * p.n + i;
+  y[t * p.n + i] = q4at(e) * f32(s[e >> 5u]);
+}`,
+};
 
 // ── Subgroup Q8_0 GEMV (the LFM2.5 / Gemma 4 kernels' pattern) ──────────────────────────────
 // One 32-lane subgroup per output row, 4 rows per 128-thread workgroup (the same dispatch
@@ -674,6 +711,19 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     if (c.arch !== 'qwen35moe') throw new Error(`Qwen35MoeSsd needs a qwen35moe GGUF, got ${c.arch}`);
     if (c.ssm.dConv !== 4) throw new Error(`gdnConv assumes a 4-tap conv, got ${c.ssm.dConv}`);
     if (c.ssm.dState !== 128 || c.ssm.dInner !== c.ssm.vHeads * c.ssm.dState) throw new Error('gdnStep assumes 128-wide heads');
+    // Weight type: Q8_0 (Qwen3.6, MiniCPM-V Q8_0) or Q4_0 (MiniCPM-V Q4_0: Q4_0 matrices and experts, Q6_K output).
+    // Every projection and the experts share one type, so one set of kernel names serves the whole graph.
+    const dt = manifest.dense.tensors, q4 = dt['token_embd.weight'].type === 'q4';
+    for (const [name, d] of Object.entries(dt)) {
+      if (d.type !== 'f32' && name !== 'output.weight' && d.type !== (q4 ? 'q4' : 'q8')) throw new Error(`${name}: ${d.type} in a ${q4 ? 'Q4_0' : 'Q8_0'} file`);
+    }
+    if (q4 !== (manifest.experts.parts.dQ.bytes * 2 === c.expertFf * c.hidden)) throw new Error('experts and dense weights differ in type');
+    const lm = dt['output.weight'].type;
+    if (!(q4 ? ['q4', 'q6k'] : ['q8']).includes(lm)) throw new Error(`output.weight: ${lm} is not supported in a ${q4 ? 'Q4_0' : 'Q8_0'} file`);
+    this.q4 = q4;
+    this.qk = q4
+      ? { mm: 'matmulQ4', mmT: 'matmulQ4T', ex: 'expertQ4', exB: 'expertQ4B', emb: 'embedQ4', embB: 'embedQ4B', lm: lm === 'q6k' ? 'matmulQ6K' : 'matmulQ4' }
+      : { mm: 'matmulQ8', mmT: 'matmulQ8T', ex: 'expertQ8', exB: 'expertQ8B', emb: 'embedQ8', embB: 'embedQ8B', lm: 'matmulQ8' };
     this.recurrent = Array.from({ length: c.layers }, (_, l) => (l + 1) % c.attnInterval !== 0);
     // Prompts go through in chunks of up to chunkTokens tokens per layer (one routing readback per
     // layer per chunk); decode stays one token at a time.
@@ -692,6 +742,22 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     this.routeWindow = Math.max(1, Math.floor(opts.routeWindow ?? 2));
   }
 
+  // A Q6_K output matrix (the Q4_0 files) is split on the GPU into aligned planes for matmulQ6K, and the raw copy freed.
+  async uploadDense(onProgress) {
+    await super.uploadDense(onProgress);
+    const o = this.w['output.weight'];
+    if (!o.raw) return;
+    const dev = this.device, raw = o.raw, blocks = raw.size / Q6K_BLOCK | 0;
+    const P = (n) => this.buffer(n, STORAGE, 'dense');
+    this.q6 = { ql: P(blocks * 128), qh: P(blocks * 64), sc: P(blocks * 16), dd: P(blocks * 4) };
+    const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
+    const wg = Math.ceil(blocks / 256), x = Math.min(wg, 65535);
+    this.dispatch(pass, 'q6kPlanes', this.bind('q6kPlanes', [raw, this.q6.ql, this.q6.qh, this.q6.sc, this.q6.dd, this.uniform([blocks])]), x, Math.ceil(wg / x));
+    pass.end(); dev.queue.submit([enc.finish()]);
+    await dev.queue.onSubmittedWorkDone();
+    this.gpuBytes.dense -= raw.size; raw.destroy(); o.raw = null;
+  }
+
   // Subgroup GEMVs replace the scalar ones when subgroups are exactly 32 wide (Apple, most others).
   get subgroupKernels() {
     const i = this.device.adapterInfo || this.opts.adapterInfo || {};
@@ -700,13 +766,14 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
   // With gpuRouting, every one-token kernel carries the stop guard (chunked prefill's do not).
   get kernels() {
     if (!this._kernels) {
-      const k = { ...super.kernels, ...KERNELS, ...(this.subgroupKernels ? SG_KERNELS : {}) };
+      const q4 = this.q4 ? { ...Q4_KERNELS, ...Q4_EMBED, ...(this.subgroupKernels ? Q4_SG_KERNELS : {}) } : {};
+      const k = { ...super.kernels, ...KERNELS, ...(this.subgroupKernels ? SG_KERNELS : {}), ...q4 };
       if (this.routeGuards) for (const n of Object.keys(k)) k[n] = guarded(k[n]);
-      this._kernels = { ...k, ...BATCH_KERNELS, route: ROUTE_KERNEL };
+      this._kernels = { ...k, ...BATCH_KERNELS, ...(this.q4 ? { ...Q4_BATCH_KERNELS, ...Q4_EMBED_B, q6kPlanes: Q4_KERNELS.q6kPlanes } : {}), route: ROUTE_KERNEL };
     }
     return this._kernels;
   }
-  isGuarded(name) { return this.routeGuards && name !== 'route' && !(name in BATCH_KERNELS); }
+  isGuarded(name) { return this.routeGuards && name !== 'route' && !(name in BATCH_KERNELS) && !(name in Q4_BATCH_KERNELS) && !(name in Q4_EMBED_B) && name !== 'q6kPlanes'; }
 
   bind(name, buffers) { return super.bind(name, this.isGuarded(name) ? [...buffers, this.a.stop] : buffers); }
   // Like bind(), but a resource may be { buffer, offset, size }.
@@ -778,9 +845,10 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
       lm: U([c.vocab, H]), am: U([c.vocab]),
     };
     const a = this.a, W = this.w;
-    const q8 = (name, x, y, uni) => { const t = W[name]; if (!t || !t.q) throw new Error(`missing Q8_0 tensor ${name}`); return this.bind('matmulQ8', [x, t.q, t.s, y, uni]); };
+    const QK = this.qk;
+    const q8 = (name, x, y, uni) => { const t = W[name]; if (!t || !t.q) throw new Error(`missing quantized tensor ${name}`); return this.bind(QK.mm, [x, t.q, t.s, y, uni]); };
     const raw = (name) => { const t = W[name]; if (!t || !t.raw) throw new Error(`missing F32 tensor ${name}`); return t.raw; };
-    this.g = { embed: this.bind('embedQ8', [W['token_embd.weight'].q, W['token_embd.weight'].s, a.x, this.tok, u.nH]) };
+    this.g = { embed: this.bind(QK.emb, [W['token_embd.weight'].q, W['token_embd.weight'].s, a.x, this.tok, u.nH]) };
     this.layers = [];
     for (let l = 0; l < c.layers; l++) {
       const n = (t) => `blk.${l}.${t}`;
@@ -825,21 +893,23 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
           };
         }),
         // Shared expert: [gate | up] into shgu, SiLU·up, down; its scalar gate logit into sg.
-        shg: this.bindR('matmulQ8', [a.xn, W[n('ffn_gate_shexp.weight')].q, W[n('ffn_gate_shexp.weight')].s, { buffer: a.shgu, offset: 0, size: SF * 4 }, u.shgu]),
-        shu: this.bindR('matmulQ8', [a.xn, W[n('ffn_up_shexp.weight')].q, W[n('ffn_up_shexp.weight')].s, { buffer: a.shgu, offset: SF * 4, size: SF * 4 }, u.shgu]),
+        shg: this.bindR(QK.mm, [a.xn, W[n('ffn_gate_shexp.weight')].q, W[n('ffn_gate_shexp.weight')].s, { buffer: a.shgu, offset: 0, size: SF * 4 }, u.shgu]),
+        shu: this.bindR(QK.mm, [a.xn, W[n('ffn_up_shexp.weight')].q, W[n('ffn_up_shexp.weight')].s, { buffer: a.shgu, offset: SF * 4, size: SF * 4 }, u.shgu]),
         shsilu: this.bind('siluMulMoe', [a.shgu, a.shact, u.shsilu]),
         shd: q8(n('ffn_down_shexp.weight'), a.shact, a.sh, u.shd),
         shgate: this.bind('matmulF32', [a.xn, raw(n('ffn_gate_inp_shexp.weight')), a.sg, u.shgate]),
-        gu: this.bind('expertQ8', [a.xn, this.pool.guQ, this.pool.guS, a.gu, u.gu, a.slots]),
+        gu: this.bind(QK.ex, [a.xn, this.pool.guQ, this.pool.guS, a.gu, u.gu, a.slots]),
         silu: this.bind('siluMulMoe', [a.gu, a.act, u.silu]),
-        dn: this.bind('expertQ8', [a.act, this.pool.dQ, this.pool.dS, a.dn, u.dn, a.slots]),
+        dn: this.bind(QK.ex, [a.act, this.pool.dQ, this.pool.dS, a.dn, u.dn, a.slots]),
         acc: this.bind('moeAccumShared', [a.dn, a.sel, a.sh, a.sg, a.x, u.acc]),
         route: this.bind('route', [a.sel, a.rmap, a.slots, a.stop, a.used, U([l, c.experts, K, 0])]),
       });
       this.layers.push(g);
     }
     this.g.rmsOut = this.bind('rmsnorm', [a.x, raw('output_norm.weight'), a.xn, u.rmsH]);
-    this.g.lm = this.bind('matmulQ8', [a.xn, W['output.weight'].q, W['output.weight'].s, a.logits, u.lm]);
+    this.g.lm = QK.lm === 'matmulQ6K'
+      ? this.bind('matmulQ6K', [this.q6.ql, this.q6.qh, this.q6.sc, this.q6.dd, a.xn, a.logits, u.lm])
+      : this.bind(QK.lm, [a.xn, W['output.weight'].q, W['output.weight'].s, a.logits, u.lm]);
     this.g.am = this.bind('argmax', [a.logits, a.am, u.am]);
     // A chunk pins min(experts, T·K) experts per layer at once; keep that under half the pool.
     if (Math.min(c.experts, this.chunkTokens * K) > this.poolSlots / 2) this.chunkTokens = Math.max(2, Math.floor(this.poolSlots / 2 / K));
@@ -873,8 +943,9 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
       shgu: U([SF, H]), shd: U([H, SF]), sh2: U([SF]), shgate: U([1, H]),
     };
     const raw = (name) => W[name].raw;
-    const q8 = (name, x, y, uni) => this.bind('matmulQ8T', [x, W[name].q, W[name].s, y, uni, qb]);
-    this.gB = { embed: this.bind('embedQ8B', [W['token_embd.weight'].q, W['token_embd.weight'].s, b.ids, b.x, u.nH, qb]) };
+    const QK = this.qk;
+    const q8 = (name, x, y, uni) => this.bind(QK.mmT, [x, W[name].q, W[name].s, y, uni, qb]);
+    this.gB = { embed: this.bind(QK.embB, [W['token_embd.weight'].q, W['token_embd.weight'].s, b.ids, b.x, u.nH, qb]) };
     for (let l = 0; l < c.layers; l++) {
       const n = (t) => `blk.${l}.${t}`, g = { rmsA: this.bind('rmsnormB', [b.x, raw(n('attn_norm.weight')), b.xn, u.rmsH]) };
       if (this.recurrent[l]) {
@@ -908,9 +979,9 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
         shact: this.bind('siluMul2B', [b.shg, b.shu, b.shact, u.sh2, qb]),
         shd: q8(n('ffn_down_shexp.weight'), b.shact, b.sh, u.shd),
         shgate: this.bind('matmulF32T', [b.xn, raw(n('ffn_gate_inp_shexp.weight')), b.sg, u.shgate]),
-        gu: this.bind('expertQ8B', [b.xn, this.pool.guQ, this.pool.guS, b.gu, u.gu, b.slots]),
+        gu: this.bind(QK.exB, [b.xn, this.pool.guQ, this.pool.guS, b.gu, u.gu, b.slots]),
         silu: this.bind('siluMulMoe', [b.gu, b.act, u.silu]),
-        dn: this.bind('expertQ8B', [b.act, this.pool.dQ, this.pool.dS, b.dn, u.dn, b.slots]),
+        dn: this.bind(QK.exB, [b.act, this.pool.dQ, this.pool.dS, b.dn, u.dn, b.slots]),
         acc: this.bind('moeAccumSharedB', [b.dn, b.sel, b.sh, b.sg, b.x, u.acc, qb]),
       });
       this.layers[l].B = g;
@@ -924,37 +995,37 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     const tt = Math.ceil(T / 16), mm = (n) => Math.ceil(n / 16);
     d('rmsnormB', g.rmsA, T);
     if (this.recurrent[l]) {
-      d('matmulQ8T', g.qkv, mm(convDim), tt); d('matmulQ8T', g.z, mm(s.dInner), tt);
-      d('matmulQ8T', g.beta, mm(s.vHeads), tt); d('matmulQ8T', g.alpha, mm(s.vHeads), tt);
+      d(this.qk.mmT, g.qkv, mm(convDim), tt); d(this.qk.mmT, g.z, mm(s.dInner), tt);
+      d(this.qk.mmT, g.beta, mm(s.vHeads), tt); d(this.qk.mmT, g.alpha, mm(s.vHeads), tt);
       d('gdnConvB', g.conv, Math.ceil(convDim / 256));
       d('gdnStepB', g.step, s.vHeads);
       d('gdnNormGateB', g.norm, s.vHeads, T);
-      d('matmulQ8T', g.out, mm(H), tt);
+      d(this.qk.mmT, g.out, mm(H), tt);
     } else {
-      d('matmulQ8T', g.q, mm(2 * QN), tt); d('matmulQ8T', g.k, mm(kvn), tt); d('matmulQ8T', g.v, mm(kvn), tt);
+      d(this.qk.mmT, g.q, mm(2 * QN), tt); d(this.qk.mmT, g.k, mm(kvn), tt); d(this.qk.mmT, g.v, mm(kvn), tt);
       d('qkNormRopePB', g.ropeQ, c.heads, T); d('qkNormRopePB', g.ropeK, c.kvHeads, T);
       d('kvStoreB', g.kv, Math.ceil(kvn / 256), T);
       d('attnScoreB', g.score, Math.ceil(c.heads * T * S / 256));
       d('softmaxB', g.soft, c.heads * T);
       d('attnOutB', g.attOut, Math.ceil(QN / 256), T);
       d('sigmoidMulB', g.gate, Math.ceil(QN / 256), T);
-      d('matmulQ8T', g.o, mm(H), tt);
+      d(this.qk.mmT, g.o, mm(H), tt);
     }
     d('addInPlaceB', g.addO, Math.ceil(H / 256), T);
     d('rmsnormB', g.rmsF, T);
     d('matmulF32T', g.router, c.experts, T);
     d('topkB', g.topk, T);
-    d('matmulQ8T', g.shg, mm(c.shexpFf), tt); d('matmulQ8T', g.shu, mm(c.shexpFf), tt);
+    d(this.qk.mmT, g.shg, mm(c.shexpFf), tt); d(this.qk.mmT, g.shu, mm(c.shexpFf), tt);
     d('siluMul2B', g.shact, Math.ceil(c.shexpFf / 256), T);
-    d('matmulQ8T', g.shd, mm(H), tt);
+    d(this.qk.mmT, g.shd, mm(H), tt);
     d('matmulF32T', g.shgate, 1, T);
   }
 
   encodeExpertsB(pass, l, T) {
     const c = this.cfg, g = this.layers[l].B, d = (nm, gr, x, y, z) => this.dispatch(pass, nm, gr, x, y, z);
-    d('expertQ8B', g.gu, Math.ceil(2 * c.expertFf / 4), 1, T * c.topK);
+    d(this.qk.exB, g.gu, Math.ceil(2 * c.expertFf / 4), 1, T * c.topK);
     d('siluMulMoe', g.silu, Math.ceil(T * c.topK * c.expertFf / 256));
-    d('expertQ8B', g.dn, Math.ceil(c.hidden / 4), 1, T * c.topK);
+    d(this.qk.exB, g.dn, Math.ceil(c.hidden / 4), 1, T * c.topK);
     d('moeAccumSharedB', g.acc, Math.ceil(c.hidden / 256), T);
   }
 
@@ -977,7 +1048,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     dev.queue.writeBuffer(this.b.rope, 0, r);
     const selBytes = T * 2 * K * 4;
     let enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
-    this.dispatch(pass, 'embedQ8B', this.gB.embed, Math.ceil(H / 256), T);
+    this.dispatch(pass, this.qk.embB, this.gB.embed, Math.ceil(H / 256), T);
     this.encodeTrunkB(pass, 0, T, S);
     pass.end();
     enc.copyBufferToBuffer(this.b.sel, 0, this.rbSelB, 0, selBytes);
@@ -1009,7 +1080,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
         if (want !== 'none') {
           pass = enc.beginComputePass();
           this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);
-          this.dispatch(pass, 'matmulQ8', this.g.lm, Math.ceil(c.vocab / 4));
+          this.dispatch(pass, this.qk.lm, this.g.lm, Math.ceil(c.vocab / 4));
           if (want === 'argmax') this.dispatch(pass, 'argmax', this.g.am, 1);
           pass.end();
           if (want === 'argmax') enc.copyBufferToBuffer(this.a.am, 0, this.rbArg, 0, 4);
@@ -1045,38 +1116,38 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     const H = c.hidden, QN = c.heads * c.headDim, kvn = c.kvHeads * c.headDim, convDim = 2 * s.kHeads * s.dState + s.dInner;
     d('rmsnorm', g.rmsA, 1);
     if (g.recur) {
-      d('matmulQ8', g.qkv, Math.ceil(convDim / 4)); d('matmulQ8', g.z, Math.ceil(s.dInner / 4));
-      d('matmulQ8', g.beta, Math.ceil(s.vHeads / 4)); d('matmulQ8', g.alpha, Math.ceil(s.vHeads / 4));
+      d(this.qk.mm, g.qkv, Math.ceil(convDim / 4)); d(this.qk.mm, g.z, Math.ceil(s.dInner / 4));
+      d(this.qk.mm, g.beta, Math.ceil(s.vHeads / 4)); d(this.qk.mm, g.alpha, Math.ceil(s.vHeads / 4));
       d('gdnConv', g.conv, Math.ceil(convDim / 256));
       d('gdnStep', g.step, s.vHeads);
       d('gdnNormGate', g.norm, s.vHeads);
-      d('matmulQ8', g.out, Math.ceil(H / 4));
+      d(this.qk.mm, g.out, Math.ceil(H / 4));
     } else {
-      d('matmulQ8', g.q, Math.ceil(2 * QN / 4)); d('matmulQ8', g.k, Math.ceil(kvn / 4)); d('matmulQ8', g.v, Math.ceil(kvn / 4));
+      d(this.qk.mm, g.q, Math.ceil(2 * QN / 4)); d(this.qk.mm, g.k, Math.ceil(kvn / 4)); d(this.qk.mm, g.v, Math.ceil(kvn / 4));
       d('qkNormRopeP', g.ropeQ, c.heads); d('qkNormRopeP', g.ropeK, c.kvHeads);
       d('kvStore', g.kv, Math.ceil(kvn / 256));
       d('attnScore', g.score, Math.ceil(c.heads * seqLen / 256));
       d('softmax', g.soft, c.heads);
       d('attnOut', g.attOut, Math.ceil(QN / 256));
       d('sigmoidMul', g.gate, Math.ceil(QN / 256));
-      d('matmulQ8', g.o, Math.ceil(H / 4));
+      d(this.qk.mm, g.o, Math.ceil(H / 4));
     }
     d('addInPlace', g.addO, Math.ceil(H / 256));
     if (this.prefetch) for (const p of g.pf) { d('rmsnorm', p.rms, 1); d('matmulF32', p.router, c.experts); d('topk', p.topk, 1); }
     d('rmsnorm', g.rmsF, 1);
     d('matmulF32', g.router, c.experts);
     d('topk', g.topk, 1);
-    d('matmulQ8', g.shg, Math.ceil(c.shexpFf / 4)); d('matmulQ8', g.shu, Math.ceil(c.shexpFf / 4));
+    d(this.qk.mm, g.shg, Math.ceil(c.shexpFf / 4)); d(this.qk.mm, g.shu, Math.ceil(c.shexpFf / 4));
     d('siluMulMoe', g.shsilu, Math.ceil(c.shexpFf / 256));
-    d('matmulQ8', g.shd, Math.ceil(H / 4));
+    d(this.qk.mm, g.shd, Math.ceil(H / 4));
     d('matmulF32', g.shgate, 1);
   }
 
   encodeExperts(pass, l) {
     const c = this.cfg, g = this.layers[l], d = (nm, gr, x, y, z) => this.dispatch(pass, nm, gr, x, y, z);
-    d('expertQ8', g.gu, Math.ceil(2 * c.expertFf / 4), 1, c.topK);
+    d(this.qk.ex, g.gu, Math.ceil(2 * c.expertFf / 4), 1, c.topK);
     d('siluMulMoe', g.silu, Math.ceil(c.topK * c.expertFf / 256));
-    d('expertQ8', g.dn, Math.ceil(c.hidden / 4), 1, c.topK);
+    d(this.qk.ex, g.dn, Math.ceil(c.hidden / 4), 1, c.topK);
     d('moeAccumShared', g.acc, Math.ceil(c.hidden / 256));
   }
 
@@ -1113,7 +1184,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
       if (slots) dev.queue.writeBuffer(this.a.slots, 0, slots);
       const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
       if (resume < 0) {
-        this.dispatch(pass, 'embedQ8', this.g.embed, Math.ceil(c.hidden / 256));
+        this.dispatch(pass, this.qk.emb, this.g.embed, Math.ceil(c.hidden / 256));
         this.encodeAttention(pass, 0, seqLen);
         this.dispatch(pass, 'route', this.layers[0].route, 1);
       }
@@ -1124,7 +1195,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
       }
       if (last === L - 1 && want !== 'none') {
         this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);
-        this.dispatch(pass, 'matmulQ8', this.g.lm, Math.ceil(c.vocab / 4));
+        this.dispatch(pass, this.qk.lm, this.g.lm, Math.ceil(c.vocab / 4));
         if (want === 'argmax') this.dispatch(pass, 'argmax', this.g.am, 1);
       }
       pass.end();
@@ -1224,6 +1295,45 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
       r = await this.prefillChunk(rest.slice(i, i + this.chunkTokens), i + this.chunkTokens >= rest.length ? want : 'none');
     }
     return r;
+  }
+}
+
+// OpenBMB's MiniCPM-V 4.7 35B-A3B (2026-10): its language model is a qwen35moe with Qwen3.6's shapes, so it runs on
+// this engine; its Q4_0 GGUF (Q4_0 matrices and experts, a Q6_K output) on the Q4_0 kernels. Text only: the vision
+// encoder (mmproj, projector `minicpmv4_7`) is a separate file this engine does not read.
+export const MINICPM_V47_35B_A3B = {
+  repo: 'openbmb/MiniCPM-V-4.7-35B-A3B-gguf',
+  file: 'MiniCPM-V-4_7-35B-A3B-Q4_0.gguf',
+  revision: '3c3f7e84f14a760ff26d17ab5932d4aa996227c0',
+  sha256: 'fbc90b193ea8b7fefbb04f46af583e1dd80177be91671f624036c2ec77639488',
+  size: 19714550688,
+};
+
+export class MiniCpmV47Ssd extends Qwen35MoeSsd {
+  static async load(modelId = null, opts = {}) {
+    return super.load(modelId, opts.source || opts.url ? opts : { ...opts, source: MINICPM_V47_35B_A3B });
+  }
+
+  // OpenBMB's tokenizer.json splits words with Qwen2's rule (\p{L}+, no \p{M}); the GGUF header says `qwen35`, whose
+  // rule keeps combining marks in the word. Follow the model's own tokenizer: Hindi and Tamil differ, 15/15 strings
+  // match HF `tokenizers` this way (2026-10-14). llama.cpp follows the header, so its ids differ on those scripts.
+  static tokenizerFrom(kv) { return super.tokenizerFrom({ ...kv, 'tokenizer.ggml.pre': 'qwen2' }); }
+
+  // MiniCPM-V's template: earlier replies carry an empty think block and lose their reasoning (the model's
+  // own </think> and LocalMind's <|think|> … <|/think|> markers); the reply after the last question keeps it.
+  chatPrompt(messages, { enableThinking = true } = {}) {
+    const lastUser = messages.map((m) => m.role).lastIndexOf('user');
+    let p = '';
+    messages.forEach((m, i) => {
+      let c = String(m.content ?? '').trim();
+      if (m.role === 'assistant' && i < lastUser) {
+        c = c.replace(/<\|think\|>[\s\S]*?<\|\/think\|>/g, '');
+        if (c.includes('</think>')) c = c.split('</think>').pop();
+        c = '<think>\n\n</think>\n\n' + c.trim();
+      }
+      p += `<|im_start|>${m.role}\n${c}<|im_end|>\n`;
+    });
+    return p + '<|im_start|>assistant\n' + (enableThinking ? '<think>\n' : '<think>\n\n</think>\n\n');
   }
 }
 
