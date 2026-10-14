@@ -8895,6 +8895,10 @@ self.addEventListener('message', async (e) => {
         type: 'causal',
         multimodal: false,
         agentCapable: true,
+        // Phones get no tools (Chirag, 2026-10-14). The tool prompt is ~1,900 tokens: an iPhone 13 Pro took 32 s
+        // to read it, and under memory pressure iOS stopped the GPU work ("map async was not successful").
+        // Without it the same turn answered in 1.4 s. The model rarely calls tools correctly anyway.
+        toolsOnPhone: false,
         contextSize: 32768,
         // Same LFM2.5-230M as the wllama 'lfm2-230m-gguf' entry, but run on the
         // hand-written WebGPU kernels from the
@@ -12292,7 +12296,7 @@ self.addEventListener('message', async (e) => {
       apiKeyRow.style.display = (p === 'brave' || p === 'tavily') ? '' : 'none';
       searxngUrlRow.style.display = p === 'searxng' ? '' : 'none';
       const m = MODELS[activeModelKey];
-      const isAgent = m && m.agentCapable;
+      const isAgent = modelToolCapable(m);
       const configured = isSearchConfigured();
       // The old 🌐/🔬 send buttons are superseded by the mode chips above the input.
       searchSendBtn.style.display = 'none';
@@ -14921,7 +14925,7 @@ ${JSON.stringify({ name, result })}
         this._activeModelId = m.id;
         this._activeCaps = {
           text: true, image: false, audio: false, video: false,
-          toolCalling: !!m.agentCapable, maxContextTokens: m.contextSize || 0,
+          toolCalling: modelToolCapable(m), maxContextTokens: m.contextSize || 0,
         };
       },
       isEndpoint() { return this._backend === 'endpoint'; },
@@ -17301,7 +17305,7 @@ self.addEventListener('message', async (e) => {
           image: m.imageInput ?? !!m.multimodal,
           audio: m.audioInput ?? !!m.multimodal,
           video: m.videoInput ?? !!m.multimodal,
-          toolCalling: !!m.agentCapable,
+          toolCalling: modelToolCapable(m),
           maxContextTokens: m.contextSize || 0,
         },
       }).catch((e) => {
@@ -18036,7 +18040,7 @@ self.addEventListener('message', async (e) => {
             image: m.imageInput ?? !!m.multimodal,
             audio: m.audioInput ?? !!m.multimodal,
             video: m.videoInput ?? !!m.multimodal,
-            toolCalling: !!m.agentCapable,
+            toolCalling: modelToolCapable(m),
             maxContextTokens: m.contextSize || 0,
           },
         });
@@ -18372,6 +18376,9 @@ self.addEventListener('message', async (e) => {
       // only for the runtime.chat call.
       const userContent = text || (hasAttachments ? '(attachments only)' : '');
 
+      // A turn that failed left its question with no reply. Drop it, so a retry does not send the question
+      // twice (an iPhone retry sent it three times, 2026-10-14).
+      if (messages.length && messages[messages.length - 1].role === 'user') messages.pop();
       messages.push({ role: 'user', content: userContent });
       addUserMessage(text || '(attachments)', hasAttachments);
       saveChat();
@@ -19379,7 +19386,7 @@ self.addEventListener('message', async (e) => {
       if (!question || !modelReady || generating) return;
       if (!isSearchConfigured()) { openSettings('tools', 'searchSettingsSection'); showToast('Deep Research needs a web search provider — choose one here.'); return; }
       const m = MODELS[activeModelKey];
-      if (!m || !m.agentCapable) { showToast('Deep Research needs an agent-capable model'); return; }
+      if (!modelToolCapable(m)) { showToast('Deep Research needs an agent-capable model'); return; }
 
       const SUBQUERIES = 4, PER_QUERY = 3, MAX_SOURCES = 10, CONTENT_CHARS = 1000;
 
@@ -19989,6 +19996,10 @@ self.addEventListener('message', async (e) => {
     // Phone/tablet check (touch + small viewport) — used to gate heavy capabilities.
     function isMobileDevice() {
       return window.matchMedia('(pointer: coarse)').matches && window.matchMedia('(max-width: 820px)').matches;
+    }
+    // Tools for this model on this device: agentCapable, unless the model opts out on phones (toolsOnPhone: false).
+    function modelToolCapable(m) {
+      return !!(m && m.agentCapable && !(m.toolsOnPhone === false && isMobileDevice()));
     }
     // Image + Diffuse need WebGPU AND a desktop-class GPU + memory (3.3 / 1.4 GB models).
     // Disable the chips where WebGPU is unavailable, or on a phone (won't realistically run).
@@ -21161,7 +21172,7 @@ self.addEventListener('message', async (e) => {
         cb.type = 'checkbox'; cb.value = key; cb.className = 'compare-cb';
         cb.addEventListener('change', onCompareSelectionChange);
         const span = document.createElement('span');
-        span.innerHTML = escapeHtml(mdl.label) + ' <span style="color:var(--gray-500)">· ' + escapeHtml(mdl.size) + (mdl.agentCapable ? '' : ' · no tools') + '</span>';
+        span.innerHTML = escapeHtml(mdl.label) + ' <span style="color:var(--gray-500)">· ' + escapeHtml(mdl.size) + (modelToolCapable(mdl) ? '' : ' · no tools') + '</span>';
         lab.appendChild(cb); lab.appendChild(span);
         compareModelList.appendChild(lab);
       }

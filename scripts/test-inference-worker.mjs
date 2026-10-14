@@ -105,6 +105,12 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   assert.match(indexSource, /const partial = full\.endsWith\('\\uFFFD'\);/);
   // Boot: a load started during startup (window.localmind.load()) is not replaced by the default model.
   assert.match(indexSource, /const loadStarted = activeModelKey !== null;[^]*?else if \(loadStarted\)/);
+  // Phones: no tools for LFM2.5 230M (its ~1,900-token tool prompt stalled an iPhone 13 Pro, 2026-10-14).
+  assert.match(indexSource, /'lfm2-230m-webgpu': \{(?:(?!genConfig)[^])*?toolsOnPhone: false,/);
+  assert.match(indexSource, /function modelToolCapable\(m\) \{\s*return !!\(m && m\.agentCapable && !\(m\.toolsOnPhone === false && isMobileDevice\(\)\)\);/);
+  assert.doesNotMatch(indexSource, /toolCalling: !!m\.agentCapable/);
+  // A failed turn's unanswered question is dropped before the retry is added.
+  assert.match(indexSource, /if \(messages\.length && messages\[messages\.length - 1\]\.role === 'user'\) messages\.pop\(\);\s*messages\.push\(\{ role: 'user', content: userContent \}\);/);
   // A worker swap ends the generation still waiting on the old worker.
   assert.match(indexSource, /if \(generateResolve\) \{ const r = generateResolve; generateResolve = null; r\(currentAssistantText\); \}\n\n      activeModelKey = key;/);
   assert.match(indexSource, /let inThink = \(wantThink \|\| model\.alwaysThinks === true\) && model\.thinkInPrompt !== false;/);
