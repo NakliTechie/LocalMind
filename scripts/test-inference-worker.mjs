@@ -109,6 +109,8 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   assert.match(indexSource, /'lfm2-230m-webgpu': \{(?:(?!genConfig)[^])*?toolsOnPhone: false,/);
   assert.match(indexSource, /function modelToolCapable\(m\) \{\s*return !!\(m && m\.agentCapable && !\(m\.toolsOnPhone === false && isMobileDevice\(\)\)\);/);
   assert.doesNotMatch(indexSource, /toolCalling: !!m\.agentCapable/);
+  // Every engine worker holds back a delta whose decoded text ends in U+FFFD (a character split across tokens).
+  assert.equal((indexSource.match(/endsWith\('\\uFFFD'\)/g) || []).length, 4);
   // A failed turn's unanswered question is dropped before the retry is added.
   assert.match(indexSource, /if \(messages\.length && messages\[messages\.length - 1\]\.role === 'user'\) messages\.pop\(\);\s*messages\.push\(\{ role: 'user', content: userContent \}\);/);
   // A worker swap ends the generation still waiting on the old worker.

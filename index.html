@@ -8038,14 +8038,19 @@ self.onmessage = async (e) => {
           maxNewTokens: cfg.max_new_tokens || cfg.max_tokens || 1024,
           signal: abortController.signal,
         });
+        let latest = '';
         for await (const out of stream) {
           if (stopFlag) break;
           const full = out && typeof out.text === 'string' ? out.text : '';
-          if (full.length > prev.length) {
+          latest = full;
+          // A character split across tokens decodes with a trailing U+FFFD until its last byte arrives: hold the delta
+          // until then, or the stream carries U+FFFD and the next delta starts a code unit late (2026-10-14).
+          if (!full.endsWith('\uFFFD') && full.length > prev.length) {
             post({ type: 'token', token: full.slice(prev.length) });
             prev = full;
           }
         }
+        if (latest.length > prev.length) post({ type: 'token', token: latest.slice(prev.length) });
       } catch (err) {
         const s = String((err && err.message) || err);
         if (!(stopFlag || s.toLowerCase().includes('abort'))) throw err;
@@ -8204,8 +8209,11 @@ self.onmessage = async (e) => {
         for await (const out of stream) {
           if (stopFlag) break;
           const full = out && typeof out.text === 'string' ? out.text : '';
-          const delta = full.length > prev.length ? full.slice(prev.length) : '';
-          prev = full;
+          // A character split across tokens decodes with a trailing U+FFFD until its last byte arrives: hold the delta
+          // until then, or the stream carries U+FFFD and the next delta starts a code unit late (2026-10-14).
+          const partial = full.endsWith('\uFFFD');
+          const delta = !partial && full.length > prev.length ? full.slice(prev.length) : '';
+          if (!partial) prev = full;
           if (inThink && !thinkOpened) { post({ type: 'token', token: '<|think|>' }); thinkOpened = true; }
           if (inThink && out && out.token === thinkClose) {
             if (delta) post({ type: 'token', token: delta });
@@ -28880,7 +28888,7 @@ const generate = async (request) => {
   }
   lastHistoryLen = messages.length;
   abortController = new AbortController();
-  let previous = '';
+  let previous = '', latest = '';
 
   try {
     const stream = model.generate(messages, {
@@ -28890,11 +28898,15 @@ const generate = async (request) => {
     for await (const output of stream) {
       if (stopFlag) break;
       const full = output && typeof output.text === 'string' ? output.text : '';
-      if (full.length > previous.length) {
+      latest = full;
+      // A character split across tokens decodes with a trailing U+FFFD until its last byte arrives: hold the delta
+      // until then, or the stream carries U+FFFD and the next delta starts a code unit late (2026-10-14).
+      if (!full.endsWith('\uFFFD') && full.length > previous.length) {
         post({ type: 'token', token: full.slice(previous.length) }, id);
         previous = full;
       }
     }
+    if (latest.length > previous.length) post({ type: 'token', token: latest.slice(previous.length) }, id);
   } catch (error) {
     const message = String((error && error.message) || error);
     if (!(stopFlag || message.toLowerCase().includes('abort'))) throw error;

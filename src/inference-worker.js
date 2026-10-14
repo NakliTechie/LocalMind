@@ -243,7 +243,7 @@ const generate = async (request) => {
   }
   lastHistoryLen = messages.length;
   abortController = new AbortController();
-  let previous = '';
+  let previous = '', latest = '';
 
   try {
     const stream = model.generate(messages, {
@@ -253,11 +253,15 @@ const generate = async (request) => {
     for await (const output of stream) {
       if (stopFlag) break;
       const full = output && typeof output.text === 'string' ? output.text : '';
-      if (full.length > previous.length) {
+      latest = full;
+      // A character split across tokens decodes with a trailing U+FFFD until its last byte arrives: hold the delta
+      // until then, or the stream carries U+FFFD and the next delta starts a code unit late (2026-10-14).
+      if (!full.endsWith('\uFFFD') && full.length > previous.length) {
         post({ type: 'token', token: full.slice(previous.length) }, id);
         previous = full;
       }
     }
+    if (latest.length > previous.length) post({ type: 'token', token: latest.slice(previous.length) }, id);
   } catch (error) {
     const message = String((error && error.message) || error);
     if (!(stopFlag || message.toLowerCase().includes('abort'))) throw error;
