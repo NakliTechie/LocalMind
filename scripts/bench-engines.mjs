@@ -9,13 +9,14 @@
 //   node scripts/bench-engines.mjs                 # both suites against localmind.naklitechie.com
 //   node scripts/bench-engines.mjs --suite engines # kernels vs Transformers.js vs wllama
 //   node scripts/bench-engines.mjs --suite dflash  # Ternary Bonsai 2 27B, plain vs DFlash 2, code and prose
+//   node scripts/bench-engines.mjs --suite mtp     # Ternary Bonsai 2 27B, plain vs DFlash 2 vs MTP depth 1 and 2
 //   node scripts/bench-engines.mjs --suite ple     # Gemma 4 E2B kernels, PLE table resident vs from OPFS
 //   node scripts/bench-engines.mjs --url http://127.0.0.1:8000/ --profile ~/.cache/lm-bench --out bench.json
 //   node scripts/bench-engines.mjs --list          # print the rows and exit
 //   node scripts/bench-engines.mjs --row-timeout 20 # minutes a row may show no progress (default 20)
 //
 // Needs Chrome with WebGPU. The first run downloads every model in the suite into --profile (engines:
-// ~4.5 GB, dflash: ~7 GB); later runs reuse that cache. Close other GPU-heavy work first: a busy
+// ~4.5 GB, dflash: ~7 GB, mtp: ~7.5 GB); later runs reuse that cache. Close other GPU-heavy work first: a busy
 // machine moves absolute numbers by 1.5-3x (ratios within a model are steadier, not immune).
 // A row whose page shows no progress for --row-timeout minutes (status and download text unchanged, no
 // step finished) is recorded as an error and the run moves on to the next row.
@@ -65,6 +66,12 @@ const ROWS = [
   { suite: 'dflash', model: 'Ternary Bonsai 2 27B', engine: 'WGSL + DFlash 2 · code', key: 'ternary-bonsai-2-27b-webgpu', dflash: true, tok: 'qwen38', prompt: CODE },
   { suite: 'dflash', model: 'Ternary Bonsai 2 27B', engine: 'hand-written WGSL · prose', key: 'ternary-bonsai-2-27b-webgpu', dflash: false, tok: 'qwen38', prompt: PROSE },
   { suite: 'dflash', model: 'Ternary Bonsai 2 27B', engine: 'WGSL + DFlash 2 · prose', key: 'ternary-bonsai-2-27b-webgpu', dflash: true, tok: 'qwen38', prompt: PROSE },
+  ...['code', 'prose'].flatMap((p) => [
+    { suite: 'mtp', model: 'Ternary Bonsai 2 27B', engine: `hand-written WGSL · ${p}`, key: 'ternary-bonsai-2-27b-webgpu', dflash: false, tok: 'qwen38', prompt: p === 'code' ? CODE : PROSE },
+    { suite: 'mtp', model: 'Ternary Bonsai 2 27B', engine: `WGSL + DFlash 2 · ${p}`, key: 'ternary-bonsai-2-27b-webgpu', dflash: true, tok: 'qwen38', prompt: p === 'code' ? CODE : PROSE },
+    { suite: 'mtp', model: 'Ternary Bonsai 2 27B', engine: `WGSL + MTP depth 1 · ${p}`, key: 'ternary-bonsai-2-27b-webgpu', mtp: 1, tok: 'qwen38', prompt: p === 'code' ? CODE : PROSE },
+    { suite: 'mtp', model: 'Ternary Bonsai 2 27B', engine: `WGSL + MTP depth 2 · ${p}`, key: 'ternary-bonsai-2-27b-webgpu', mtp: 2, tok: 'qwen38', prompt: p === 'code' ? CODE : PROSE },
+  ]),
   { suite: 'ple', model: 'Gemma 4 E2B', engine: 'WGSL · PLE resident · prose', key: 'gemma4-e2b-webgpu', ple: false, tok: 'gemma4', prompt: PROSE },
   { suite: 'ple', model: 'Gemma 4 E2B', engine: 'WGSL · PLE from OPFS · prose', key: 'gemma4-e2b-webgpu', ple: true, tok: 'gemma4', prompt: PROSE },
   { suite: 'ple', model: 'Gemma 4 E2B', engine: 'WGSL · PLE resident · code', key: 'gemma4-e2b-webgpu', ple: false, tok: 'gemma4', prompt: CODE },
@@ -76,7 +83,7 @@ const rows = ROWS.filter((r) => SUITE === 'all' || r.suite === SUITE);
 // that dropped it would make the next run download it again.
 const CUSTOM_MODELS = [...new Map(ROWS.filter((r) => r.custom).map((r) => [r.custom.id, r.custom])).values()];
 if (argv.includes('--list')) { for (const r of rows) console.log(`${r.suite.padEnd(8)} ${r.model.padEnd(22)} ${r.engine}`); process.exit(0); }
-if (!rows.length) { console.error(`unknown --suite ${SUITE} (engines | dflash | ple | all)`); process.exit(2); }
+if (!rows.length) { console.error(`unknown --suite ${SUITE} (engines | dflash | mtp | ple | all)`); process.exit(2); }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.error(new Date().toTimeString().slice(0, 8), ...a);
@@ -132,12 +139,14 @@ async function runRow(cdp, row, ctx) {
   const seed = `(() => { try {
       localStorage.setItem('lm_api_enabled', '1');
       localStorage.setItem('lm_dflash', ${row.dflash === false ? "'0'" : "'1'"});
+      localStorage.setItem('lm_mtp', ${row.mtp ? "'1'" : "'0'"});
+      localStorage.setItem('lm_mtp_depth', '${row.mtp || 2}');
       localStorage.setItem('lm_custom_models', ${JSON.stringify(JSON.stringify(CUSTOM_MODELS))});
       localStorage.setItem('lm_gemma4_ple', ${row.ple ? "'1'" : "'0'"});
     } catch (e) {}
-    window.__benchDflash = null; window.__benchPle = null;
+    window.__benchDflash = null; window.__benchSpecKind = null; window.__benchSpecTurns = []; window.__benchPle = null;
     const W = window.Worker;
-    window.Worker = function (u, o) { const w = new W(u, o); w.addEventListener('message', (e) => { if (e.data && e.data.type === 'dflash') window.__benchDflash = e.data.status; if (e.data && e.data.type === 'ready' && e.data.ple) window.__benchPle = e.data.ple; }); return w; };
+    window.Worker = function (u, o) { const w = new W(u, o); w.addEventListener('message', (e) => { const d = e.data; if (d && d.type === 'dflash') { if (d.status === 'turn') window.__benchSpecTurns.push(d); else { window.__benchDflash = d.status; window.__benchSpecKind = d.kind || 'dflash'; } } if (d && d.type === 'ready' && d.ple) window.__benchPle = d.ple; }); return w; };
     window.Worker.prototype = W.prototype; })()`;
   ctx.identifier = (await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: seed })).result.identifier;
   await cdp.send('Page.navigate', { url: URL_ + (URL_.includes('?') ? '&' : '?') + 'bench=' + Date.now() });
@@ -149,19 +158,30 @@ async function runRow(cdp, row, ctx) {
   const pleMode = row.ple === undefined ? undefined : await ev('window.__benchPle');
   log(`loaded ${row.model} · ${row.engine} in ${((Date.now() - t0) / 1000).toFixed(0)} s${pleMode ? ` (PLE ${pleMode})` : ''}`);
   if (row.ple !== undefined && pleMode !== (row.ple ? 'opfs' : 'resident')) throw new Error(`PLE mode is ${pleMode}, expected ${row.ple ? 'opfs' : 'resident'}`);
-  if (row.dflash) {
+  if (row.dflash || row.mtp) {
     for (let i = 0; i < 900 && (await ev('window.__benchDflash')) !== 'ready'; i++) await sleep(2000);
     step();
-    log('DFlash 2 drafter:', await ev('window.__benchDflash'));
+    const kind = await ev('window.__benchSpecKind');
+    log(`${row.mtp ? 'MTP head' : 'DFlash 2 drafter'}:`, await ev('window.__benchDflash'), kind);
+    if (kind !== (row.mtp ? 'mtp' : 'dflash')) throw new Error(`speculative runner is ${kind}, expected ${row.mtp ? 'mtp' : 'dflash'}`);
   }
   const runs = [];
   for (let r = 0; r < RUNS; r++) {
+    await ev('window.__benchSpecTurns = []');
     runs.push(await ev(`(async () => {
       const t0 = performance.now(); let first = 0, last = 0, text = '';
       const stream = await window.localmind.chat.completions.create({ messages: [{ role: 'user', content: ${JSON.stringify(row.prompt)} }], stream: true, temperature: 0, max_tokens: ${MAX} });
       for await (const ch of stream) { const d = ch.choices && ch.choices[0] && ch.choices[0].delta && ch.choices[0].delta.content; if (d) { const now = performance.now(); if (!first) first = now; last = now; text += d; } }
       return { ttftMs: first - t0, decodeMs: last - first, text };
     })()`));
+    // speculative telemetry for the turn: verify cycles, tokens and accepted drafts (one 'turn' message per generate pass)
+    if (row.dflash || row.mtp) {
+      const turns = (await ev('window.__benchSpecTurns')) || [];
+      const cycles = turns.reduce((s, t) => s + t.cycles, 0), toks = turns.reduce((s, t) => s + t.tokens, 0);
+      const acc = turns.reduce((s, t) => s + t.acceptedPerCycle * t.cycles, 0);
+      runs[r].spec = { cycles, tokensPerCycle: cycles ? +(toks / cycles).toFixed(2) : null, acceptedPerCycle: cycles ? +(acc / cycles).toFixed(2) : null,
+        ...(row.mtp ? { acceptance: cycles ? +(acc / (cycles * row.mtp)).toFixed(3) : null } : {}) };
+    }
     step();
   }
   // Exact token counts with the model's own tokenizer, in the page (no Node dependencies).
@@ -174,7 +194,7 @@ async function runRow(cdp, row, ctx) {
   })()`);
   await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: ctx.identifier });
   ctx.identifier = null;
-  const per = runs.map((x, i) => ({ tokens: counts[i], ttftMs: x.ttftMs, tokPerSec: (counts[i] - 1) / (x.decodeMs / 1000) }));
+  const per = runs.map((x, i) => ({ tokens: counts[i], ttftMs: x.ttftMs, tokPerSec: (counts[i] - 1) / (x.decodeMs / 1000), ...(x.spec ? { spec: x.spec } : {}) }));
   const warm = per.length > 1 ? per.slice(1) : per;
   return { ...row, custom: undefined, prompt: row.prompt === CODE ? 'code' : 'prose', runs: per, pleMode,
     tokens: warm.map((x) => x.tokens), ttftMs: Math.round(median(warm.map((x) => x.ttftMs))),
@@ -227,12 +247,13 @@ for (const row of rows) {
 }
 cdp.ws.close(); kill();
 
-// DFlash, and the PLE table from OPFS, must match plain decode byte for byte (greedy); flag it if not.
-for (const r of results.filter((x) => x.dflash || x.ple)) {
-  const flag = r.dflash ? 'dflash' : 'ple';
-  const plain = results.find((x) => x.key === r.key && x[flag] === false && x.prompt === r.prompt);
+// DFlash, MTP, and the PLE table from OPFS, must match plain decode byte for byte (greedy); flag it if not.
+for (const r of results.filter((x) => x.dflash || x.mtp || x.ple)) {
+  const plain = r.ple ? results.find((x) => x.key === r.key && x.ple === false && x.prompt === r.prompt)
+    : results.find((x) => x.key === r.key && x.dflash === false && !x.mtp && x.prompt === r.prompt);
   if (plain && plain.firstText != null) r.identicalToPlain = plain.firstText === r.firstText;
 }
-console.table(results.map((r) => ({ model: r.model, engine: r.engine, 'tok/s': r.tokPerSec ?? r.error, 'TTFT ms': r.ttftMs, tokens: (r.tokens || []).join(','), ...(r.dflash || r.ple ? { 'same as plain': r.identicalToPlain } : {}) })));
+const specCol = (r) => { const s = (r.runs || []).slice(-1)[0]?.spec; return s ? { 'tokens/cycle': s.tokensPerCycle, acceptance: s.acceptance ?? '' } : {}; };
+console.table(results.map((r) => ({ model: r.model, engine: r.engine, 'tok/s': r.tokPerSec ?? r.error, 'TTFT ms': r.ttftMs, tokens: (r.tokens || []).join(','), ...(r.dflash || r.mtp || r.ple ? { 'same as plain': r.identicalToPlain } : {}), ...specCol(r) })));
 const out = { url: URL_, date: new Date().toISOString(), runs: RUNS, maxTokens: MAX, platform: `${process.platform} ${process.arch}`, results: results.map(({ firstText, ...r }) => r) };
 if (OUT) { writeFileSync(OUT, JSON.stringify(out, null, 1)); log('wrote', OUT); }

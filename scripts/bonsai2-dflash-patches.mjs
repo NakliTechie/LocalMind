@@ -71,7 +71,7 @@ export function applyDFlashPatches(src) {
     'J.output($lg,"verify_logits")}else ' + kiLoop;
   replaceOnce(
     'Ee(te,ge,Je)}let Ze=J.nodeCount,st=E0({g:J,w:re,weights:ke,model:e,hidden:Je,act:G,H:s,vocab:o,T:a,eps:l,finalNormOffset:ie.model_norm,lmHeadOffset:ie.lm_head});return{graph:J.finish({name:"qwen35-prefill",params:{T:a}}),weights:me,states:ne,paramsName:"params",lastRowUniform:st,...L?{realRowsInput:L.name}:{},nextTokenTailNodeCount:J.nodeCount-Ze}}',
-    'Ee(te,ge,Je)}$f&&J.output($f,"dspark.features");let Ze=J.nodeCount,$p;' +
+    'Ee(te,ge,Je)}$f&&J.output($f,"dspark.features");$v?.finalHidden&&J.output(Je,"mtp.hidden");let Ze=J.nodeCount,$p;' +
     'if($v?.allRowsHead){let $t=J.scratch("verify_tokens","uint32",[a]);' + smallMHead +
     'J.output($t,"verify_tokens"),$p={tokens:$t,uni:J.uniform("next_token_pick_uni",32)}}' +
     'let st=E0({g:J,w:re,weights:ke,model:e,hidden:Je,act:G,H:s,vocab:o,T:a,eps:l,finalNormOffset:ie.model_norm,lmHeadOffset:ie.lm_head,...$p?{nextTokenPick:$p}:{}});' +
