@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><title>Bonsai 2 small probe</title><pre id="o">loading</pre>
+<script type="module">
+// Probe: does the vendored Ternary Bonsai 2 engine (27B) run PrismML's small siblings (Qwen3.5 2B/4B/9B)?
+// ?repo=prism-ml/Ternary-Bonsai-2-2B-gguf  — loads, asks two questions greedily, reports text and tok/s.
+const o = document.getElementById('o'); const log = (s) => { o.textContent += '\n' + s; console.log(s); };
+window.probe = (async () => {
+  const repo = new URLSearchParams(location.search).get('repo');
+  const { TernaryBonsai2 } = await import('/src/ternary_bonsai_2_27b.js?t=' + Date.now());
+  const t0 = performance.now(); let last = '';
+  const m = await TernaryBonsai2.load(repo, { maxLength: 4096, onProgress: (e) => { const s = e && `${e.status} ${e.loaded ?? ''}/${e.total ?? ''}`; if (s !== last) { last = s; } } });
+  const loadS = (performance.now() - t0) / 1000; log('loaded ' + loadS.toFixed(1) + ' s');
+  const out = { repo, loadS, answers: [] };
+  for (const q of ['What is the capital of France? Answer in one sentence.', 'Write a Python function that returns the n-th Fibonacci number.']) {
+    try { m.chatTemplateArgs = { enable_thinking: false }; } catch {}
+    const t = performance.now(); let text = '', n = 0, first = null;
+    for await (const ev of m.generate([{ role: 'user', content: q }], { maxNewTokens: 96 })) { if (first == null) first = performance.now(); n++; text = ev && typeof ev.text === 'string' ? ev.text : text + (ev && ev.token ? '' : ''); }
+    const secs = (performance.now() - first) / 1000;
+    out.answers.push({ q, text, tokens: n, tokPerS: +(n / secs).toFixed(1), ttftS: +((first - t) / 1000).toFixed(2) }); log(JSON.stringify(out.answers.at(-1)).slice(0, 300));
+  }
+  return out;
+})().catch((e) => { log('ERROR ' + (e && e.stack || e)); return { error: String(e && e.message || e) }; });
+</script>
