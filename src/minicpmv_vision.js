@@ -220,6 +220,36 @@ export class MiniCpmVVision {
     return v;
   }
 
+  // The mmproj kept in OPFS (localmind-ssd/<name>/mmproj.gguf, with a manifest naming its source so Settings → Models
+  // lists it under the model): downloaded once in 64 MB ranges with fetchFn, each range committed, so an interrupted
+  // download resumes. Then load() reads from the stored file.
+  static async loadCached(device, { url, size, source = null, name, fetch: fetchFn = (u, i) => fetch(u, i), onProgress = () => {} } = {}) {
+    const root = await navigator.storage.getDirectory();
+    const dir = await (await root.getDirectoryHandle('localmind-ssd', { create: true })).getDirectoryHandle(name, { create: true });
+    const fh = await dir.getFileHandle('mmproj.gguf', { create: true });
+    let have = (await fh.getFile()).size;
+    if (have > size) { const w = await fh.createWritable(); await w.truncate(0); await w.close(); have = 0; }
+    const CH = 64 << 20;
+    while (have < size) {
+      const end = Math.min(size, have + CH) - 1;
+      const r = await fetchFn(url, { headers: { Range: `bytes=${have}-${end}` } });
+      if (r.status !== 206 && !(r.status === 200 && have === 0 && end === size - 1)) throw new Error(`vision weights: HTTP ${r.status} for bytes ${have}-${end}`);
+      const buf = new Uint8Array(await r.arrayBuffer());
+      if (buf.byteLength !== end - have + 1) throw new Error(`vision weights: got ${buf.byteLength} of ${end - have + 1} bytes`);
+      const w = await fh.createWritable({ keepExistingData: true });
+      await w.seek(have); await w.write(buf); await w.close();
+      have += buf.byteLength;
+      onProgress({ status: 'vision-download', loaded: have, total: size });
+    }
+    if (source) {
+      const m = await dir.getFileHandle('manifest.json', { create: true }), w = await m.createWritable();
+      await w.write(JSON.stringify({ source, file: 'mmproj.gguf', size })); await w.close();
+    }
+    const file = await fh.getFile();
+    const read = async (off, len) => new Uint8Array(await file.slice(off, off + len).arrayBuffer());
+    return MiniCpmVVision.load(device, { read, onProgress });
+  }
+
   constructor(device, gguf) {
     const kv = gguf.kv || gguf.metadata;
     if (kv['clip.projector_type'] !== 'minicpmv4_7') throw new Error(`MiniCpmVVision needs a minicpmv4_7 mmproj, got ${kv['clip.projector_type']}`);

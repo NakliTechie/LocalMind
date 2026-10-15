@@ -15,6 +15,7 @@
  *   const m = await Qwen35MoeSsd.load(null, { url: '…/Qwen3.6-35B-A3B-Q8_0.gguf', poolBytes });
  */
 
+import { MiniCpmVVision } from './minicpmv_vision.js';
 import { Qwen3MoeSsd, STORAGE, COPY_SRC, COPY_DST, MAP_READ, UNIFORM, I8, TOK, Q6K_BLOCK, Q4_KERNELS, Q4_SG_KERNELS, Q4_BATCH_KERNELS } from './qwen3_moe_ssd.js';
 
 export const QWEN36_35B_A3B = {
@@ -448,6 +449,26 @@ ${QB}
 @group(0) @binding(2) var<storage, read_write> sc: array<f32>;
 @group(0) @binding(3) var<uniform> p: P;
 @group(0) @binding(4) var<uniform> qd: Q;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>) {
+  let idx = g.y * ng.x * 256u + g.x; let S = qd.S; let T = qd.T;
+  if (idx >= p.heads * T * S) { return; }
+  let h = idx / (T * S); let rem = idx % (T * S); let t = rem / S; let pos = rem % S;
+  if (pos > qd.pos0 + t) { sc[idx] = -3.4e38; return; }
+  let kvh = h / (p.heads / p.kvHeads);
+  let qo = t * p.heads * p.hd + h * p.hd; let ko = pos * p.kvHeads * p.hd + kvh * p.hd;
+  var acc = 0.0;
+  for (var d = 0u; d < p.hd; d++) { acc += q[qo + d] * f32(kc[ko + d]); }
+  sc[idx] = acc * p.scale;
+}`,
+  // attnScoreB masked by position instead of slot (Qwen35MoeSsd: images; kpos holds each KV slot's position).
+  attnScorePosB: `enable f16;
+struct P { heads: u32, kvHeads: u32, hd: u32, scale: f32 }
+${QB}
+@group(0) @binding(0) var<storage, read> q: array<f32>;
+@group(0) @binding(1) var<storage, read> kc: array<f16>;
+@group(0) @binding(2) var<storage, read_write> sc: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+@group(0) @binding(4) var<uniform> qd: Q;
 @group(0) @binding(5) var<storage, read> kpos: array<u32>;
 @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>) {
   let idx = g.y * ng.x * 256u + g.x; let S = qd.S; let T = qd.T;
@@ -493,9 +514,27 @@ ${QB}
   let QN = p.heads * p.hd; let idx = g.x; let t = g.y;
   if (idx >= QN || t >= qd.T) { return; }
   let h = idx / p.hd; let d = idx % p.hd; let kvh = h / (p.heads / p.kvHeads);
+  let stride = p.kvHeads * p.hd; let rb = (h * qd.T + t) * qd.S; let last = qd.pos0 + t;
+  var acc = 0.0;
+  for (var pos = 0u; pos <= last; pos++) { acc += pr[rb + pos] * f32(vc[pos * stride + kvh * p.hd + d]); }
+  y[t * QN + idx] = acc;
+}`,
+  // attnOutB over every key of the chunk (attnScorePosB gives masked ones probability 0; a tile token sees later ones).
+  attnOutPosB: `enable f16;
+struct P { heads: u32, kvHeads: u32, hd: u32, pad: u32 }
+${QB}
+@group(0) @binding(0) var<storage, read> pr: array<f32>;
+@group(0) @binding(1) var<storage, read> vc: array<f16>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+@group(0) @binding(4) var<uniform> qd: Q;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let QN = p.heads * p.hd; let idx = g.x; let t = g.y;
+  if (idx >= QN || t >= qd.T) { return; }
+  let h = idx / p.hd; let d = idx % p.hd; let kvh = h / (p.heads / p.kvHeads);
   let stride = p.kvHeads * p.hd; let rb = (h * qd.T + t) * qd.S;
   var acc = 0.0;
-  // Every key of the chunk: a masked one has probability 0 (attnScoreB's mask), and a tile token sees later ones.
+  // Every key of the chunk: a masked one has probability 0 (attnScorePosB's mask), and a tile token sees later ones.
   for (var pos = 0u; pos < qd.S; pos++) { acc += pr[rb + pos] * f32(vc[pos * stride + kvh * p.hd + d]); }
   y[t * QN + idx] = acc;
 }`,
@@ -972,9 +1011,9 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
           ropeQ: this.bind('qkNormRopePB', [b.qg, raw(n('attn_q_norm.weight')), b.rope, b.q, b.gate, u.ropeQ]),
           ropeK: this.bind('qkNormRopePB', [b.k, raw(n('attn_k_norm.weight')), b.rope, b.kr, b.dummy, u.ropeK]),
           kv: this.bind('kvStoreB', [b.kr, b.v, this.kc[l], this.vc[l], u.kvn, qb]),
-          score: this.bind('attnScoreB', [b.q, this.kc[l], b.sc, u.att, qb, this.kpos]),
+          score: this.bind('attnScorePosB', [b.q, this.kc[l], b.sc, u.att, qb, this.kpos]),
           soft: this.bind('softmaxB', [b.sc, qb]),
-          attOut: this.bind('attnOutB', [b.sc, this.vc[l], b.att, u.attOut, qb]),
+          attOut: this.bind('attnOutPosB', [b.sc, this.vc[l], b.att, u.attOut, qb]),
           gate: this.bind('sigmoidMulB', [b.att, b.gate, u.gate, qb]),
           o: q8(n('attn_output.weight'), b.att, b.o, u.o),
         });
@@ -1014,9 +1053,9 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
       d(this.qk.mmT, g.q, mm(2 * QN), tt); d(this.qk.mmT, g.k, mm(kvn), tt); d(this.qk.mmT, g.v, mm(kvn), tt);
       d('qkNormRopePB', g.ropeQ, c.heads, T); d('qkNormRopePB', g.ropeK, c.kvHeads, T);
       d('kvStoreB', g.kv, Math.ceil(kvn / 256), T);
-      d('attnScoreB', g.score, Math.ceil(c.heads * T * S / 256));
+      d('attnScorePosB', g.score, Math.ceil(c.heads * T * S / 256));
       d('softmaxB', g.soft, c.heads * T);
-      d('attnOutB', g.attOut, Math.ceil(QN / 256), T);
+      d('attnOutPosB', g.attOut, Math.ceil(QN / 256), T);
       d('sigmoidMulB', g.gate, Math.ceil(QN / 256), T);
       d(this.qk.mmT, g.o, mm(H), tt);
     }
@@ -1346,6 +1385,8 @@ export const MINICPM_V47_35B_A3B = {
   revision: '3c3f7e84f14a760ff26d17ab5932d4aa996227c0',
   sha256: 'fbc90b193ea8b7fefbb04f46af583e1dd80177be91671f624036c2ec77639488',
   size: 19714550688,
+  // The vision encoder (projector minicpmv4_7), same repo and revision; loaded on the first image.
+  mmproj: { file: 'mmproj-model-f16.gguf', size: 1119575840, sha256: 'bff3b688e14c300eca273092c37c50a0ddfcc2054e079af1a0480edeed5d20f1' },
 };
 
 export class MiniCpmV47Ssd extends Qwen35MoeSsd {
@@ -1382,6 +1423,18 @@ export class MiniCpmV47Ssd extends Qwen35MoeSsd {
   // ── Images (layer 1: one overview tile per image, width × height ≤ 448², sides multiples of 56) ──────────────
   // vision: a MiniCpmVVision (minicpmv_vision.js) on this engine's device.
   attachVision(vision) { this.vision = vision; }
+
+  // The vision encoder from the pinned repo (OPFS-cached after the first download), on this engine's device.
+  async ensureVision({ onProgress = () => {} } = {}) {
+    if (this.vision) return this.vision;
+    const src = MINICPM_V47_35B_A3B, mm = src.mmproj;
+    this.vision = await MiniCpmVVision.loadCached(this.device, {
+      url: `https://huggingface.co/${src.repo}/resolve/${src.revision}/${mm.file}`, size: mm.size, name: 'minicpm-v-4_7-mmproj',
+      source: { repo: src.repo, file: mm.file, revision: src.revision, sha256: mm.sha256, size: mm.size },
+      fetch: this.opts.fetch, onProgress,
+    });
+    return this.vision;
+  }
 
   // Prompt segments: text ids, and per image { embeds (tile tokens + the </image> separator row), nx, ny, n }.
   // As llama.cpp's mtmd lays a MiniCPM-V 4.7 image out (mtmd.cpp, add_canvas_chunk): the text
