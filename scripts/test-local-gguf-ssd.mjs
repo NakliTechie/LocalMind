@@ -13,7 +13,8 @@ const read = (p) => readFile(new URL(`../${p}`, import.meta.url), 'utf8');
 const src = await read('index.html');
 const block = /\/\/ LOCAL-GGUF-SSD[\s\S]*?\/\/ END LOCAL-GGUF-SSD/.exec(src);
 assert.ok(block, 'LOCAL-GGUF-SSD block missing from index.html');
-const ssdModelForFile = new Function(block[0] + '\nreturn ssdModelForFile;')();
+const { ssdModelForFile, isExtensionless, hasGgufMagic, checkExtensionlessGguf } =
+  new Function(block[0] + '\nreturn { ssdModelForFile, isExtensionless, hasGgufMagic, checkExtensionlessGguf };')();
 
 // 1. Routing by exact size.
 const models = {
@@ -25,6 +26,25 @@ assert.equal(ssdModelForFile({ name: 'x.gguf', size: 14439363584 }, models), 'ge
 assert.equal(ssdModelForFile({ name: 'Qwen3.6-35B-A3B-Q8_0.gguf', size: 36903140320 }, models), 'qwen36-35b-a3b-ssd');
 assert.equal(ssdModelForFile({ name: 'gemma-4-26B_q4_0-it.gguf', size: 14439363583 }, models), null, 'one byte off: not the pinned file');
 assert.equal(ssdModelForFile({ name: 'small.gguf', size: 170000000 }, models), null);
+
+// 1b. Extensionless files (Hugging Face cache blobs/<sha256>): exact catalog size + GGUF magic, no hash.
+const blob = 'a3f1c9e0b7d24e5f8a6b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f';
+const GGUF = Uint8Array.from([0x47, 0x47, 0x55, 0x46]);
+assert.equal(isExtensionless(blob), true);
+assert.equal(isExtensionless('model.gguf'), false);
+assert.equal(isExtensionless('notes.txt'), false);
+assert.equal(isExtensionless(''), false);
+assert.equal(hasGgufMagic(GGUF), true);
+assert.equal(hasGgufMagic(Uint8Array.from([0x47, 0x47, 0x55, 0x00])), false, 'one byte off');
+assert.equal(hasGgufMagic(Uint8Array.from([0x47, 0x47, 0x55])), false, 'a 3-byte file has no magic');
+assert.equal(hasGgufMagic(null), false, 'unreadable head');
+assert.deepEqual(checkExtensionlessGguf({ name: blob, size: 14439363584 }, models, GGUF), { ssdId: 'gemma4-26b-a4b-ssd' });
+const noSize = checkExtensionlessGguf({ name: blob, size: 14439363583 }, models, GGUF);
+assert.ok(noSize.error && /matches no model in the catalog/.test(noSize.error), 'size one byte off: rejected with the size message');
+const noMagic = checkExtensionlessGguf({ name: blob, size: 14439363584 }, models, Uint8Array.from([0, 0, 0, 0]));
+assert.ok(noMagic.error && /does not start with the GGUF header bytes/.test(noMagic.error), 'right size, wrong magic: rejected');
+assert.match(src, /const check = checkExtensionlessGguf\(file, MODELS, head\);/, 'the picker runs the extensionless check');
+assert.match(src, /<input type="file" id="localGgufInput" style="display:none">/, 'the picker has no accept filter, so a blob is selectable');
 
 // 2. Catalog entries match the engines' pinned files.
 const pinned = (code, name) => {

@@ -2721,15 +2721,8 @@
         </div>
         <div class="settings-divider" data-tab="general">
           <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer">
-            <input type="checkbox" id="ragRerankToggle"> Rerank retrieved memory <span style="font-weight:400;color:var(--gray-500)">(a cross-encoder re-scores search hits for sharper retrieval &mdash; loads an extra on-device model)</span>
+            <input type="checkbox" id="ragRerankToggle"> Rerank retrieved memory <span style="font-weight:400;color:var(--gray-500)">(bge-reranker-v2-m3 re-scores the memories found for each message and for the memory tools, for sharper recall &mdash; a ~570&nbsp;MB on-device model, downloaded on first use)</span>
           </label>
-          <div id="ragRerankModelRow" style="display:none;margin-top:8px">
-            <label for="ragRerankModelSelect" style="font-weight:400">Reranker model</label>
-            <select id="ragRerankModelSelect" class="settings-select">
-              <option value="fast">Fast &mdash; ms-marco-MiniLM (~22&nbsp;MB, English)</option>
-              <option value="multi">Multilingual &mdash; bge-reranker-v2-m3 (~600&nbsp;MB)</option>
-            </select>
-          </div>
         </div>
         <div class="settings-divider" data-tab="models">
           <label>Custom models <span style="font-weight:400;color:var(--gray-500)">(HF ONNX repo, a GGUF URL, or a local .gguf file)</span></label>
@@ -2738,8 +2731,8 @@
             <button class="btn-icon" id="customModelAddBtn">Add</button>
           </div>
           <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap">
-            <input type="file" id="localGgufInput" accept=".gguf" style="display:none">
-            <button class="btn-icon" id="localGgufBtn" title="Pick a .gguf already on your disk — nothing is downloaded">Load .gguf from disk…</button>
+            <input type="file" id="localGgufInput" style="display:none">
+            <button class="btn-icon" id="localGgufBtn" title="Pick a .gguf already on your disk (or a catalog model's extensionless Hugging Face cache blob) — nothing is downloaded">Load .gguf from disk…</button>
             <span style="font-size:0.68rem;color:var(--gray-500)">no download · this session · Gemma 4 26B-A4B or Qwen3.6 35B-A3B's GGUF from your Hugging Face or LM Studio folder skips their download (macOS picker: ⌘⇧. shows ~/.cache)</span>
           </div>
           <div id="customModelStatus" style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5;min-height:1em"></div>
@@ -10220,7 +10213,7 @@ self.addEventListener('message', async (e) => {
     const SYNC_SETTINGS_KEYS = ['lm_search_provider', 'lm_searxng_url', 'lm_planner_enabled',
       'lm_resumable_downloads', 'lm_auto_backup', 'lm_sam_model', 'lm_voice_language', 'lm_api_enabled', 'lm_theme',
       'lm_tts_voice', 'lm_tts_speed', 'lm_tts_autoplay', 'lm_auto_escalation',
-      'lm_rag_rerank', 'lm_rag_rerank_model'];
+      'lm_rag_rerank'];
 
     function openSyncDB() {
       return new Promise((resolve, reject) => {
@@ -10456,30 +10449,44 @@ self.addEventListener('message', async (e) => {
       return chunks.length;
     }
 
-    // Reranker model ids for the optional cross-encoder stage.
-    const RERANK_MODELS = {
-      fast: 'Xenova/ms-marco-MiniLM-L-6-v2',           // ~22M, English, very fast
-      multi: 'onnx-community/bge-reranker-v2-m3-ONNX',  // ~600M, multilingual
-    };
-    async function searchMemory(query, topK = 5) {
-      const vec = await LocalMind.runtime.embed(query, 'query');
-      if (localStorage.getItem('lm_rag_rerank') !== '1') return searchByVector(vec, topK);
-      // Rerank on: over-fetch candidates at a looser threshold, cross-encode
-      // (query, passage) pairs, then keep the top-K by reranker score. Falls back
-      // to pure vector order if the reranker errors.
-      const candidates = await searchByVector(vec, Math.max(topK * 4, 20), 0.2);
+    // RERANK-ORDER
+    // The optional memory reranker (Settings → "Rerank retrieved memory", off by default). Owner decision
+    // 2026-10-14: bge-reranker-v2-m3 picked the right memory in 4 of 4 test sets, against 2 of 4 for
+    // ms-marco-MiniLM and 3 of 4 for vector order alone (night run 2026-10-06).
+    const RERANK_MODEL = 'onnx-community/bge-reranker-v2-m3-ONNX';
+    // Orders vector-search candidates by reranker score (index-aligned), highest first, and keeps topK.
+    // A missing or non-numeric score sorts last; equal scores keep their vector order.
+    function orderByRerank(candidates, scores, topK) {
+      return candidates
+        .map((c, i) => ({ ...c, rerankScore: (typeof scores[i] === 'number' && !Number.isNaN(scores[i])) ? scores[i] : -Infinity }))
+        .sort((a, b) => b.rerankScore - a.rerankScore)
+        .slice(0, topK);
+    }
+    // END RERANK-ORDER
+
+    // Vector search, then (with the reranker on) cross-encode each (query, memory) pair and reorder.
+    // `pool` is how many vector hits the reranker sees; `rerankThreshold` is the cosine floor for that pool.
+    // Falls back to vector order if the reranker errors.
+    let _rerankLoadNoticed = false;
+    async function rankMemory(query, vec, topK, { pool = topK, threshold = 0.3, rerankThreshold = threshold } = {}) {
+      if (localStorage.getItem('lm_rag_rerank') !== '1') return searchByVector(vec, topK, threshold);
+      const candidates = await searchByVector(vec, pool, rerankThreshold);
       if (candidates.length <= 1) return candidates.slice(0, topK);
-      const modelId = RERANK_MODELS[localStorage.getItem('lm_rag_rerank_model') || 'fast'] || RERANK_MODELS.fast;
+      if (!_rerankLoadNoticed) { _rerankLoadNoticed = true; showToast('Memory reranker: loading bge-reranker-v2-m3 (~570 MB the first time)…'); }
       try {
-        const scores = await LocalMind.runtime.rerank(query, candidates.map(c => c.text), modelId);
-        return candidates
-          .map((c, i) => ({ ...c, rerankScore: (typeof scores[i] === 'number' ? scores[i] : -Infinity) }))
-          .sort((a, b) => b.rerankScore - a.rerankScore)
-          .slice(0, topK);
+        const scores = await LocalMind.runtime.rerank(query, candidates.map(c => c.text), RERANK_MODEL);
+        return orderByRerank(candidates, scores, topK);
       } catch (err) {
         console.error('Rerank failed, using vector order:', err);
         return candidates.slice(0, topK);
       }
+    }
+
+    // The memory tools. With the reranker on, over-fetch at a looser threshold so it can promote a
+    // memory that vector order ranked low.
+    async function searchMemory(query, topK = 5) {
+      const vec = await LocalMind.runtime.embed(query, 'query');
+      return rankMemory(query, vec, topK, { pool: Math.max(topK * 4, 20), rerankThreshold: 0.2 });
     }
 
     // One-time background re-index when the embedding model changes (bumped
@@ -10991,21 +10998,10 @@ self.addEventListener('message', async (e) => {
       });
     }
     const ragRerankToggle = document.getElementById('ragRerankToggle');
-    const ragRerankModelRow = document.getElementById('ragRerankModelRow');
-    const ragRerankModelSelect = document.getElementById('ragRerankModelSelect');
     if (ragRerankToggle) {
-      const on = localStorage.getItem('lm_rag_rerank') === '1';
-      ragRerankToggle.checked = on;
-      if (ragRerankModelRow) ragRerankModelRow.style.display = on ? '' : 'none';
+      ragRerankToggle.checked = localStorage.getItem('lm_rag_rerank') === '1';
       ragRerankToggle.addEventListener('change', () => {
         try { localStorage.setItem('lm_rag_rerank', ragRerankToggle.checked ? '1' : '0'); } catch {}
-        if (ragRerankModelRow) ragRerankModelRow.style.display = ragRerankToggle.checked ? '' : 'none';
-      });
-    }
-    if (ragRerankModelSelect) {
-      ragRerankModelSelect.value = localStorage.getItem('lm_rag_rerank_model') || 'fast';
-      ragRerankModelSelect.addEventListener('change', () => {
-        try { localStorage.setItem('lm_rag_rerank_model', ragRerankModelSelect.value); } catch {}
       });
     }
 
@@ -12017,11 +12013,28 @@ self.addEventListener('message', async (e) => {
     function ssdModelForFile(file, models) {
       return Object.keys(models).find((id) => models[id].gguf && models[id].gguf.size === file.size) || null;
     }
+    // An extensionless file (a Hugging Face cache blob, blobs/<sha256>) is accepted when its byte size equals a
+    // catalog GGUF's size exactly and it starts with the GGUF magic bytes. No full hash: the size match plus the
+    // magic is the check (owner decision 2026-10-14). `head` is the file's first 4 bytes.
+    function isExtensionless(name) { return !!name && !name.includes('.'); }
+    function hasGgufMagic(head) { return !!head && head.length >= 4 && head[0] === 0x47 && head[1] === 0x47 && head[2] === 0x55 && head[3] === 0x46; }
+    function checkExtensionlessGguf(file, models, head) {
+      const ssdId = ssdModelForFile(file, models);
+      if (!ssdId) return { error: `${file.name} has no .gguf extension, and its size (${file.size.toLocaleString()} bytes) matches no model in the catalog. Pick the .gguf file, or the Hugging Face cache blob of a catalog model.` };
+      if (!hasGgufMagic(head)) return { error: `${file.name} matches the size of the catalog file for ${models[ssdId].label || ssdId}, but it does not start with the GGUF header bytes, so it is not a GGUF file.` };
+      return { ssdId };
+    }
     // END LOCAL-GGUF-SSD
 
     async function handleLocalGgufPick(file) {
       if (!file) return;
-      if (!/\.gguf$/i.test(file.name || '')) { setCustomStatus('pick a file ending in .gguf', 'err'); return; }
+      if (!/\.gguf$/i.test(file.name || '')) {
+        if (!isExtensionless(file.name)) { setCustomStatus('pick a file ending in .gguf, or an extensionless Hugging Face cache blob of a catalog model', 'err'); return; }
+        let head = null;
+        try { head = new Uint8Array(await file.slice(0, 4).arrayBuffer()); } catch {}
+        const check = checkExtensionlessGguf(file, MODELS, head);
+        if (check.error) { setCustomStatus(check.error, 'err'); return; }
+      }
       const ssdId = ssdModelForFile(file, MODELS);
       if (ssdId) {
         MODELS[ssdId].localFile = file;
@@ -15806,22 +15819,26 @@ self.addEventListener('message', async (e) => {
     try {
       // Optional cross-encoder rerank stage. Scores each (query, passage) pair and
       // returns a relevance score per passage (higher = more relevant). Runs on
-      // WASM (tiny ms-marco default) so it never contends with the WebGPU embedder.
+      // WASM (bge-reranker-v2-m3, q8 = onnx/model_quantized.onnx, ~570 MB) so it
+      // never takes WebGPU from the chat model.
       // NOTE: use AutoModelForSequenceClassification + the RAW logit, NOT the
       // text-classification pipeline — these cross-encoders emit a single relevance
       // logit, which the pipeline softmaxes to a constant 1.0 (verified 2026-08-21),
       // destroying the ranking signal.
-      const modelId = e.data.model || 'Xenova/ms-marco-MiniLM-L-6-v2';
+      const modelId = e.data.model || 'onnx-community/bge-reranker-v2-m3-ONNX';
       if (!reranker || rerankerId !== modelId) {
         rerankTokenizer = await AutoTokenizer.from_pretrained(modelId);
         reranker = await AutoModelForSequenceClassification.from_pretrained(modelId, {
           device: 'wasm',
+          dtype: 'q8',
           progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
         });
         rerankerId = modelId;
       }
       const query = e.data.query || '';
       const passages = e.data.passages || [];
+      // One pair per forward pass. A padded batch was no faster on WASM (2026-10-15: 13.9 s vs 11.0 s for
+      // 9 memories) and moved scores by up to 0.54, so each pair runs alone.
       const scores = [];
       for (const p of passages) {
         const inputs = await rerankTokenizer(query, { text_pair: p, padding: true, truncation: true });
@@ -18629,7 +18646,9 @@ self.addEventListener('message', async (e) => {
           const userText = typeof userContent === 'string' ? userContent : text;
           if (userText) {
             const qVec = await LocalMind.runtime.embed(userText, 'query');
-            const hits = await searchByVector(qVec, 12, 0.3);
+            // The same 12 vector hits as before; with the reranker on, it reorders them (owner decision
+            // 2026-10-14), so the 3 memories injected below are the reranker's top 3.
+            const hits = await rankMemory(userText, qVec, 12, { threshold: 0.3 });
             // Learned skills → injected as instructions (auto-apply; self-improving loop).
             // Retrieval already filtered to skills relevant to THIS request, so the
             // wrapper commands rather than suggests (a soft "apply if relevant" wrapper
