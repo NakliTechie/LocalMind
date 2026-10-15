@@ -85,7 +85,7 @@ export const harness = {
 };
 export { normalizeEndpointBase, discoverEndpointModels, clampEndpointTemperature, getEndpointTemperature,
   setEndpointTemperature, ENDPOINT_PRESETS, isLocalNetworkHost, endpointErrorMessage, LOCAL_NETWORK_HINT,
-  registerEndpointModel, generateViaEndpoint, _adapterParseToolCalls, corsHintFor };
+  registerEndpointModel, generateViaEndpoint, _adapterParseToolCalls, corsHintFor, _adapterBuildQwenXmlToolPrompt };
 `);
 const mod = await import(pathToFileURL(modPath).href);
 const { harness, discoverEndpointModels, clampEndpointTemperature, getEndpointTemperature, setEndpointTemperature,
@@ -265,6 +265,41 @@ const reset = () => { requests.length = 0; harness.reset(); for (const k of Obje
   assert.equal(prose, 'The answer is 7.');
   assert.deepEqual(_adapterParseToolCalls(prose, known, tools).toolCalls, []);
   console.log('endpoint tool-call text passthrough (split deltas, split chunks, unclosed block): ok');
+}
+
+// Native Qwen3-Coder XML tool calls (Ternary Bonsai 2, toolFormat 'qwen3-xml'): the prompt matches the
+// GGUF chat template's own tools section, and the parser reads the format back, typed by the schema.
+{
+  const { _adapterBuildQwenXmlToolPrompt } = mod;
+  const tools = [
+    { name: 'calculate', description: 'Evaluate a mathematical expression.', parameters: { type: 'object', properties: { expression: { type: 'string' } }, required: ['expression'] } },
+    { name: 'set_reminder', description: 'Set a reminder.', parameters: { type: 'object', properties: { message: { type: 'string' }, minutes: { type: 'number' } }, required: ['message', 'minutes'] } },
+  ];
+  const known = tools.map((t) => t.name);
+  const p = _adapterBuildQwenXmlToolPrompt(tools, 'Be brief.');
+  assert.ok(p.startsWith('# Tools\n\nYou have access to the following functions:\n\n<tools>\n{"type": "function", "function": {"name": "calculate", '));
+  assert.ok(p.includes('"required": ["expression"]}}}\n{"type": "function"'));
+  assert.ok(p.includes('</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>'));
+  assert.ok(p.endsWith('</IMPORTANT>\n\nBe brief.'));
+  assert.ok(_adapterBuildQwenXmlToolPrompt(tools, '').endsWith('</IMPORTANT>'));
+
+  const one = 'Let me work that out.\n\n<tool_call>\n<function=calculate>\n<parameter=expression>\n4821 * 377\n</parameter>\n</function>\n</tool_call>';
+  const r1 = _adapterParseToolCalls(one, known, tools);
+  assert.deepEqual(r1.toolCalls, [{ name: 'calculate', arguments: { expression: '4821 * 377' } }]);
+  assert.equal(r1.cleanText, 'Let me work that out.');
+  // Numbers are typed by the schema; multi-line raw strings keep their inner newlines and quotes.
+  const two = '<tool_call>\n<function=set_reminder>\n<parameter=message>\nTake the "bread"\nout\n</parameter>\n<parameter=minutes>\n20\n</parameter>\n</function>\n</tool_call>';
+  assert.deepEqual(_adapterParseToolCalls(two, known, tools).toolCalls, [{ name: 'set_reminder', arguments: { message: 'Take the "bread"\nout', minutes: 20 } }]);
+  // Cut at the token cap: no closing tags.
+  const cut = '<tool_call>\n<function=calculate>\n<parameter=expression>\n2+2';
+  assert.deepEqual(_adapterParseToolCalls(cut, known, tools).toolCalls, [{ name: 'calculate', arguments: { expression: '2+2' } }]);
+  // Two calls in one reply.
+  assert.deepEqual(_adapterParseToolCalls(one + '\n' + two, known, tools).toolCalls.map((c) => c.name), ['calculate', 'set_reminder']);
+  // An unknown tool name is not run, and the old JSON format still parses.
+  assert.deepEqual(_adapterParseToolCalls('<tool_call>\n<function=rm_rf>\n</function>\n</tool_call>', known, tools).toolCalls, []);
+  assert.deepEqual(_adapterParseToolCalls('<tool_call>\n{"name": "calculate", "arguments": {"expression": "1+1"}}\n</tool_call>', known, tools).toolCalls,
+    [{ name: 'calculate', arguments: { expression: '1+1' } }]);
+  console.log('Qwen3-Coder XML tool calls (prompt text, typed params, unclosed, two calls, unknown name, JSON fallback): ok');
 }
 
 console.log('LocalMind endpoint backend: ok');

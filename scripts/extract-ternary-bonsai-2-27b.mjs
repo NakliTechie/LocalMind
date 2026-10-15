@@ -89,6 +89,18 @@ export function extractTernaryBonsai2Engine(html) {
   }
   engine = engine.replace(budgetMarker, 'Y1=24<<20,J1=1<<20,e3=256<<20,t3=32');
 
+  // 2d. Assistant prefix: generate(messages, { assistantPrefix }) appends raw text after
+  //     the rendered generation prompt, so a turn can continue from text the caller
+  //     forces. The worker uses it for the thinking budget (bonsai-ada-surgery recipe):
+  //     when the thought reaches the budget it continues from the thought so far plus
+  //     "Now produce the complete answer.\n</think>\n\n". The token ledger matches the
+  //     cached prompt + thought as a prefix, so only the forced text is prefilled.
+  const genMarker = 'l=this.#h(e,!0,u),c=this.#s.prepare(l)';
+  if (engine.split(genMarker).length !== 2) {
+    throw new Error('bonsai2 bundle: generate() render marker (l=this.#h(e,!0,u)) not found exactly once; re-locate before patching');
+  }
+  engine = engine.replace(genMarker, 'l=this.#h(e,!0,u)+(typeof t.assistantPrefix=="string"?t.assistantPrefix:""),c=this.#s.prepare(l)');
+
   // 3. Guard the baked-in defaults so a silent upstream repoint is noticed.
   const idMarker = `var Ri="${UPSTREAM_MODEL_ID}",Cl="${UPSTREAM_GGUF_FILE}"`;
   if (!engine.includes(idMarker)) {
@@ -111,14 +123,15 @@ export function extractTernaryBonsai2Engine(html) {
     '   Upstream ships NO explicit license; vendored consistent with LocalMind\'s other\n' +
     '   webml-community engines (lfm2_5.js).\n' +
     '   Boot scene + Space UI (token gate / chat panel) stripped; exports kept verbatim;\n' +
-    '   THREE patches: (1) system-prefix priming (#m): when the chat template refuses a\n' +
+    '   FOUR patches: (1) system-prefix priming (#m): when the chat template refuses a\n' +
     '   system-only render (Qwen3.8: "No user query found in messages."), the prefix is the\n' +
     '   token prefix shared by two renders with different user turns; any other template\n' +
     '   error skips priming; (2) download byteBudget 96 MB -> 256 MB (~10 range streams in flight\n' +
     '   instead of ~4; HF CDN throttles per connection); (3) DFlash 2 speculative decoding:\n' +
     '   __dflashInternals hook, specDecodeRunner() seam, qwen35 verify mode, Lut2SmallMGemm\n' +
     '   op, recurrence rewind (scripts/bonsai2-dflash-patches.mjs; runner in\n' +
-    '   ternary_bonsai_2_dflash.js).\n' +
+    '   ternary_bonsai_2_dflash.js); (4) generate() takes an assistantPrefix (raw text after\n' +
+    '   the generation prompt), used by the worker to force-close a thought at its budget.\n' +
     `   DEFAULT_MODEL_ID is upstream's own ungated ${UPSTREAM_MODEL_ID} (${UPSTREAM_GGUF_FILE}).\n` +
     '   Model weights are Apache-2.0 (prism-ml Ternary Bonsai 2, Qwen3.8-27B backbone).\n' +
     '   Regenerate with scripts/extract-ternary-bonsai-2-27b.mjs. */\n' +
