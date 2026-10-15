@@ -1,7 +1,9 @@
 // Tool-call battery: decides a model's `agentCapable` flag by a live run, never by the model card
-// (history.md, 2026-09-07). 6 prompts must call the named tool with sensible arguments; 5 must answer
-// without a tool. Runs in the page (the app's window.LocalMind.runtime.chat) or anywhere a `chat` like it
-// exists. The tool list mirrors TOOL_REGISTRY in index.html minus the web and image tools.
+// (history.md, 2026-09-07). 13 prompts must call the named tool with sensible arguments; 11 must answer
+// without a tool (or only with a tool named in `allow`). Runs in the page (the app's window.LocalMind.runtime.chat)
+// or anywhere a `chat` like it exists. The tool list mirrors TOOL_REGISTRY in index.html minus web_search,
+// fetch_page, run_python, save_skill and segment_image. Each row has a `group` (core, time-zone, weather,
+// wikipedia, calendar) so a report can count per tool.
 //   const { runBattery } = await import('/scripts/tool-battery.mjs');
 //   const report = await runBattery(LocalMind.runtime, { maxTokens: 1024 });
 
@@ -20,12 +22,19 @@ export const TOOLS = [
     parameters: { type: 'object', properties: {}, required: [] } },
   { name: 'delete_memory', description: 'Delete memories matching a search query. Use when the user asks you to forget something.',
     parameters: { type: 'object', properties: { query: { type: 'string', description: 'What to forget — will delete matching memories' } }, required: ['query'] } },
+  { name: 'get_weather', description: 'Get current weather and a daily forecast (up to 7 days) for a place. Use when the user asks about weather, temperature, rain or wind somewhere.',
+    parameters: { type: 'object', properties: { location: { type: 'string', description: 'City or place name, e.g. "Paris" or "Springfield, Illinois"' }, days: { type: 'number', description: 'Days of forecast, 1-7 (default 3)' } }, required: ['location'] } },
+  { name: 'wikipedia_lookup', description: 'Look up a topic on Wikipedia and return the article title, URL and a short summary. Use when the user asks to look something up or wants details about a specific person, place, organisation or event; answer common knowledge directly. Cite the URL.',
+    parameters: { type: 'object', properties: { query: { type: 'string', description: 'Topic to look up, e.g. "Eiffel Tower"' }, lang: { type: 'string', description: 'Wikipedia language code (default "en")' } }, required: ['query'] } },
+  { name: 'create_calendar_event', description: 'Create a calendar event as an .ics file the user can download and open in their calendar app. Works offline. For relative dates ("next Tuesday") call get_current_time first.',
+    parameters: { type: 'object', properties: { title: { type: 'string', description: 'Event title, e.g. "Dentist appointment"' }, start: { type: 'string', description: 'Start as ISO date-time, e.g. "2026-10-20T15:00", or a date "2026-10-20" for an all-day event' }, duration_minutes: { type: 'number', description: 'Length in minutes (default 60)' }, location: { type: 'string', description: 'Where the event happens (optional)' }, timezone: { type: 'string', description: 'IANA time zone of the start time, e.g. "Asia/Kolkata". Defaults to the user\'s own.' } }, required: ['title', 'start'] } },
 ];
 
 const s = (v) => String(v ?? '').toLowerCase();
 const evalExpr = (e) => { try { return Function(`"use strict"; return (${String(e).replace(/[^0-9+\-*/().%\s]/g, '')})`)(); } catch { return NaN; } };
 
-// expect: a tool name, or null for "answer without a tool". args(a) checks the arguments.
+// expect: a tool name, or null for "answer without a tool" (allow: tools that do not count against restraint).
+// args(a) checks the arguments.
 export const PROMPTS = [
   { id: 'calc-mul', text: 'What is 4821 * 377?', expect: 'calculate', args: (a) => evalExpr(a.expression) === 1817517 },
   { id: 'calc-pct', text: 'What is 17.5% of 2340, plus 99?', expect: 'calculate', args: (a) => Math.abs(evalExpr(s(a.expression).replace(/(\d+(?:\.\d+)?)\s*%\s*(of|\*)?/g, '($1/100)*')) - 508.5) < 1e-6 || /17\.5/.test(a.expression) },
@@ -38,6 +47,19 @@ export const PROMPTS = [
   { id: 'explain', text: 'Explain what a hash table is in two sentences.', expect: null },
   { id: 'translate', text: "Translate 'good morning' into French.", expect: null },
   { id: 'greet', text: 'Hi, how are you today?', expect: null },
+  { id: 'time-tokyo', group: 'time-zone', text: 'What time is it in Tokyo right now?', expect: 'get_current_time', args: (a) => a.timezone === 'Asia/Tokyo' },
+  { id: 'weather-paris', group: 'weather', text: "What's the weather in Paris tomorrow?", expect: 'get_weather', args: (a) => /paris/.test(s(a.location)) },
+  { id: 'weather-bombay', group: 'weather', text: 'Will it rain in Bombay this week?', expect: 'get_weather', args: (a) => /bombay|mumbai/.test(s(a.location)) },
+  { id: 'no-weather-sky', group: 'weather', text: 'Why is the sky blue?', expect: null },
+  { id: 'no-weather-poem', group: 'weather', text: 'Write a short poem about monsoon rain.', expect: null },
+  { id: 'wiki-eiffel', group: 'wikipedia', text: 'Look up the Eiffel Tower on Wikipedia and tell me how tall it is.', expect: 'wikipedia_lookup', args: (a) => /eiffel/.test(s(a.query)) },
+  { id: 'wiki-isro', group: 'wikipedia', text: 'According to Wikipedia, when was the Indian Space Research Organisation founded?', expect: 'wikipedia_lookup', args: (a) => /isro|indian space/.test(s(a.query)) },
+  { id: 'no-wiki-math', group: 'wikipedia', text: 'What is 12 times 12?', expect: null, allow: ['calculate'] },
+  { id: 'no-wiki-limerick', group: 'wikipedia', text: 'Write a limerick about a cat.', expect: null },
+  { id: 'cal-dentist', group: 'calendar', text: 'Add a dentist appointment on 20 October 2026 at 3 pm to my calendar.', expect: 'create_calendar_event', args: (a) => /dentist/.test(s(a.title)) && /^2026-10-20[t ]15:00/.test(s(a.start)) },
+  { id: 'cal-lunch', group: 'calendar', text: 'Make a calendar invite for lunch with Om on 22 October 2026 at 1 pm at Cafe Mondegar.', expect: 'create_calendar_event', args: (a) => /mondegar/.test(s(a.location)) && /^2026-10-22[t ]13:00/.test(s(a.start)) },
+  { id: 'no-cal-leap', group: 'calendar', text: 'How many days are there in a leap year?', expect: null },
+  { id: 'no-cal-joke', group: 'calendar', text: 'Tell me a joke about Mondays.', expect: null },
 ];
 
 async function turn(runtime, messages, opts) {
@@ -61,9 +83,9 @@ export async function runBattery(runtime, opts = {}) {
     const r = await turn(runtime, [{ role: 'user', content: p.text }], o);
     const c = r.calls[0];
     let pass;
-    if (p.expect === null) pass = r.calls.length === 0 && !r.error;
+    if (p.expect === null) pass = r.calls.every((x) => (p.allow || []).includes(x.name)) && !r.error;
     else pass = !!c && c.name === p.expect && !!p.args(c.arguments || {});
-    rows.push({ id: p.id, expect: p.expect, got: r.calls.map((x) => x.name), args: c?.arguments ?? null, pass, reason: r.reason, error: r.error, secs: r.secs, text: r.text.slice(-1200) });
+    rows.push({ id: p.id, group: p.group || 'core', expect: p.expect, got: r.calls.map((x) => x.name), args: c?.arguments ?? null, pass, reason: r.reason, error: r.error, secs: r.secs, text: r.text.slice(-1200) });
     if (o.onRow) o.onRow(rows.at(-1));
   }
   // Round trip: run the calculator for real and check the model uses the result.
@@ -80,11 +102,12 @@ export async function runBattery(runtime, opts = {}) {
     const answer = r.text.replace(/<\|think\|>[\s\S]*?(<\|\/think\|>|$)/, '');
     roundTrip = { pass: r.calls.length === 0 && /1,?817,?517/.test(answer), calls: r.calls, secs: r.secs, answer: answer.slice(-400) };
   }
-  const call = rows.filter((x) => x.expect !== null), rest = rows.filter((x) => x.expect === null);
-  return {
-    score: `${rows.filter((x) => x.pass).length}/${rows.length}`,
-    calls: `${call.filter((x) => x.pass).length}/${call.length}`,
-    restraint: `${rest.filter((x) => x.pass).length}/${rest.length}`,
-    roundTrip, rows,
+  const count = (list) => {
+    const call = list.filter((x) => x.expect !== null), rest = list.filter((x) => x.expect === null);
+    return { score: `${list.filter((x) => x.pass).length}/${list.length}`,
+      calls: `${call.filter((x) => x.pass).length}/${call.length}`, restraint: `${rest.filter((x) => x.pass).length}/${rest.length}` };
   };
+  const groups = {};
+  for (const g of [...new Set(rows.map((x) => x.group))]) groups[g] = count(rows.filter((x) => x.group === g));
+  return { ...count(rows), groups, roundTrip, rows };
 }
