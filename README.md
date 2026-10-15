@@ -95,16 +95,16 @@ With Settings → JavaScript API on, `window.localmind` is an OpenAI-shaped clie
 ## Verify it yourself
 
 ```bash
-for t in rollin download-stall endpoint engine-fetch inference-worker moe-expert-stream token-count render calculate; do
+for t in rollin download-stall endpoint engine-fetch inference-worker moe-expert-stream token-count render calculate page-proxy; do
   node scripts/test-$t.mjs || { echo "FAILED: $t"; break; }
 done
 ```
 
-These eight suites need Node and nothing else: no install, no model download, no browser. They refuse a page that
+These ten suites need Node and nothing else: no install, no model download, no browser. They refuse a page that
 loads any script file besides itself (every module in `src/` is rolled into `index.html`), a sidebar or
 palette command that maps to no real control, a model without its Settings entry, a load failure that shows no Retry,
 a truncated model download that the cache would keep, a token estimate outside its bounds against each model's
-own tokenizer, and tool-call markup or unrendered math in a chat bubble. Three more suites drive Chrome with WebGPU: `scripts/test-qwen35-kernels.mjs` checks the SSD engine's
+own tokenizer, tool-call markup or unrendered math in a chat bubble, and a blocked web page sent to a proxy without your yes. Three more suites drive Chrome with WebGPU: `scripts/test-qwen35-kernels.mjs` checks the SSD engine's
 WGSL kernels against llama.cpp's CPU ops, `scripts/test-iq-kernels.mjs` checks every llama.cpp block type Saluki uses
 against gguf-py's dequantization on real weights, and `scripts/test-ple-opfs.mjs` checks Gemma 4 gives identical output
 with its embedding table on disk. `bench-engines.mjs --suite dflash` checks DFlash 2 output is byte-identical to plain decoding.

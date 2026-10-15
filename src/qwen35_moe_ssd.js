@@ -15,7 +15,7 @@
  *   const m = await Qwen35MoeSsd.load(null, { url: '…/Qwen3.6-35B-A3B-Q8_0.gguf', poolBytes });
  */
 
-import { MiniCpmVVision, preprocessImage, roundEven } from './minicpmv_vision.js';
+import { MiniCpmVVision, planImage, preprocessImage, roundEven } from './minicpmv_vision.js';
 import { Qwen3MoeSsd, STORAGE, COPY_SRC, COPY_DST, MAP_READ, UNIFORM, I8, TOK, Q6K_BLOCK, Q4_KERNELS, Q4_SG_KERNELS, Q4_BATCH_KERNELS } from './qwen3_moe_ssd.js';
 
 export const QWEN36_35B_A3B = {
@@ -850,8 +850,8 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     this.kc = []; this.vc = []; this.conv = []; this.ssm = [];
     for (let l = 0; l < c.layers; l++) {
       if (this.recurrent[l]) {
-        this.conv[l] = this.buffer(3 * convDim * 4, STORAGE | COPY_DST, 'state');
-        this.ssm[l] = this.buffer(s.vHeads * s.dState * s.dState * 4, STORAGE | COPY_DST, 'state');
+        this.conv[l] = this.buffer(3 * convDim * 4, STORAGE | COPY_SRC | COPY_DST, 'state');
+        this.ssm[l] = this.buffer(s.vHeads * s.dState * s.dState * 4, STORAGE | COPY_SRC | COPY_DST, 'state');
       } else {
         this.kc[l] = this.buffer(this.maxCtx * kvn * 2, STORAGE, 'kv');
         this.kpos ||= this.buffer(this.maxCtx * 4, STORAGE | COPY_DST, 'kv');   // position (t) of each KV slot
@@ -1140,7 +1140,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
       this.xs.release(slotsU);
     }
     this.position += T;
-    this.cached.push(...ids);
+    this.cached.push(...(ext && ext.keys ? ext.keys : ids));
     this.tNext = ext && ext.tNext != null ? ext.tNext : kp[T - 1] + 1;
     let result = null;
     if (want === 'argmax') {
@@ -1351,8 +1351,8 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     return p + '<|im_start|>assistant\n' + (enableThinking ? '<think>\n' : '<think>\n\n</think>\n\n');
   }
 
-  // The recurrent state cannot rewind to an earlier position, so any change before the cached
-  // end restarts from token 0.
+  // The recurrent state cannot rewind to an earlier position, so a change before the cached end restarts from token
+  // 0, or from the checkpoint below when the prompt still starts with it.
   reset() {
     super.reset();
     this.tNext = 0;
@@ -1362,18 +1362,131 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     this.device.queue.submit([enc.finish()]);
   }
 
-  async prefill(ids, want = 'argmax') {
+  // The checkpoint: the state after the system turn (with tools on, ~1,900 tokens of tool instructions), so a new
+  // chat, an edited history or an image turn re-reads only what follows it. KV rows below its length stay as they
+  // were as long as nothing prefills over them; the DeltaNet conv and delta-rule state is copied out and back.
+  saveCheckpoint(keys) {
+    const enc = this.device.createCommandEncoder();
+    this.cpConv ||= []; this.cpSsm ||= [];
+    for (let l = 0; l < this.cfg.layers; l++) {
+      if (!this.recurrent[l]) continue;
+      this.cpConv[l] ||= this.buffer(this.conv[l].size, STORAGE | COPY_SRC | COPY_DST, 'state');
+      this.cpSsm[l] ||= this.buffer(this.ssm[l].size, STORAGE | COPY_SRC | COPY_DST, 'state');
+      enc.copyBufferToBuffer(this.conv[l], 0, this.cpConv[l], 0, this.conv[l].size);
+      enc.copyBufferToBuffer(this.ssm[l], 0, this.cpSsm[l], 0, this.ssm[l].size);
+    }
+    this.device.queue.submit([enc.finish()]);
+    this.checkpoint = { keys: keys.slice(), tNext: this.tNext };
+  }
+  restoreCheckpoint() {
+    const cp = this.checkpoint, enc = this.device.createCommandEncoder();
+    for (let l = 0; l < this.cfg.layers; l++) {
+      if (!this.recurrent[l]) continue;
+      enc.copyBufferToBuffer(this.cpConv[l], 0, this.conv[l], 0, this.conv[l].size);
+      enc.copyBufferToBuffer(this.cpSsm[l], 0, this.ssm[l], 0, this.ssm[l].size);
+    }
+    this.device.queue.submit([enc.finish()]);
+    this.position = cp.keys.length; this.cached = cp.keys.slice(); this.tNext = cp.tNext;
+  }
+
+  // Where the system turn ends in a prompt's ids (after its <|im_end|> and newline), or 0 without one.
+  systemTurnEnd(ids) {
+    const tk = this.tokenizer, start = tk.ids.get('<|im_start|>'), end = tk.ids.get('<|im_end|>');
+    if (ids[0] !== start || tk.decode([ids[1]]) !== 'system') return 0;
+    const i = ids.indexOf(end);
+    return i < 0 ? 0 : i + (tk.decode([ids[i + 1]]) === '\n' ? 2 : 1);
+  }
+
+  // Where to keep the checkpoint: after the tool list (`</tools>`) when the system turn has one, since LocalMind
+  // appends the user's own system prompt and the memory recalled for each question after the tool instructions;
+  // else after the system turn.
+  checkpointEnd(ids) {
+    const end = this.systemTurnEnd(ids), has = (n) => this.tokenizer.decode(ids.slice(0, n)).includes('</tools>');
+    if (!end || !has(end)) return end;
+    let lo = 1, hi = end;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (has(mid)) hi = mid; else lo = mid + 1; }
+    return lo;
+  }
+
+  async prefill(ids, want = 'argmax') { return this.prefillSegments([{ ids }], want, { sysEnd: this.checkpointEnd(ids) }); }
+
+  // Reads a system prompt's stable part into the checkpoint before the first question (the SSD worker calls it after
+  // load with the tool instructions), so that question starts after it. Returns the tokens read.
+  async prime(system) {
+    const release = await this.acquire();
+    try {
+      const ids = this.tokenizer.encode(this.chatPrompt([{ role: 'system', content: system }], { enableThinking: false }));
+      const end = this.checkpointEnd(ids), keys = ids.slice(0, end);
+      if (!end || (this.checkpoint && this.checkpoint.keys.length === end && keys.every((k, i) => k === this.checkpoint.keys[i]))) return 0;
+      this.reset();
+      await this.prefillSegments([{ ids: keys }], 'none', { sysEnd: end });
+      return end;
+    } catch (e) { throw this.stepError(e); } finally { release(); }
+  }
+
+  // Prefills a prompt given as segments: { ids } text, or an image { keys, n, entries, rel, embeds: async () =>
+  // Float32Array } whose keys stand for its tokens in the cache (they name the image, so a turn that repeats it
+  // matches). Starts from the furthest of: the cached tokens when the prompt extends them, the checkpoint when the
+  // prompt starts with it, or token 0; saves a new checkpoint at sysEnd when it reads the system turn.
+  async prefillSegments(segs, want = 'argmax', { sysEnd = 0 } = {}) {
+    const keys = segs.flatMap((sg) => sg.ids || sg.keys);
     let common = 0;
-    while (common < ids.length - 1 && common < this.cached.length && this.cached[common] === ids[common]) common++;
-    if (common < this.cached.length) this.reset();
-    const rest = ids.slice(this.cached.length);
-    if (!this.batchPrefill || rest.length < 2) return super.prefill(ids, want);
-    let r = null;
-    for (let i = 0; i < rest.length; i += this.chunkTokens) {
-      r = await this.prefillChunk(rest.slice(i, i + this.chunkTokens), i + this.chunkTokens >= rest.length ? want : 'none');
+    while (common < keys.length - 1 && common < this.cached.length && this.cached[common] === keys[common]) common++;
+    const cp = this.checkpoint;
+    const cpLen = cp && cp.keys.length < keys.length && cp.keys.every((k, i) => k === keys[i]) ? cp.keys.length : -1;
+    const extLen = common === this.cached.length ? common : -1;
+    if (cpLen > extLen) this.restoreCheckpoint();
+    else if (extLen < 0) this.reset();
+    if (cp && cpLen < 0 && this.cached.length < cp.keys.length) this.checkpoint = null;   // its KV rows get overwritten
+    const from = this.cached.length;
+    const cut = sysEnd > from && sysEnd <= keys.length ? sysEnd : -1;
+    let r = null, at = 0;
+    for (let si = 0; si < segs.length; si++) {
+      const sg = segs[si], len = sg.ids ? sg.ids.length : sg.n, segEnd = at + len, last = si === segs.length - 1;
+      if (segEnd <= from) { at = segEnd; continue; }
+      if (sg.ids) {
+        for (let i = Math.max(0, from - at); i < len;) {
+          let n = Math.min(this.chunkTokens, len - i);
+          if (cut > at + i && cut < at + i + n) n = cut - at - i;   // end a chunk at the checkpoint
+          const chunk = sg.ids.slice(i, i + n), w = last && i + n >= len ? want : 'none';
+          if (!this.batchPrefill || n < 2) for (let j = 0; j < n; j++) r = await this.step(chunk[j], j === n - 1 ? w : 'none');
+          else r = await this.prefillChunk(chunk, w);
+          i += n;
+          if (at + i === cut) this.saveCheckpoint(keys.slice(0, cut));
+        }
+        at = segEnd;
+        continue;
+      }
+      if (from > at) throw new Error('the cache ends inside an image');
+      // Whole tiles (with their separators) per chunk: a tile's tokens must see each other, so a tile never splits.
+      const embeds = await sg.embeds();
+      const pos0 = this.tNext, base = pos0 - 1, dim = this.cfg.hidden, { rel, nPos } = sg.rel;
+      const spans = []; let o = 0;
+      for (const e of sg.entries) { const n = e.gw * e.gh + e.seps; if (n > this.chunkTokens) throw new Error(`a tile of ${n} tokens > chunk ${this.chunkTokens}`); spans.push([o, n]); o += n; }
+      let ci = 0;
+      while (ci < spans.length) {
+        const start = spans[ci][0]; let n = 0;
+        while (ci < spans.length && n + spans[ci][1] <= this.chunkTokens) { n += spans[ci][1]; ci++; }
+        const pos = new Int32Array(n * 4);
+        for (let i = 0; i < n; i++) {
+          const [dt, dy, dx, isSep] = rel[start + i];
+          if (isSep) pos.fill(pos0 + dt, i * 4, i * 4 + 4); else pos.set([pos0 + dt, base, base + dy, base + dx], i * 4);
+        }
+        r = await this.prefillChunk(new Array(n).fill(0xffffffff), last && ci >= spans.length ? want : 'none',
+          { embeds: embeds.subarray(start * dim, (start + n) * dim), pos, tNext: pos0 + nPos, keys: sg.keys.slice(start, start + n) });
+      }
+      at = segEnd;
     }
     return r;
   }
+}
+
+// A 64-bit FNV-1a of a typed array's bytes, as hex: names an image in the prefix cache.
+function hashBytes(a) {
+  const u = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+  let h1 = 0x811c9dc5, h2 = 0x01000193 ^ u.length;
+  for (let i = 0; i < u.length; i++) { h1 = Math.imul(h1 ^ u[i], 0x01000193); h2 = Math.imul(h2 ^ u[i], 0x5bd1e995); }
+  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
 }
 
 // OpenBMB's MiniCPM-V 4.7 35B-A3B (2026-10): its language model is a qwen35moe with Qwen3.6's shapes, so it runs on
@@ -1436,40 +1549,49 @@ export class MiniCpmV47Ssd extends Qwen35MoeSsd {
     return this.vision;
   }
 
-  // Prompt segments: text ids, and per image { embeds, rel, entries } (see imagePositions). As llama.cpp's mtmd lays
-  // a MiniCPM-V 4.7 image out (mtmd.cpp add_canvas_chunk): the text "<image_id>N</image_id><image>", then one canvas
-  // chunk: the overview tile and the slices row by row, each followed by its separator rows (v.tok_embd_sep:
-  // 0 </image>, 1 <slice>, 2 </slice>, 3 \n). An image part is { type: 'image', rgb (packed RGB bytes), width, height }
-  // (preprocessed here exactly as llama.cpp does), or { type: 'image', pixels, width, height }, one ready tile.
+  // Prompt segments: text ids, and per image { keys, n, entries, grid, rel, embeds } (see imagePositions and
+  // prefillSegments; embeds() runs the encoder, so an image already in the cache is not encoded again). As llama.cpp's
+  // mtmd lays a MiniCPM-V 4.7 image out (mtmd.cpp add_canvas_chunk): the text "<image_id>N</image_id><image>", then
+  // one canvas chunk: the overview tile and the slices row by row, each followed by its separator rows
+  // (v.tok_embd_sep: 0 </image>, 1 <slice>, 2 </slice>, 3 \n). An image part is { type: 'image', rgb (packed RGB
+  // bytes), width, height } (preprocessed here exactly as llama.cpp does), or { type: 'image', pixels, width, height },
+  // one ready tile.
   async imageSegments(messages, opts) {
     const images = [];
     for (const m of messages) if (Array.isArray(m.content)) for (const x of m.content) if (x && x.type === 'image') images.push(x);
     const pieces = this.chatPrompt(messages, opts).split('<|image_pad|>');
-    const sep = images.length ? await this.vision.separators() : null, dim = this.cfg.hidden;
-    const segs = [];
+    const dim = this.cfg.hidden, segs = [];
     for (let k = 0; k < pieces.length; k++) {
       const text = pieces[k] + (k < images.length ? `<image_id>${k}</image_id><image>` : '');
       if (text) segs.push({ ids: this.tokenizer.encode(text) });
       if (k >= images.length) continue;
       const img = images[k];
-      const pre = img.rgb ? preprocessImage(img.rgb, img.width, img.height) : { tiles: [img], grid: null };
-      const [gx, gy] = pre.grid || [0, 0];
-      const entries = [], rows = [];
-      for (let e = 0; e < pre.tiles.length; e++) {
-        const tile = pre.tiles[e];
-        if (tile.width % 56 || tile.height % 56) throw new Error(`image tile ${tile.width}×${tile.height}: sides must be multiples of 56`);
-        const enc = await this.vision.encode(tile.pixels, tile.width, tile.height);
-        if (enc.dim !== dim) throw new Error(`vision output ${enc.dim} wide, text model ${dim}`);
-        rows.push(await this.vision.readback(enc.buffer, enc.tokens * enc.dim));
-        enc.buffer.destroy();
-        const s = e - 1, last = e === pre.tiles.length - 1;
-        const seps = e === 0 ? (pre.grid ? [0, 1] : [0]) : last ? [2] : (s % gx === gx - 1 ? [2, 3, 1] : [2, 1]);
-        for (const r of seps) rows.push(sep.subarray(r * dim, (r + 1) * dim));
-        entries.push({ gw: tile.width / 56, gh: tile.height / 56, seps: seps.length });
-      }
-      const n = entries.reduce((a, e) => a + e.gw * e.gh + e.seps, 0), embeds = new Float32Array(n * dim);
-      let o = 0; for (const r of rows) { embeds.set(r, o); o += r.length; }
-      segs.push({ embeds, n, entries, grid: pre.grid, rel: MiniCpmV47Ssd.imagePositions(entries, pre.grid) });
+      const plan = img.rgb ? planImage(img.width, img.height) : null, grid = plan ? plan.grid : null;
+      const sizes = plan ? [plan.overview, ...Array.from({ length: grid ? grid[0] * grid[1] : 0 }, () => plan.cell)] : [[img.width, img.height]];
+      const entries = sizes.map(([w, h], e) => {
+        if (w % 56 || h % 56) throw new Error(`image tile ${w}×${h}: sides must be multiples of 56`);
+        const s = e - 1, last = e === sizes.length - 1;
+        const seps = e === 0 ? (grid ? [0, 1] : [0]) : last ? [2] : (s % grid[0] === grid[0] - 1 ? [2, 3, 1] : [2, 1]);
+        return { gw: w / 56, gh: h / 56, seps };
+      });
+      const n = entries.reduce((a, e) => a + e.gw * e.gh + e.seps.length, 0);
+      const id = `img:${img.width}x${img.height}:${hashBytes(img.rgb || img.pixels)}:`;
+      const embeds = async () => {
+        const tiles = img.rgb ? preprocessImage(img.rgb, img.width, img.height).tiles : [img];
+        const sep = await this.vision.separators(), out = new Float32Array(n * dim);
+        let o = 0;
+        for (let e = 0; e < tiles.length; e++) {
+          const enc = await this.vision.encode(tiles[e].pixels, tiles[e].width, tiles[e].height);
+          if (enc.dim !== dim) throw new Error(`vision output ${enc.dim} wide, text model ${dim}`);
+          const rows = await this.vision.readback(enc.buffer, enc.tokens * enc.dim);
+          enc.buffer.destroy();
+          out.set(rows, o); o += rows.length;
+          for (const r of entries[e].seps) { out.set(sep.subarray(r * dim, (r + 1) * dim), o); o += dim; }
+        }
+        return out;
+      };
+      const ents = entries.map((e) => ({ gw: e.gw, gh: e.gh, seps: e.seps.length }));
+      segs.push({ keys: Array.from({ length: n }, (_, i) => id + i), n, entries: ents, grid, embeds, rel: MiniCpmV47Ssd.imagePositions(ents, grid) });
     }
     return segs;
   }
@@ -1497,46 +1619,14 @@ export class MiniCpmV47Ssd extends Qwen35MoeSsd {
     return { rel, nPos: t };
   }
 
-  async prefillSegments(segs, want = 'argmax') {
-    this.reset();
-    let r = null;
-    for (let si = 0; si < segs.length; si++) {
-      const sg = segs[si], last = si === segs.length - 1;
-      if (sg.ids) {
-        for (let i = 0; i < sg.ids.length; i += this.chunkTokens) {
-          const chunk = sg.ids.slice(i, i + this.chunkTokens);
-          r = await this.prefillChunk(chunk, last && i + this.chunkTokens >= sg.ids.length ? want : 'none');
-        }
-        continue;
-      }
-      // Whole tiles (with their separators) per chunk: a tile's tokens must see each other, so a tile never splits.
-      const pos0 = this.tNext, base = pos0 - 1, dim = this.cfg.hidden, { rel, nPos } = sg.rel;
-      const spans = []; let at = 0;
-      for (const e of sg.entries) { const len = e.gw * e.gh + e.seps; if (len > this.chunkTokens) throw new Error(`a tile of ${len} tokens > chunk ${this.chunkTokens}`); spans.push([at, len]); at += len; }
-      let ci = 0;
-      while (ci < spans.length) {
-        const start = spans[ci][0]; let len = 0;
-        while (ci < spans.length && len + spans[ci][1] <= this.chunkTokens) { len += spans[ci][1]; ci++; }
-        const pos = new Int32Array(len * 4);
-        for (let i = 0; i < len; i++) {
-          const [dt, dy, dx, isSep] = rel[start + i];
-          if (isSep) pos.fill(pos0 + dt, i * 4, i * 4 + 4); else pos.set([pos0 + dt, base, base + dy, base + dx], i * 4);
-        }
-        const end = ci >= spans.length;
-        r = await this.prefillChunk(new Array(len).fill(0xffffffff), last && end ? want : 'none',
-          { embeds: sg.embeds.subarray(start * dim, (start + len) * dim), pos, tNext: pos0 + nPos });
-      }
-    }
-    return r;
-  }
-
   async *generateTurn(messages, opts = {}) {
     const hasImage = messages.some((m) => Array.isArray(m.content) && m.content.some((x) => x && x.type === 'image'));
     if (!hasImage) { yield* super.generateTurn(messages, opts); return; }
     if (!this.vision) throw new Error('this message has an image, and no vision encoder is attached');
     const { maxNewTokens = 512, signal, enableThinking = true } = opts;
     const stops = new Set(this.stopTokenIds);
-    let next = await this.prefillSegments(await this.imageSegments(messages, { enableThinking }), 'argmax');
+    const segs = await this.imageSegments(messages, { enableThinking });
+    let next = await this.prefillSegments(segs, 'argmax', { sysEnd: segs[0].ids ? this.checkpointEnd(segs[0].ids) : 0 });
     const outIds = [];
     for (let i = 0; i < maxNewTokens; i++) {
       if (signal && signal.aborted) break;
