@@ -2389,6 +2389,9 @@
               <ul>
                 <li><strong>calculate</strong> &mdash; math, percentages, conversions</li>
                 <li><strong>get_current_time</strong> &mdash; date/time with timezone</li>
+                <li><strong>create_calendar_event</strong> &mdash; makes an .ics file you download and open in any calendar app (offline)</li>
+                <li><strong>get_weather</strong> &mdash; current weather and a 7-day forecast from Open-Meteo (Settings &rarr; Tools &rarr; Keyless web tools)</li>
+                <li><strong>wikipedia_lookup</strong> &mdash; a short Wikipedia summary with the article link (same setting)</li>
                 <li><strong>store_memory</strong> &mdash; save facts to persistent memory</li>
                 <li><strong>search_memory</strong> &mdash; recall from stored memories</li>
                 <li><strong>save_skill</strong> &mdash; teach the agent a reusable approach; learned skills auto-apply in later chats (Memory panel &rarr; <em>skill</em>). Agent-capable models only. How well a skill is followed grows with model size: small models (under ~4B) apply short direct commands but tend to skip conditional ones (&ldquo;if X, do Y&rdquo;), so word skills as direct commands.</li>
@@ -2787,7 +2790,11 @@
         <div class="settings-divider" data-tab="tools">
           <label class="toggle-row" id="toolApprovalRow">
             <input type="checkbox" id="toolApprovalToggle" checked>
-            Ask before running custom and MCP tools <span style="font-weight:400;color:var(--gray-500)">(they send the model's arguments to another server; built-in tools always run)</span>
+            Ask before running custom and MCP tools <span style="font-weight:400;color:var(--gray-500)">(they send the model's arguments to another server; also asks before weather and Wikipedia lookups)</span>
+          </label>
+          <label class="toggle-row" id="keylessWebRow">
+            <input type="checkbox" id="keylessWebToggle">
+            Keyless web tools: weather and Wikipedia <span style="font-weight:400;color:var(--gray-500)">(agent-capable models; sends the place name to open-meteo.com or the topic to wikipedia.org, no key or account)</span>
           </label>
           <label>Custom tools <span style="font-weight:400;color:var(--gray-500)">(agent-capable models; HTTP POST to your endpoint)</span></label>
           <textarea id="customToolInput" class="settings-input" rows="6" placeholder='{
@@ -9748,6 +9755,255 @@ self.addEventListener('message', async (e) => {
       },
     };
 
+    // ── Agent: keyless web tools + calendar ─────────────────────
+    // get_weather (Open-Meteo), wikipedia_lookup (Wikipedia Action API) and create_calendar_event (.ics, offline).
+    // AGENT-TOOLS-PURE-START (scripts/test-agent-tools.mjs runs this block in Node with canned API replies; keep the markers)
+    const WMO_WEATHER = { 0: 'clear sky', 1: 'mainly clear', 2: 'partly cloudy', 3: 'overcast', 45: 'fog', 48: 'freezing fog',
+      51: 'light drizzle', 53: 'drizzle', 55: 'heavy drizzle', 56: 'light freezing drizzle', 57: 'freezing drizzle',
+      61: 'light rain', 63: 'rain', 65: 'heavy rain', 66: 'light freezing rain', 67: 'freezing rain',
+      71: 'light snow', 73: 'snow', 75: 'heavy snow', 77: 'snow grains', 80: 'light rain showers', 81: 'rain showers',
+      82: 'violent rain showers', 85: 'light snow showers', 86: 'snow showers', 95: 'thunderstorm',
+      96: 'thunderstorm with light hail', 99: 'thunderstorm with heavy hail' };
+    // Open-Meteo's geocoder knows only current names: "Bombay" finds a village in New York state.
+    const PLACE_ALIASES = { bombay: 'Mumbai', madras: 'Chennai', calcutta: 'Kolkata', bangalore: 'Bengaluru', poona: 'Pune',
+      peking: 'Beijing', canton: 'Guangzhou', saigon: 'Ho Chi Minh City', rangoon: 'Yangon' };
+    const OPEN_METEO_SOURCE = { title: 'Weather data by Open-Meteo.com (CC BY 4.0)', url: 'https://open-meteo.com/' };
+
+    // fetchJson(url) → parsed JSON; the app passes a real fetch, the test passes canned replies.
+    async function runGetWeather(args, fetchJson) {
+      const raw = String(args?.location ?? '').trim();
+      if (!raw) return { error: 'location is required, e.g. "Paris" or "Springfield, Illinois"' };
+      if (raw.length > 120) return { error: 'location is too long' };
+      let days = Math.round(Number(args?.days ?? 3));
+      if (!Number.isFinite(days)) days = 3;
+      days = Math.min(7, Math.max(1, days));
+      const [head, ...rest] = raw.split(',').map((x) => x.trim()).filter(Boolean);
+      const name = PLACE_ALIASES[head.toLowerCase()] || head;
+      const qualifier = rest.join(' ').toLowerCase();
+      const geo = await fetchJson('https://geocoding-api.open-meteo.com/v1/search?count=10&language=en&format=json&name=' + encodeURIComponent(name));
+      let places = Array.isArray(geo?.results) ? geo.results : [];
+      if (qualifier) {
+        const match = places.filter((p) => [p.country, p.country_code, p.admin1, p.admin2].some((v) => v && (qualifier.includes(String(v).toLowerCase()) || String(v).toLowerCase().includes(qualifier))));
+        if (match.length) places = match;
+      }
+      if (!places.length) return { error: `No place called "${raw}" was found. Try the city's current English name.` };
+      const place = places.reduce((a, b) => ((b.population || 0) > (a.population || 0) ? b : a));
+      const f = await fetchJson('https://api.open-meteo.com/v1/forecast?latitude=' + place.latitude + '&longitude=' + place.longitude
+        + '&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m'
+        + '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum'
+        + '&timezone=auto&forecast_days=' + days);
+      return shapeWeather(place, f);
+    }
+    function shapeWeather(place, f) {
+      const c = f?.current || {}, d = f?.daily || {};
+      return {
+        location: [place.name, place.admin1, place.country].filter(Boolean).join(', '),
+        timezone: f?.timezone || place.timezone || null,
+        current: {
+          time: c.time, conditions: WMO_WEATHER[c.weather_code] ?? 'unknown', temperature_c: c.temperature_2m,
+          feels_like_c: c.apparent_temperature, humidity_pct: c.relative_humidity_2m, precipitation_mm: c.precipitation,
+          wind_kmh: c.wind_speed_10m,
+        },
+        daily: (d.time || []).map((date, i) => ({
+          date, conditions: WMO_WEATHER[d.weather_code?.[i]] ?? 'unknown', max_c: d.temperature_2m_max?.[i],
+          min_c: d.temperature_2m_min?.[i], rain_chance_pct: d.precipitation_probability_max?.[i], precipitation_mm: d.precipitation_sum?.[i],
+        })),
+        source: OPEN_METEO_SOURCE,
+      };
+    }
+
+    async function runWikipediaLookup(args, fetchJson) {
+      const query = String(args?.query ?? '').trim();
+      if (!query) return { error: 'query is required' };
+      if (query.length > 300) return { error: 'query is too long' };
+      const lang = /^[a-z]{2,3}(-[a-z]+)?$/.test(String(args?.lang || '')) ? args.lang : 'en';
+      const j = await fetchJson('https://' + lang + '.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&origin=*'
+        + '&generator=search&gsrlimit=1&gsrsearch=' + encodeURIComponent(query)
+        + '&prop=extracts%7Cinfo&exintro=1&explaintext=1&inprop=url&redirects=1');
+      return shapeWikipedia(j, query);
+    }
+    function shapeWikipedia(j, query) {
+      const page = j?.query?.pages?.[0];
+      if (!page || page.missing || !page.title) return { found: false, message: `Wikipedia has no article matching "${query}".` };
+      let summary = String(page.extract || '').replace(/\n{2,}/g, '\n').trim();
+      if (summary.length > 1500) {
+        const cut = summary.slice(0, 1500);
+        const end = cut.lastIndexOf('. ');
+        summary = (end > 600 ? cut.slice(0, end + 1) : cut) + ' …';
+      }
+      const url = page.fullurl || ('https://en.wikipedia.org/wiki/' + encodeURIComponent(page.title.replace(/ /g, '_')));
+      return { found: true, title: page.title, url, summary, source: { title: 'Wikipedia: ' + page.title, url },
+        license: 'CC BY-SA 4.0' };
+    }
+
+    // Wall-clock time in an IANA zone → the UTC instant (two passes settle the offset, DST included).
+    function zonedWallToUtc(y, mo, d, h, mi, s, tz) {
+      const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const offsetAt = (ms) => {
+        const p = Object.fromEntries(fmt.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+        return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - ms;
+      };
+      const wall = Date.UTC(y, mo - 1, d, h, mi, s);
+      return new Date(wall - offsetAt(wall - offsetAt(wall)));
+    }
+    // Checks the model's arguments; refuses impossible or far-off dates with a message the model can act on.
+    function parseCalendarArgs(args, now = new Date()) {
+      const title = String(args?.title ?? '').trim();
+      if (!title) return { error: 'title is required' };
+      if (title.length > 200) return { error: 'title is too long (200 characters at most)' };
+      const location = args?.location == null ? '' : String(args.location).trim();
+      if (location.length > 200) return { error: 'location is too long (200 characters at most)' };
+      const tz = args?.timezone ? String(args.timezone).trim() : '';
+      if (tz) { try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); } catch { return { error: `unknown time zone "${tz}"; use an IANA name such as "Asia/Kolkata"` }; } }
+      const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/.exec(String(args?.start ?? '').trim());
+      if (!m) return { error: 'start must be an ISO date or date-time, e.g. "2026-10-20T15:00" or "2026-10-20" for an all-day event' };
+      const [y, mo, d, h = 0, mi = 0, s = 0] = m.slice(1, 7).map((v) => (v === undefined ? undefined : Number(v)));
+      const allDay = m[4] === undefined;
+      if (allDay && m[7]) return { error: 'an all-day start cannot carry a UTC offset' };
+      if (mo < 1 || mo > 12 || d < 1 || d > new Date(Date.UTC(y, mo, 0)).getUTCDate() || h > 23 || mi > 59 || s > 59) {
+        return { error: `start "${args.start}" is not a real date or time` };
+      }
+      let minutes = args?.duration_minutes == null || args.duration_minutes === '' ? 60 : Number(args.duration_minutes);
+      if (!Number.isFinite(minutes) || minutes < 1 || minutes > 10080) return { error: 'duration_minutes must be between 1 and 10080 (one week)' };
+      minutes = Math.round(minutes);
+      let start;
+      if (allDay) start = new Date(Date.UTC(y, mo - 1, d));
+      else if (m[7]) start = new Date(String(args.start).trim().replace(' ', 'T').replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+      else if (tz) start = zonedWallToUtc(y, mo, d, h, mi, s, tz);
+      else start = new Date(y, mo - 1, d, h, mi, s);
+      // An all-day date counts as past only once that day is over everywhere.
+      const startMs = allDay ? start.getTime() + 36 * 3600e3 : start.getTime();
+      if (startMs < now.getTime() - 3600e3) return { error: `start ${args.start} is in the past. Call get_current_time for today's date and try again.` };
+      if (start.getTime() > now.getTime() + 10 * 365 * 86400e3) return { error: `start ${args.start} is more than ten years away` };
+      const end = allDay ? new Date(start.getTime() + 86400e3) : new Date(start.getTime() + minutes * 60e3);
+      return { title, location, allDay, start, end, timezone: tz };
+    }
+    function icsEscape(t) { return String(t).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n'); }
+    function icsUtc(date) { return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); }
+    // RFC 5545 section 3.1: a line longer than 75 octets folds onto continuation lines that start with one space.
+    function icsFold(line) {
+      const enc = new TextEncoder();
+      let out = '', bytes = 0;
+      for (const ch of line) {
+        const n = enc.encode(ch).length;
+        if (bytes + n > 75) { out += '\r\n '; bytes = 1; }
+        out += ch; bytes += n;
+      }
+      return out;
+    }
+    function buildIcs(ev, { uid, now = new Date() }) {
+      const d8 = (date) => date.toISOString().slice(0, 10).replace(/-/g, '');
+      const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//NakliTechie//LocalMind//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+        'BEGIN:VEVENT', 'UID:' + uid, 'DTSTAMP:' + icsUtc(now),
+        ev.allDay ? 'DTSTART;VALUE=DATE:' + d8(ev.start) : 'DTSTART:' + icsUtc(ev.start),
+        ev.allDay ? 'DTEND;VALUE=DATE:' + d8(ev.end) : 'DTEND:' + icsUtc(ev.end),
+        'SUMMARY:' + icsEscape(ev.title)];
+      if (ev.location) lines.push('LOCATION:' + icsEscape(ev.location));
+      lines.push('END:VEVENT', 'END:VCALENDAR');
+      return lines.map(icsFold).join('\r\n') + '\r\n';
+    }
+    function runCreateCalendarEvent(args, { now = new Date(), uid } = {}) {
+      const ev = parseCalendarArgs(args, now);
+      if (ev.error) return ev;
+      const ics = buildIcs(ev, { uid: uid || (now.getTime().toString(36) + '-' + Math.random().toString(36).slice(2, 10) + '@localmind'), now });
+      const slug = ev.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'event';
+      const when = ev.allDay ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'full', timeZone: 'UTC' }).format(ev.start) + ' (all day)'
+        : new Intl.DateTimeFormat('en-GB', { dateStyle: 'full', timeStyle: 'short', ...(ev.timezone ? { timeZone: ev.timezone } : {}) }).format(ev.start)
+          + (ev.timezone ? ' (' + ev.timezone + ')' : '');
+      return {
+        created: true, title: ev.title, when, all_day: ev.allDay,
+        start_utc: ev.start.toISOString(), end_utc: ev.end.toISOString(), location: ev.location || undefined,
+        filename: slug + '-' + ev.start.toISOString().slice(0, 10) + '.ics',
+        note: 'Nothing was sent anywhere. A button under this reply downloads the .ics file; opening it adds the event to the user\'s calendar app.',
+        _ics: ics,
+      };
+    }
+    // Sources a tool result adds to the reply's source links.
+    function toolResultSources(name, r) {
+      if (!r || typeof r !== 'object') return [];
+      if (name === 'web_search' && Array.isArray(r.results)) return r.results;
+      return r.source && r.source.url ? [r.source] : [];
+    }
+    // AGENT-TOOLS-PURE-END
+
+    // Keyless web tools send the place name or query to a public API, so they stay off until the user turns them on
+    // (Settings → Tools), and each still asks on its first use per session through the approval card.
+    const KEYLESS_WEB_KEY = 'lm_keyless_web';
+    function keylessWebOn() { try { return localStorage.getItem(KEYLESS_WEB_KEY) === 'on'; } catch { return false; } }
+    async function fetchToolJson(url) {
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error('HTTP ' + res.status + ' from ' + new URL(url).host);
+      return res.json();
+    }
+
+    TOOL_REGISTRY.get_weather = {
+      description: 'Get current weather and a daily forecast (up to 7 days) for a place. Use when the user asks about weather, temperature, rain or wind somewhere.',
+      parameters: {
+        type: 'object',
+        properties: {
+          location: { type: 'string', description: 'City or place name, e.g. "Paris" or "Springfield, Illinois"' },
+          days: { type: 'number', description: 'Days of forecast, 1-7 (default 3)' },
+        },
+        required: ['location'],
+      },
+      requiresKeylessWeb: true,
+      approvalHost: 'open-meteo.com',
+      async execute(args) {
+        try { return await runGetWeather(args, fetchToolJson); } catch (e) { return { error: 'Weather lookup failed: ' + e.message }; }
+      },
+    };
+
+    TOOL_REGISTRY.wikipedia_lookup = {
+      description: 'Look up a topic on Wikipedia and return the article title, URL and a short summary. Use when the user asks to look something up or wants details about a specific person, place, organisation or event; answer common knowledge directly. Cite the URL.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Topic to look up, e.g. "Eiffel Tower"' },
+          lang: { type: 'string', description: 'Wikipedia language code (default "en")' },
+        },
+        required: ['query'],
+      },
+      requiresKeylessWeb: true,
+      approvalHost: 'wikipedia.org',
+      async execute(args) {
+        try { return await runWikipediaLookup(args, fetchToolJson); } catch (e) { return { error: 'Wikipedia lookup failed: ' + e.message }; }
+      },
+    };
+
+    TOOL_REGISTRY.create_calendar_event = {
+      description: 'Create a calendar event as an .ics file the user can download and open in their calendar app. Works offline. For relative dates ("next Tuesday") call get_current_time first.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Event title, e.g. "Dentist appointment"' },
+          start: { type: 'string', description: 'Start as ISO date-time, e.g. "2026-10-20T15:00", or a date "2026-10-20" for an all-day event' },
+          duration_minutes: { type: 'number', description: 'Length in minutes (default 60)' },
+          location: { type: 'string', description: 'Where the event happens (optional)' },
+          timezone: { type: 'string', description: 'IANA time zone of the start time, e.g. "Asia/Kolkata". Defaults to the user\'s own.' },
+        },
+        required: ['title', 'start'],
+      },
+      execute(args) {
+        try { return runCreateCalendarEvent(args); } catch (e) { return { error: e.message }; }
+      },
+    };
+
+    // Turns a create_calendar_event result into a download button beside the reply, and drops the file text so it
+    // never reaches the model's context.
+    function attachToolDownload(msgContainer, toolResult) {
+      if (!toolResult || typeof toolResult._ics !== 'string') return;
+      const ics = toolResult._ics;
+      delete toolResult._ics;
+      if (!msgContainer) return;
+      const a = document.createElement('a');
+      a.className = 'btn-icon tool-download';
+      a.href = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' }));
+      a.download = toolResult.filename;
+      a.textContent = 'Add to calendar: ' + toolResult.filename;
+      a.style.cssText = 'display:inline-block;margin:6px 0;text-decoration:none';
+      msgContainer.appendChild(a);
+    }
+
     // ── Agent: tool-call helpers ─────────────────────────────────
     // The system-prompt scaffolding, output parser, and tool-result
     // formatting now live inside the runtime adapter (search for
@@ -9823,6 +10079,7 @@ self.addEventListener('message', async (e) => {
       const hasImage = !!(caps && caps.image);
       return Object.entries(TOOL_REGISTRY)
         .filter(([_, t]) => !t.requiresWeb || webConfigured)
+        .filter(([_, t]) => !t.requiresKeylessWeb || keylessWebOn())
         .filter(([_, t]) => !t.requiresImage || hasImage)
         .map(([name, t]) => ({
           name,
@@ -12234,47 +12491,94 @@ self.addEventListener('message', async (e) => {
     const mcpListDiv = document.getElementById('mcpList');
     // Keep server connection state here so removeMcpServer can wipe only
     // the tools that belong to that server.
-    const __mcpServers = [];  // [{ url, auth, toolNames: [] }]
+    const __mcpServers = [];  // [{ url, auth, toolNames: [], session }]
 
     function mcpSetStatus(msg, kind) {
       mcpStatus.textContent = msg || '';
       mcpStatus.style.color = kind === 'err' ? '#dc2626' : 'var(--gray-500)';
     }
 
-    async function mcpRpc(url, auth, method, params) {
-      const body = { jsonrpc: '2.0', id: Math.floor(Math.random() * 1e9), method };
-      if (params !== undefined) body.params = params;
+    // MCP-CLIENT-START (scripts/test-mcp-client.mjs runs this block in Node against a strict local server; keep the markers)
+    // Streamable HTTP client (spec 2025-06-18, basic/transports + lifecycle). A session is { url, auth, sessionId,
+    // protocolVersion }. The handshake is initialize → notifications/initialized; every later POST carries the
+    // Mcp-Session-Id the server returned (if any) and the negotiated MCP-Protocol-Version. A 404 on a request that
+    // carried a session id means the session ended, so mcpRequest starts a new one and retries once.
+    const MCP_PROTOCOL_VERSION = '2025-06-18';
+    async function mcpPost(session, body) {
       const headers = { 'content-type': 'application/json', 'accept': 'application/json, text/event-stream' };
-      if (auth) headers['authorization'] = 'Bearer ' + auth;
-      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
-      if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+      if (session.auth) headers['authorization'] = 'Bearer ' + session.auth;
+      if (session.sessionId) headers['mcp-session-id'] = session.sessionId;
+      if (session.protocolVersion) headers['mcp-protocol-version'] = session.protocolVersion;
+      return fetch(session.url, { method: 'POST', headers, body: JSON.stringify(body) });
+    }
+    async function mcpRpc(session, method, params) {
+      const id = Math.floor(Math.random() * 1e9);
+      const body = { jsonrpc: '2.0', id, method };
+      if (params !== undefined) body.params = params;
+      const res = await mcpPost(session, body);
+      if (!res.ok) { const e = new Error('HTTP ' + res.status + ' ' + res.statusText); e.status = res.status; throw e; }
+      const sid = res.headers.get('mcp-session-id');
+      if (sid) session.sessionId = sid;
       const ct = res.headers.get('content-type') || '';
-      // MVP: only parse JSON responses. SSE streams aren't supported yet —
-      // callers that need them should pick a stateless MCP server.
       const text = await res.text();
+      let j;
       if (ct.includes('text/event-stream')) {
-        // Pull the first `data: …` line's JSON — sufficient for discrete replies
-        const line = text.split(/\r?\n/).find((l) => l.startsWith('data:'));
-        if (!line) throw new Error('MCP SSE response had no data frame');
-        const j = JSON.parse(line.slice(5).trim());
-        if (j.error) throw new Error('MCP error: ' + (j.error.message || JSON.stringify(j.error)));
-        return j.result;
+        // The stream may carry server notifications before the reply; take the message whose id matches.
+        for (const line of text.split(/\r?\n/)) {
+          if (!line.startsWith('data:')) continue;
+          try { const m = JSON.parse(line.slice(5).trim()); if (m && m.id === id) { j = m; break; } } catch {}
+        }
+        if (!j) throw new Error('MCP SSE response had no reply for request ' + id);
+      } else {
+        j = JSON.parse(text);
       }
-      const j = JSON.parse(text);
       if (j.error) throw new Error('MCP error: ' + (j.error.message || JSON.stringify(j.error)));
       return j.result;
     }
+    async function mcpInitialize(session) {
+      session.sessionId = null;
+      session.protocolVersion = null;
+      const init = await mcpRpc(session, 'initialize', {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: 'LocalMind', version: '2.0' },
+      });
+      session.protocolVersion = (init && init.protocolVersion) || MCP_PROTOCOL_VERSION;
+      const res = await mcpPost(session, { jsonrpc: '2.0', method: 'notifications/initialized' });
+      if (!res.ok) throw new Error('MCP server rejected notifications/initialized: HTTP ' + res.status);
+      return init;
+    }
+    async function mcpRequest(session, method, params) {
+      try {
+        return await mcpRpc(session, method, params);
+      } catch (e) {
+        if (e.status !== 404 || !session.sessionId) throw e;
+        await mcpInitialize(session);
+        return mcpRpc(session, method, params);
+      }
+    }
+    // Spec: a client that no longer needs a session SHOULD end it with DELETE. Best effort.
+    function mcpEndSession(session) {
+      if (!session || !session.sessionId) return;
+      const headers = { 'mcp-session-id': session.sessionId };
+      if (session.auth) headers['authorization'] = 'Bearer ' + session.auth;
+      if (session.protocolVersion) headers['mcp-protocol-version'] = session.protocolVersion;
+      fetch(session.url, { method: 'DELETE', headers }).catch(() => {});
+    }
+    // MCP tool result shape: { content: [{ type: 'text', text: '…' }], isError? }
+    function mcpToolResult(result) {
+      if (result && Array.isArray(result.content)) {
+        const textParts = result.content.filter((c) => c && c.type === 'text').map((c) => c.text).join('\n');
+        return result.isError ? { error: textParts || 'tool reported error' } : (textParts || result.content);
+      }
+      return result;
+    }
+    // MCP-CLIENT-END
 
-    function mcpMakeExecute(url, auth, remoteName) {
+    function mcpMakeExecute(session, remoteName) {
       return async function execute(args) {
         try {
-          const result = await mcpRpc(url, auth, 'tools/call', { name: remoteName, arguments: args || {} });
-          // MCP tool result shape: { content: [{ type: 'text', text: '…' }], isError? }
-          if (result && Array.isArray(result.content)) {
-            const textParts = result.content.filter((c) => c && c.type === 'text').map((c) => c.text).join('\n');
-            return result.isError ? { error: textParts || 'tool reported error' } : (textParts || result.content);
-          }
-          return result;
+          return mcpToolResult(await mcpRequest(session, 'tools/call', { name: remoteName, arguments: args || {} }));
         } catch (e) {
           return { error: 'MCP call failed: ' + (e.message || e) };
         }
@@ -12282,13 +12586,10 @@ self.addEventListener('message', async (e) => {
     }
 
     async function mcpConnectServer(url, auth) {
-      // Initialize handshake + list tools, then register each.
-      await mcpRpc(url, auth, 'initialize', {
-        protocolVersion: '2025-03-26',
-        capabilities: {},
-        clientInfo: { name: 'LocalMind', version: '2.0' },
-      });
-      const list = await mcpRpc(url, auth, 'tools/list');
+      // Handshake + list tools, then register each. The session object lives on in each tool's execute.
+      const session = { url, auth, sessionId: null, protocolVersion: null };
+      await mcpInitialize(session);
+      const list = await mcpRequest(session, 'tools/list');
       const tools = (list && list.tools) || [];
       const registered = [];
       for (const t of tools) {
@@ -12300,13 +12601,13 @@ self.addEventListener('message', async (e) => {
         TOOL_REGISTRY[local] = {
           description: t.description || ('MCP tool from ' + url),
           parameters: t.inputSchema || { type: 'object', properties: {}, required: [] },
-          execute: mcpMakeExecute(url, auth, t.name),
+          execute: mcpMakeExecute(session, t.name),
           _mcp: true,
           _mcpUrl: url,
         };
         registered.push(local);
       }
-      return registered;
+      return { names: registered, session };
     }
 
     function mcpLoadFromStorage() {
@@ -12348,8 +12649,8 @@ self.addEventListener('message', async (e) => {
       mcpSetStatus('Connecting to ' + url + '\u2026');
       mcpAddBtn.disabled = true;
       try {
-        const names = await mcpConnectServer(url, auth);
-        __mcpServers.push({ url, auth, toolNames: names });
+        const { names, session } = await mcpConnectServer(url, auth);
+        __mcpServers.push({ url, auth, toolNames: names, session });
         mcpSaveToStorage();
         renderMcpList();
         mcpSetStatus('Connected. Discovered ' + names.length + ' tool(s).');
@@ -12368,6 +12669,7 @@ self.addEventListener('message', async (e) => {
       for (const name of __mcpServers[idx].toolNames) {
         if (TOOL_REGISTRY[name] && TOOL_REGISTRY[name]._mcp) delete TOOL_REGISTRY[name];
       }
+      mcpEndSession(__mcpServers[idx].session);
       __mcpServers.splice(idx, 1);
       mcpSaveToStorage();
       renderMcpList();
@@ -12384,8 +12686,8 @@ self.addEventListener('message', async (e) => {
     (async () => {
       for (const s of mcpLoadFromStorage()) {
         try {
-          const names = await mcpConnectServer(s.url, s.auth);
-          __mcpServers.push({ url: s.url, auth: s.auth, toolNames: names });
+          const { names, session } = await mcpConnectServer(s.url, s.auth);
+          __mcpServers.push({ url: s.url, auth: s.auth, toolNames: names, session });
         } catch {
           __mcpServers.push({ url: s.url, auth: s.auth, toolNames: [] });
         }
@@ -18317,12 +18619,13 @@ self.addEventListener('message', async (e) => {
     // a flag for whether any tool was actually called.
     // TOOL-APPROVAL (Open Q#11): custom and MCP tools send the model's arguments to another server, so each call
     // waits for Allow / Always / Deny on a card in the chat, unless the gate is off (Settings → Tools) or the user
-    // chose "Always" for that tool this session. Built-in tools run as before.
+    // chose "Always" for that tool this session. The keyless web built-ins (get_weather, wikipedia_lookup) carry an
+    // approvalHost and ask the same way; every other built-in runs without a card.
     const TOOL_APPROVAL_KEY = 'lm_tool_approval';
     const toolApprovedThisSession = new Set();
     function toolApprovalOn() { try { return localStorage.getItem(TOOL_APPROVAL_KEY) !== 'off'; } catch { return true; } }
     function toolNeedsApproval(name, tool, gateOn, approved) {
-      return !!(tool && (tool._custom || tool._mcp)) && !!gateOn && !approved.has(name);
+      return !!(tool && (tool._custom || tool._mcp || tool.approvalHost)) && !!gateOn && !approved.has(name);
     }
     function toolDeclinedResult(name) { return { error: `The user declined to run ${name}. Answer without it.` }; }
     // END TOOL-APPROVAL
@@ -18332,6 +18635,11 @@ self.addEventListener('message', async (e) => {
       toolApprovalToggle.checked = toolApprovalOn();
       toolApprovalToggle.addEventListener('change', () => { try { localStorage.setItem(TOOL_APPROVAL_KEY, toolApprovalToggle.checked ? 'on' : 'off'); } catch {} });
     }
+    const keylessWebToggle = document.getElementById('keylessWebToggle');
+    if (keylessWebToggle) {
+      keylessWebToggle.checked = keylessWebOn();
+      keylessWebToggle.addEventListener('change', () => { try { localStorage.setItem(KEYLESS_WEB_KEY, keylessWebToggle.checked ? 'on' : 'off'); } catch {} });
+    }
 
     // The card sits above the reply bubble. Stop (generating → false) while it is open counts as Deny.
     function askToolApproval(name, tool, args) {
@@ -18339,7 +18647,7 @@ self.addEventListener('message', async (e) => {
         const msg = currentAssistantEl ? currentAssistantEl.bubble.parentElement : null;
         if (!msg) { resolve('deny'); return; }
         let host = '';
-        try { host = new URL(tool._mcp ? tool._mcpUrl : tool._endpoint).host; } catch { host = 'another server'; }
+        try { host = tool.approvalHost || new URL(tool._mcp ? tool._mcpUrl : tool._endpoint).host; } catch { host = 'another server'; }
         const card = document.createElement('div');
         card.className = 'tool-approval-card';
         card.setAttribute('role', 'group');
@@ -18407,9 +18715,8 @@ self.addEventListener('message', async (e) => {
             }
           }
           usedTools = true;
-          if (tc.name === 'web_search' && toolResult && toolResult.results) {
-            sources.push(...toolResult.results);
-          }
+          sources.push(...toolResultSources(tc.name, toolResult));
+          attachToolDownload(currentAssistantEl ? currentAssistantEl.bubble.parentElement : null, toolResult);
           stepResults.push({ tc, toolResult });
         }
 
@@ -18968,9 +19275,8 @@ self.addEventListener('message', async (e) => {
             }
           }
 
-          if (tc.name === 'web_search' && toolResult && toolResult.results) {
-            allSources.push(...toolResult.results);
-          }
+          allSources.push(...toolResultSources(tc.name, toolResult));
+          attachToolDownload(msgContainer, toolResult);
 
           if (traceContainer) {
             const stepLabel = document.createElement('div');
