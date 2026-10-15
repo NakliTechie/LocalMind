@@ -38221,11 +38221,14 @@ ${QB}
 @group(0) @binding(2) var<storage, read_write> sc: array<f32>;
 @group(0) @binding(3) var<uniform> p: P;
 @group(0) @binding(4) var<uniform> qd: Q;
+@group(0) @binding(5) var<storage, read> kpos: array<u32>;
 @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>) {
   let idx = g.y * ng.x * 256u + g.x; let S = qd.S; let T = qd.T;
   if (idx >= p.heads * T * S) { return; }
   let h = idx / (T * S); let rem = idx % (T * S); let t = rem / S; let pos = rem % S;
-  if (pos > qd.pos0 + t) { sc[idx] = -3.4e38; return; }
+  // Masked by position, not by slot (llama.cpp's KV mask): an image tile's tokens share one position, so they see
+  // each other; for text, positions rise with the slot and this is the usual causal mask.
+  if (kpos[pos] > kpos[qd.pos0 + t]) { sc[idx] = -3.4e38; return; }
   let kvh = h / (p.heads / p.kvHeads);
   let qo = t * p.heads * p.hd + h * p.hd; let ko = pos * p.kvHeads * p.hd + kvh * p.hd;
   var acc = 0.0;
@@ -38263,9 +38266,10 @@ ${QB}
   let QN = p.heads * p.hd; let idx = g.x; let t = g.y;
   if (idx >= QN || t >= qd.T) { return; }
   let h = idx / p.hd; let d = idx % p.hd; let kvh = h / (p.heads / p.kvHeads);
-  let stride = p.kvHeads * p.hd; let rb = (h * qd.T + t) * qd.S; let last = qd.pos0 + t;
+  let stride = p.kvHeads * p.hd; let rb = (h * qd.T + t) * qd.S;
   var acc = 0.0;
-  for (var pos = 0u; pos <= last; pos++) { acc += pr[rb + pos] * f32(vc[pos * stride + kvh * p.hd + d]); }
+  // Every key of the chunk: a masked one has probability 0 (attnScoreB's mask), and a tile token sees later ones.
+  for (var pos = 0u; pos < qd.S; pos++) { acc += pr[rb + pos] * f32(vc[pos * stride + kvh * p.hd + d]); }
   y[t * QN + idx] = acc;
 }`,
   sigmoidMulB: `
@@ -38498,6 +38502,10 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
       ? { mm: 'matmulQ4', mmT: 'matmulQ4T', ex: 'expertQ4', exB: 'expertQ4B', emb: 'embedQ4', embB: 'embedQ4B', lm: lm === 'q6k' ? 'matmulQ6K' : 'matmulQ4' }
       : { mm: 'matmulQ8', mmT: 'matmulQ8T', ex: 'expertQ8', exB: 'expertQ8B', emb: 'embedQ8', embB: 'embedQ8B', lm: 'matmulQ8' };
     this.recurrent = Array.from({ length: c.layers }, (_, l) => (l + 1) % c.attnInterval !== 0);
+    // M-RoPE sections (t/y/x/extra pair counts); text uses one position in all of them.
+    const secs = gguf.kv['qwen35moe.rope.dimension_sections'];
+    this.ropeSections = Array.isArray(secs) && secs.length === 4 ? secs.map(Number) : [c.ropeDims / 2, 0, 0, 0];
+    this.tNext = 0;
     // Prompts go through in chunks of up to chunkTokens tokens per layer (one routing readback per
     // layer per chunk); decode stays one token at a time.
     this.batchPrefill = opts.batchPrefill ?? true;
@@ -38580,6 +38588,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
         this.ssm[l] = this.buffer(s.vHeads * s.dState * s.dState * 4, STORAGE | COPY_DST, 'state');
       } else {
         this.kc[l] = this.buffer(this.maxCtx * kvn * 2, STORAGE, 'kv');
+        this.kpos ||= this.buffer(this.maxCtx * 4, STORAGE | COPY_DST, 'kv');   // position (t) of each KV slot
         this.vc[l] = this.buffer(this.maxCtx * kvn * 2, STORAGE, 'kv');
       }
     }
@@ -38736,7 +38745,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
           ropeQ: this.bind('qkNormRopePB', [b.qg, raw(n('attn_q_norm.weight')), b.rope, b.q, b.gate, u.ropeQ]),
           ropeK: this.bind('qkNormRopePB', [b.k, raw(n('attn_k_norm.weight')), b.rope, b.kr, b.dummy, u.ropeK]),
           kv: this.bind('kvStoreB', [b.kr, b.v, this.kc[l], this.vc[l], u.kvn, qb]),
-          score: this.bind('attnScoreB', [b.q, this.kc[l], b.sc, u.att, qb]),
+          score: this.bind('attnScoreB', [b.q, this.kc[l], b.sc, u.att, qb, this.kpos]),
           soft: this.bind('softmaxB', [b.sc, qb]),
           attOut: this.bind('attnOutB', [b.sc, this.vc[l], b.att, u.attOut, qb]),
           gate: this.bind('sigmoidMulB', [b.att, b.gate, u.gate, qb]),
@@ -38805,7 +38814,9 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
   // Feeds T = ids.length tokens at this.position through every layer: one routing readback per
   // layer, the union of the chunk's experts loaded once. want: 'none' | 'argmax' | 'logits' for
   // the last token, as in step().
-  async prefillChunk(ids, want = 'none') {
+  // ext (images): { embeds: Float32Array T × hidden (input rows instead of token embeddings), pos: Int32Array T × 4
+  // [t, s0, s1, s2] (KV position and the three M-RoPE section positions), tNext: the next text position after it }.
+  async prefillChunk(ids, want = 'none', ext = null) {
     const c = this.cfg, dev = this.device, K = c.topK, H = c.hidden, T = ids.length, pos0 = this.position, S = pos0 + T;
     if (T > this.chunkTokens) throw new Error(`chunk of ${T} > ${this.chunkTokens}`);
     if (S > this.maxCtx) throw this.contextFull();
@@ -38813,15 +38824,14 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     dev.queue.writeBuffer(this.a.stop, 0, new Uint32Array(4));   // the head below uses guarded kernels
     dev.queue.writeBuffer(this.b.ids, 0, Uint32Array.from(ids));
     dev.queue.writeBuffer(this.qb, 0, new Uint32Array([T, pos0, S, 0]));
-    const nRot = c.ropeDims, half = nRot / 2, r = new Float32Array(T * nRot), stepR = Math.fround(Math.pow(c.ropeTheta, -2 / nRot));
-    for (let t = 0; t < T; t++) {
-      let th = Math.fround(pos0 + t);
-      for (let i = 0; i < half; i++) { r[t * nRot + i] = Math.cos(th); r[t * nRot + half + i] = Math.sin(th); th = Math.fround(th * stepR); }
-    }
-    dev.queue.writeBuffer(this.b.rope, 0, r);
+    const pos = ext && ext.pos ? ext.pos : this.textPositions(T);
+    dev.queue.writeBuffer(this.b.rope, 0, this.ropeRows(pos, T));
+    const kp = new Uint32Array(T); for (let t = 0; t < T; t++) kp[t] = pos[t * 4];
+    dev.queue.writeBuffer(this.kpos, pos0 * 4, kp);
+    if (ext && ext.embeds) dev.queue.writeBuffer(this.b.x, 0, ext.embeds);
     const selBytes = T * 2 * K * 4;
     let enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
-    this.dispatch(pass, this.qk.embB, this.gB.embed, Math.ceil(H / 256), T);
+    if (!(ext && ext.embeds)) this.dispatch(pass, this.qk.embB, this.gB.embed, Math.ceil(H / 256), T);
     this.encodeTrunkB(pass, 0, T, S);
     pass.end();
     enc.copyBufferToBuffer(this.b.sel, 0, this.rbSelB, 0, selBytes);
@@ -38865,6 +38875,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
     }
     this.position += T;
     this.cached.push(...ids);
+    this.tNext = ext && ext.tNext != null ? ext.tNext : kp[T - 1] + 1;
     let result = null;
     if (want === 'argmax') {
       await this.rbArg.mapAsync(1, 0, 4);
@@ -39031,13 +39042,40 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
 
   // RoPE angles as ggml's CPU rope cache forms them for text positions (all M-RoPE sections at
   // the token position): θ = pos, multiplied by base^(-2/nRot) once per pair, in f32.
+  // pos is the KV slot; RoPE takes the text position tNext, which runs behind the slot after an image (a tile's
+  // tokens share one position).
   writeTokenUniforms(token, pos) {
-    const c = this.cfg, nRot = c.ropeDims, half = nRot / 2;
     this.device.queue.writeBuffer(this.tok, 0, new Uint32Array([token, pos, pos + 1, 0]));
-    const r = new Float32Array(nRot), step = Math.fround(Math.pow(c.ropeTheta, -2 / nRot));
-    let th = Math.fround(pos);
-    for (let i = 0; i < half; i++) { r[i] = Math.cos(th); r[half + i] = Math.sin(th); th = Math.fround(th * step); }
-    this.device.queue.writeBuffer(this.a.rope, 0, r);
+    const t = this.tNext ?? pos;
+    this.device.queue.writeBuffer(this.a.rope, 0, this.ropeRows(Int32Array.of(t, t, t, t), 1));
+    if (this.kpos) this.device.queue.writeBuffer(this.kpos, pos * 4, Uint32Array.of(t));
+    this.tNext = t + 1;
+  }
+  // Text positions for the next T tokens: [t, t, t, t] each.
+  textPositions(T) {
+    const t0 = this.tNext ?? this.position, p = new Int32Array(T * 4);
+    for (let t = 0; t < T; t++) p.fill(t0 + t, t * 4, t * 4 + 4);
+    return p;
+  }
+  // RoPE cos/sin rows for T tokens with positions [t, s0, s1, s2] each, as ggml's rope cache forms them for
+  // interleaved M-RoPE (ggml_mrope_cache_init, is_imrope): rotary pair i takes section s1 when i % 3 == 1, s2 when
+  // i % 3 == 2, else s0 (within 3 × the section sizes); each section's angle is its position × base^(-2i/n). For
+  // text all three are t, which is plain RoPE, bit for bit what this engine computed before.
+  ropeRows(pos, T) {
+    const c = this.cfg, nRot = c.ropeDims, half = nRot / 2, sec = this.ropeSections;
+    const step = Math.fround(Math.pow(c.ropeTheta, -2 / nRot)), nSec = sec[0] + sec[1] + sec[2] + sec[3];
+    const r = new Float32Array(T * nRot);
+    for (let t = 0; t < T; t++) {
+      const th = [Math.fround(pos[t * 4 + 1]), Math.fround(pos[t * 4 + 2]), Math.fround(pos[t * 4 + 3]), 0];
+      for (let i = 0; i < half; i++) {
+        const sector = nSec ? i % nSec : 0;
+        const k = !(sec[1] || sec[2]) ? 0 : sector % 3 === 1 && sector < 3 * sec[1] ? 1 : sector % 3 === 2 && sector < 3 * sec[2] ? 2 : sector % 3 === 0 && sector < 3 * sec[0] ? 0 : 3;
+        const a = th[k];
+        r[t * nRot + i] = Math.cos(a); r[t * nRot + half + i] = Math.sin(a);
+        for (let j = 0; j < 4; j++) th[j] = Math.fround(th[j] * step);
+      }
+    }
+    return r;
   }
 
   // Qwen3.5/3.6's template opens the reasoning block in the generation prompt when thinking is on.
@@ -39051,6 +39089,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
   // end restarts from token 0.
   reset() {
     super.reset();
+    this.tNext = 0;
     if (!this.conv) return;
     const enc = this.device.createCommandEncoder();
     for (let l = 0; l < this.cfg.layers; l++) if (this.recurrent[l]) { enc.clearBuffer(this.conv[l]); enc.clearBuffer(this.ssm[l]); }
@@ -39094,11 +39133,15 @@ export class MiniCpmV47Ssd extends Qwen35MoeSsd {
 
   // MiniCPM-V's template: earlier replies carry an empty think block and lose their reasoning (the model's
   // own </think> and LocalMind's <|think|> … <|/think|> markers); the reply after the last question keeps it.
+  // Content may be a list of parts: text, and images rendered as <|image_pad|> (joined by newlines, as the template's
+  // render_content does); imageSegments() expands each pad.
   chatPrompt(messages, { enableThinking = true } = {}) {
     const lastUser = messages.map((m) => m.role).lastIndexOf('user');
     let p = '';
     messages.forEach((m, i) => {
-      let c = String(m.content ?? '').trim();
+      let c = (Array.isArray(m.content)
+        ? m.content.map((x) => (x && x.type === 'image' ? '<|image_pad|>' : x && x.type === 'text' ? x.text : '')).join('\n')
+        : String(m.content ?? '')).trim();
       if (m.role === 'assistant' && i < lastUser) {
         c = c.replace(/<\|think\|>[\s\S]*?<\|\/think\|>/g, '');
         if (c.includes('</think>')) c = c.split('</think>').pop();
@@ -39107,6 +39150,78 @@ export class MiniCpmV47Ssd extends Qwen35MoeSsd {
       p += `<|im_start|>${m.role}\n${c}<|im_end|>\n`;
     });
     return p + '<|im_start|>assistant\n' + (enableThinking ? '<think>\n' : '<think>\n\n</think>\n\n');
+  }
+
+  // ── Images (layer 1: one overview tile per image, width × height ≤ 448², sides multiples of 56) ──────────────
+  // vision: a MiniCpmVVision (minicpmv_vision.js) on this engine's device.
+  attachVision(vision) { this.vision = vision; }
+
+  // Prompt segments: text ids, and per image { embeds (tile tokens + the </image> separator row), nx, ny, n }.
+  // As llama.cpp's mtmd lays a MiniCPM-V 4.7 image out (mtmd.cpp, add_canvas_chunk): the text
+  // "<image_id>N</image_id><image>", then the overview tile's tokens and its separator.
+  async imageSegments(messages, opts) {
+    const images = [];
+    for (const m of messages) if (Array.isArray(m.content)) for (const x of m.content) if (x && x.type === 'image') images.push(x);
+    const pieces = this.chatPrompt(messages, opts).split('<|image_pad|>');
+    const sep = images.length ? await this.vision.separators() : null, dim = this.cfg.hidden;
+    const segs = [];
+    for (let k = 0; k < pieces.length; k++) {
+      const text = pieces[k] + (k < images.length ? `<image_id>${k}</image_id><image>` : '');
+      if (text) segs.push({ ids: this.tokenizer.encode(text) });
+      if (k >= images.length) continue;
+      const img = images[k];
+      if (img.width * img.height > 448 * 448 || img.width % 56 || img.height % 56) throw new Error(`image ${img.width}×${img.height}: one tile of at most 448×448, sides multiples of 56`);
+      const enc = await this.vision.encode(img.pixels, img.width, img.height);
+      const tile = await this.vision.readback(enc.buffer, enc.tokens * enc.dim);
+      enc.buffer.destroy();
+      if (enc.dim !== dim) throw new Error(`vision output ${enc.dim} wide, text model ${dim}`);
+      const n = enc.tokens + 1, embeds = new Float32Array(n * dim);
+      embeds.set(tile); embeds.set(sep.subarray(0, dim), enc.tokens * dim);   // separator row 0: </image>
+      segs.push({ embeds, n, nx: img.width / 56, ny: img.height / 56 });
+    }
+    return segs;
+  }
+
+  // Positions as mtmd_canvas_decoder_pos gives them for an overview-only image: every tile token shares t = the
+  // position after <image>; its sections are z = base (<image>'s position), y = base + row, x = base + col; the
+  // separator takes t + 1 in every slot. The image uses 2 text positions.
+  async prefillSegments(segs, want = 'argmax') {
+    this.reset();
+    let r = null;
+    for (let si = 0; si < segs.length; si++) {
+      const sg = segs[si], last = si === segs.length - 1;
+      if (sg.ids) {
+        for (let i = 0; i < sg.ids.length; i += this.chunkTokens) {
+          const chunk = sg.ids.slice(i, i + this.chunkTokens);
+          r = await this.prefillChunk(chunk, last && i + this.chunkTokens >= sg.ids.length ? want : 'none');
+        }
+        continue;
+      }
+      if (sg.n > this.chunkTokens) throw new Error(`image of ${sg.n} tokens > chunk ${this.chunkTokens}`);
+      const pos0 = this.tNext, base = pos0 - 1, nt = sg.nx * sg.ny, pos = new Int32Array(sg.n * 4);
+      for (let i = 0; i < nt; i++) pos.set([pos0, base, base + Math.floor(i / sg.nx), base + (i % sg.nx)], i * 4);
+      for (let j = nt; j < sg.n; j++) { const p = pos0 + 1 + (j - nt); pos.set([p, p, p, p], j * 4); }
+      r = await this.prefillChunk(new Array(sg.n).fill(0xffffffff), last ? want : 'none', { embeds: sg.embeds, pos, tNext: pos0 + 1 + (sg.n - nt) });
+    }
+    return r;
+  }
+
+  async *generateTurn(messages, opts = {}) {
+    const hasImage = messages.some((m) => Array.isArray(m.content) && m.content.some((x) => x && x.type === 'image'));
+    if (!hasImage) { yield* super.generateTurn(messages, opts); return; }
+    if (!this.vision) throw new Error('this message has an image, and no vision encoder is attached');
+    const { maxNewTokens = 512, signal, enableThinking = true } = opts;
+    const stops = new Set(this.stopTokenIds);
+    let next = await this.prefillSegments(await this.imageSegments(messages, { enableThinking }), 'argmax');
+    const outIds = [];
+    for (let i = 0; i < maxNewTokens; i++) {
+      if (signal && signal.aborted) break;
+      if (stops.has(next)) break;
+      outIds.push(next);
+      yield { text: this.tokenizer.decode(outIds), token: next, tokens: outIds.length };
+      if (this.position >= this.maxCtx) break;
+      next = await this.step(next, 'argmax');
+    }
   }
 }
 
