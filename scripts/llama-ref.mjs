@@ -26,10 +26,10 @@ for (const p of PROMPTS) {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       prompt: tokens, n_predict: n, temperature: 0, top_k: 1, samplers: ['top_k'], n_probs: 5,
-      cache_prompt: false, ignore_eos: true, stream: true,
+      cache_prompt: false, ignore_eos: true, stream: true, return_tokens: true,
     }),
   });
-  const probs = [];
+  const probs = [], genIds = [];
   let content = '', buf = '';
   const dec = new TextDecoder();
   for await (const chunk of res.body) {
@@ -40,16 +40,19 @@ for (const p of PROMPTS) {
       if (!line.startsWith('data:')) continue;
       const ev = JSON.parse(line.slice(5));
       if (ev.completion_probabilities) probs.push(...ev.completion_probabilities);
+      if (Array.isArray(ev.tokens)) genIds.push(...ev.tokens);
       if (typeof ev.content === 'string') content += ev.content;
     }
   }
-  const r = { content };
-  results.push({
-    name: p.name, text: p.text, ids: tokens,
-    gen: probs.map((q) => q.id), content: r.content,
-    top: probs.map((q) => q.top_logprobs.map((t) => [t.id, +t.logprob.toFixed(5)])),
-    secs: (Date.now() - t0) / 1000,
-  });
-  console.error(`${p.name}: ${tokens.length} prompt tokens → ${probs.length} generated in ${(Date.now() - t0) / 1000}s: ${JSON.stringify(r.content).slice(0, 80)}`);
+  // llama-server drops the probabilities of a token whose text ends mid-character (it holds the bytes back), so
+  // probs can be shorter than the generated tokens. Pair them in order by id and keep only the prefix where every
+  // token has its own probabilities: a shorter reference, never one shifted by a position (2026-10-14).
+  const gen = [], top = [];
+  for (let i = 0, j = 0; i < genIds.length; i++) {
+    if (j < probs.length && probs[j].id === genIds[i]) { gen.push(genIds[i]); top.push(probs[j].top_logprobs.map((t) => [t.id, +t.logprob.toFixed(5)])); j++; } else break;
+  }
+  if (gen.length < genIds.length) console.error(`${p.name}: reference cut at ${gen.length} of ${genIds.length} tokens (token ${genIds[gen.length]} has no probabilities)`);
+  results.push({ name: p.name, text: p.text, ids: tokens, gen, content, top, secs: (Date.now() - t0) / 1000 });
+  console.error(`${p.name}: ${tokens.length} prompt tokens → ${gen.length} generated in ${(Date.now() - t0) / 1000}s: ${JSON.stringify(content).slice(0, 80)}`);
 }
 writeFileSync(outPath, JSON.stringify({ server, label, model: props.model_path || null, n, results }, null, 1));
