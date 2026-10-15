@@ -8407,11 +8407,11 @@ self.onmessage = async (e) => {
       const atts = Array.isArray(d.attachments) ? d.attachments.filter((a) => a && a.type === 'image') : [];
       const vision = atts.length && typeof model.ensureVision === 'function';
       if (vision) {
-        post({ type: 'progress', data: { status: 'initiate', file: 'vision encoder' } });
+        post({ type: 'progress', data: { status: 'loading', file: 'vision encoder' } });
         await model.ensureVision({ onProgress: (ev) => {
           if (ev.status === 'vision-download') post({ type: 'progress', data: { status: 'progress_total', file: 'vision encoder into on-device storage', loaded: ev.loaded, total: ev.total } });
         } });
-        post({ type: 'progress', data: { status: 'ready', file: 'vision encoder' } });
+        post({ type: 'progress', data: { status: 'vision-done' } });
       }
       let ai = 0;
       const msgs = [];
@@ -17182,6 +17182,12 @@ self.addEventListener('message', async (e) => {
           const p = data.data;
           // Watchdog: bytes still to come re-arm it; a finished download or the move to loading ends it; any
           // other report while it runs counts as life.
+          // The SSD worker's vision encoder (MiniCPM-V, first image of a session) finished loading: clear its progress line.
+          if (p.status === 'vision-done') {
+            disarm(); progressSection.classList.remove('visible');
+            const am = MODELS[activeModelKey]; if (am) statusText.textContent = am.label;
+            return;
+          }
           if (p.status === 'progress_total' && p.total && p.loaded < p.total) arm();
           else if ((p.status === 'progress_total' && p.total && p.loaded >= p.total) || p.status === 'loading') disarm();
           else if (stallTimer) arm();
