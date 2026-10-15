@@ -1880,6 +1880,10 @@
     .mp-opt[aria-disabled="true"] { color: var(--gray-600); cursor: default; }
     .mp-meta { font-size: 0.72rem; font-weight: 400; color: var(--gray-600); white-space: nowrap; font-variant-numeric: tabular-nums; }
     .mp-opt.on-device .mp-meta { color: var(--success-text); }
+    .mp-opt > span:first-child { flex: 1 1 auto; min-width: 0; }
+    /* Delete control on stored rows: removes that model's files without selecting it. */
+    .mp-del { align-self: center; flex: none; padding: 2px 6px; font-size: 0.68rem; }
+    .mp-del:focus-visible { outline: 2px solid var(--indigo-500); }
     .model-picker-note { font-size: 0.7rem; color: var(--gray-600); padding: 6px 8px 2px; border-top: 1px solid var(--gray-200); margin-top: 4px; }
 
     .mode-divider { width: 1px; height: 16px; background: var(--gray-200); margin: 0 4px; flex: none; align-self: center; }
@@ -2537,6 +2541,7 @@
         <span class="load-error-text" id="loadErrorText"></span>
         <button type="button" class="btn-icon" id="loadErrorRetry">Retry</button>
         <button type="button" class="btn-icon" id="loadErrorPick">Choose another model</button>
+        <button type="button" class="btn-icon" id="loadErrorStorage" hidden>Free up storage</button>
       </div>
 
       <!-- Progress bar (model loading) -->
@@ -2659,7 +2664,7 @@
             </ul>
           </details>
         </div>
-        <div class="settings-divider" data-tab="models">
+        <div class="settings-divider" data-tab="models" id="modelCacheSection">
           <label>Model cache</label>
           <div id="cacheInfo" style="font-size:0.75rem;color:var(--gray-500);margin-top:4px">Loading...</div>
           <label class="toggle-row" style="padding-top:8px">
@@ -10878,26 +10883,45 @@ self.addEventListener('message', async (e) => {
           html += `<span title="${escapeHtml([...g.stores].join(', '))}">${name}${tag}</span><span>${fmtBytes(g.bytes)}</span><button class="btn-icon btn-danger-text" style="font-size:0.68rem" data-cache-row="${i}">Delete</button>`;
         });
         html += '</div>';
-        html += '<button class="btn-icon btn-danger-text" style="font-size:0.7rem;margin-top:6px" id="clearCacheBtn">Delete all model caches</button>';
+        html += `<button class="btn-icon btn-danger-text" style="font-size:0.7rem;margin-top:6px" id="clearCacheBtn">Delete all (${fmtBytes(total)})</button>`;
         cacheInfo.innerHTML = html;
         cacheInfo.querySelectorAll('[data-cache-row]').forEach((btn) => btn.addEventListener('click', async () => {
           const g = rows[+btn.dataset.cacheRow];
           if (!confirm(`Delete the cached weights of ${g.label || g.repo} (${fmtBytes(g.bytes)})? It will re-download on next use.`)) return;
           btn.disabled = true;
-          await g.remove();
-          refreshCacheInfo();
-          showToast(`Deleted ${fmtBytes(g.bytes)} — ${g.label || g.repo}`);
+          if (await deleteModelCaches([g])) showToast(`Deleted ${fmtBytes(g.bytes)} — ${g.label || g.repo}`);
         }));
-        document.getElementById('clearCacheBtn')?.addEventListener('click', async () => {
-          if (!confirm('Delete all cached models? They will re-download on next use.')) return;
-          for (const g of rows) await g.remove();
-          refreshCacheInfo();
-          showToast('Model cache cleared');
+        document.getElementById('clearCacheBtn')?.addEventListener('click', async (e) => {
+          if (!confirm(`Delete all ${rows.length} cached model${rows.length === 1 ? '' : 's'} and free ${fmtBytes(total)}? Each one downloads again the next time you load it.`)) return;
+          e.currentTarget.disabled = true;
+          if (await deleteModelCaches(rows)) showToast(`Model cache cleared — ${fmtBytes(total)} freed`);
         });
       } catch (e) {
         console.warn('cache info:', e);
         cacheInfo.innerHTML = 'Cache info unavailable';
       }
+    }
+
+    // Delete the given inventoryModelCaches() groups (the Model cache rows, a picker row's delete control). Only the
+    // stores inventoryModelCaches() lists are touched, never the whole origin. A model that reads one of these repos is
+    // unloaded first: the SSD engines hold their OPFS files open and the kernel engines an IndexedDB connection, and a
+    // removal under an open reader fails or blocks. Refreshes the picker and Model cache. False when nothing ran.
+    async function deleteModelCaches(list) {
+      const repos = new Set(list.map(g => g.repo));
+      const uses = (key) => !!(key && MODELS[key] && repos.has(repoForModel(MODELS[key])));
+      if (uses(activeModelKey)) {
+        if (generating) { showToast(`Stop the reply first — ${MODELS[activeModelKey].label} is answering.`); refreshCacheInfo(); return false; }
+        resetToNoModel('Model deleted — pick a model');
+        await new Promise(r => setTimeout(r, 300));   // terminate() releases the worker's OPFS handles asynchronously
+      }
+      if (uses(lastChatModelKey)) lastChatModelKey = null;   // a gen mode must not reload it on the way back
+      for (const g of list) await g.remove();
+      try { pickerGroups = await inventoryModelCaches(); } catch {}
+      if (!modelPicker.hidden) renderModelPicker();
+      refreshCacheInfo();
+      const left = pickerGroups ? [...repos].filter(r => (pickerGroups.get(r)?.bytes || 0) > 0) : [];
+      if (left.length) showToast(`Some files are still in use (${left.join(', ')}). Reload the page and delete again.`);
+      return left.length === 0;
     }
 
     // Boot sweep: drop caches only for repos isRetiredRepo() names (in RETIRED_MODEL_REPOS
@@ -17324,8 +17348,15 @@ self.addEventListener('message', async (e) => {
       loadErrorText.title = cause;
       statusText.textContent = 'Load failed';
       chatInput.placeholder = `${name} didn't load — retry, or choose another model`;
+      // Out of storage: point at Settings → Models → Model cache, where stored models can be deleted.
+      loadErrorStorage.hidden = !(isStorageFullError(cause) && !(m && m.backend === 'endpoint'));
       loadError.hidden = false;
     }
+    // Browser storage-full failures: QuotaExceededError from Cache Storage, IndexedDB or an OPFS write, and the
+    // engines' own wording for it.
+    const isStorageFullError = (msg) => /quota|storage (?:is )?full|no (?:free )?space|not enough (?:free )?(?:disk|storage|space)|disk (?:is )?full|out of (?:disk|storage)/i.test(String(msg || ''));
+    const loadErrorStorage = document.getElementById('loadErrorStorage');
+    loadErrorStorage.addEventListener('click', () => openSettings('models', 'modelCacheSection'));
     function hideLoadError() { loadError.hidden = true; }
     document.getElementById('loadErrorRetry').addEventListener('click', () => {
       hideLoadError();
@@ -17563,6 +17594,7 @@ self.addEventListener('message', async (e) => {
         group.setAttribute('role', 'group'); group.setAttribute('aria-labelledby', gid);
         group.innerHTML = `<div class="mp-group" id="${gid}">${title}</div>`;
         for (const { o, meta, state } of list) {
+          const m = MODELS[o.value];
           const row = document.createElement('div');
           row.className = 'mp-opt' + (state === 'device' ? ' on-device' : '');
           row.id = 'mpo-' + [...modelSelect.options].indexOf(o);
@@ -17571,6 +17603,12 @@ self.addEventListener('message', async (e) => {
           row.setAttribute('aria-selected', String(o.value === modelSelect.value));
           if (o.disabled) row.setAttribute('aria-disabled', 'true');
           row.innerHTML = `<span>${escapeHtml(optionName(o))}</span><span class="mp-meta">${escapeHtml(o.disabled ? 'needs WebGPU' : meta)}</span>`;
+          // Stored rows get a delete control (files this app downloaded; not Gemini Nano or an endpoint).
+          const g = state !== 'download' && m && m.backend !== 'chrome-ai' && m.backend !== 'endpoint' && pickerGroups && pickerGroups.get(repoForModel(m));
+          if (g && g.bytes > 0) {
+            const label = `Delete ${optionName(o)} from this device (${fmtBytes(g.bytes)})`;
+            row.insertAdjacentHTML('beforeend', `<button type="button" class="btn-icon btn-danger-text mp-del" tabindex="-1" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">Delete</button>`);
+          }
           group.appendChild(row);
         }
         modelPickerList.appendChild(group);
@@ -17620,13 +17658,43 @@ self.addEventListener('message', async (e) => {
     modelPickerBtn.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); openModelPicker(); }
     });
+    // A picker row's delete control: confirm with the name and the bytes it frees, then delete that model's stores
+    // (deleteModelCaches unloads it first when it is the loaded model). Never selects or loads the row.
+    async function deletePickerModel(value) {
+      const m = MODELS[value], g = m && pickerGroups && pickerGroups.get(repoForModel(m));
+      if (!g) return;
+      const name = optionName([...modelSelect.options].find(x => x.value === value) || { textContent: m.label });
+      const others = Object.values(MODELS).filter(x => x !== m && modelUsesRepo(x, g.repo)).map(x => x.label);
+      const shared = others.length ? ` This also removes ${others.join(' and ')}, which use${others.length === 1 ? 's' : ''} the same files.` : '';
+      const active = value === activeModelKey || (MODELS[activeModelKey] && repoForModel(MODELS[activeModelKey]) === g.repo);
+      if (!confirm(`Delete ${name} from this device? This frees ${fmtBytes(g.bytes)}.${shared}${active ? ' The model is unloaded first.' : ''} It downloads again the next time you load it.`)) {
+        modelPickerList.focus();
+        return;
+      }
+      if (await deleteModelCaches([g])) showToast(`Deleted ${name} — ${fmtBytes(g.bytes)} freed`);
+      if (!modelPicker.hidden) { modelPickerList.focus(); focusPickerRow(modelPickerList.querySelector(`.mp-opt[data-value="${CSS.escape(value)}"]`) || pickerRows()[0]); }
+    }
     modelPickerList.addEventListener('click', (e) => {
+      const del = e.target.closest('.mp-del');
+      if (del) { e.stopPropagation(); deletePickerModel(del.closest('.mp-opt').dataset.value); return; }
       const row = e.target.closest('.mp-opt');
       if (row && row.getAttribute('aria-disabled') !== 'true') pickModel(row.dataset.value);
     });
     modelPickerList.addEventListener('keydown', (e) => {
+      // On a delete control: Enter/Space press it (the button's own click), Shift+Tab goes back to the list, Escape closes.
+      if (e.target.closest('.mp-del')) {
+        if (e.key === 'Escape') { e.preventDefault(); closeModelPicker(true); }
+        else if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); modelPickerList.focus(); }
+        else if (e.key === 'Tab') closeModelPicker(false);
+        return;
+      }
       const rows = pickerRows();
-      const i = rows.indexOf(modelPickerList.querySelector('.mp-opt.focused'));
+      const focusedRow = modelPickerList.querySelector('.mp-opt.focused');
+      const del = focusedRow && focusedRow.querySelector('.mp-del');
+      // Tab from a row with a delete control moves to that control; Delete presses it.
+      if (del && e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); del.focus(); return; }
+      if (del && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); deletePickerModel(focusedRow.dataset.value); return; }
+      const i = rows.indexOf(focusedRow);
       if (e.key === 'ArrowDown') { e.preventDefault(); focusPickerRow(rows[Math.min(rows.length - 1, i + 1)]); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); focusPickerRow(rows[Math.max(0, i - 1)]); }
       else if (e.key === 'Home') { e.preventDefault(); focusPickerRow(rows[0]); }
@@ -17649,22 +17717,32 @@ self.addEventListener('message', async (e) => {
     // the app to an idle state. Partial chunks already saved to IDB stay
     // there, so reselecting the same model picks up roughly where we left
     // off via the resumable-fetch path.
-    const progressCancelBtn = document.getElementById('progressCancelBtn');
-    progressCancelBtn.addEventListener('click', () => {
+    // No model loaded: terminate the worker and leave the picker on "Choose a model". Also used before deleting the
+    // loaded model's files. The select is cleared so picking the same model again fires change and loads it.
+    function resetToNoModel(status) {
+      if (loadResolvers) { const r = loadResolvers; loadResolvers = null; try { r.reject(new Error('Load cancelled')); } catch {} }
       try { LocalMind.runtime.unload(); } catch {}
       worker = null;
       modelReady = false;
       activeModelKey = null;
+      try { hideLoadError(); } catch {}
       progressSection.classList.remove('visible');
       // Base `.status-badge` class with no state modifier — neutral grey
       // instead of red (this is user-initiated, not an error).
       statusBadge.className = 'status-badge';
       statusSpinner.style.display = 'none';
-      statusText.textContent = 'Cancelled — pick a model';
+      statusText.textContent = status;
       chatInput.disabled = true;
       chatInput.placeholder = 'Select a model to load';
       sendBtn.disabled = true;
       searchSendBtn.disabled = true;
+      modelSelect.disabled = false;
+      modelSelect.selectedIndex = -1;
+      refreshModelPickerLabel();
+    }
+    const progressCancelBtn = document.getElementById('progressCancelBtn');
+    progressCancelBtn.addEventListener('click', () => {
+      resetToNoModel('Cancelled — pick a model');
       showToast('Download cancelled. Partial chunks kept for resume.');
     });
 
