@@ -9271,6 +9271,35 @@ self.addEventListener('message', async (e) => {
     } catch {}
 
     // ── Agent: Tool Registry ──────────────────────────────────
+    // calculate's evaluator. Strict: every token must be a number, an operator, a bracket, a comma or a known Math name,
+    // and anything else is an error the model sees (the old version deleted unknown characters and evaluated the rest,
+    // so "sqrt(16)" gave 16 and "17.5% of 2340 + 99" gave 116.5). "x% of y" is x/100·y, a trailing "x%" is x/100, "^" is
+    // a power, "log" is base 10 and "ln" natural. scripts/test-calculate.mjs checks it.
+    function evalMath(expression) {
+      let s = String(expression).toLowerCase().replace(/[×✕]/g, '*').replace(/÷/g, '/').replace(/(\d),(?=\d{3}\b)/g, '$1');
+      s = s.replace(/(\d+(?:\.\d+)?)\s*%\s*of\b/g, '($1/100)*').replace(/(\d+(?:\.\d+)?)\s*%(?!\s*[\d.(])/g, '($1/100)').replace(/\^/g, '**');
+      const NAMES = { sqrt: 'Math.sqrt', cbrt: 'Math.cbrt', abs: 'Math.abs', round: 'Math.round', floor: 'Math.floor', ceil: 'Math.ceil',
+        sin: 'Math.sin', cos: 'Math.cos', tan: 'Math.tan', asin: 'Math.asin', acos: 'Math.acos', atan: 'Math.atan',
+        log: 'Math.log10', log10: 'Math.log10', log2: 'Math.log2', ln: 'Math.log', exp: 'Math.exp', pow: 'Math.pow',
+        min: 'Math.min', max: 'Math.max', pi: 'Math.PI', e: 'Math.E' };
+      const re = /\s*(\d+\.?\d*(?:e[+-]?\d+)?|\.\d+|[a-z_][a-z0-9_]*|\*\*|[-+*\/%(),])/y;
+      let js = '', i = 0;
+      while (i < s.length) {
+        if (/^\s*$/.test(s.slice(i))) break;
+        re.lastIndex = i;
+        const m = re.exec(s);
+        if (!m) throw new Error(`cannot read "${s.slice(i).trim().slice(0, 20)}" in the expression`);
+        const tok = m[1];
+        if (/^[a-z_]/.test(tok)) { if (!(tok in NAMES)) throw new Error(`unknown name "${tok}"`); js += NAMES[tok]; }
+        else js += tok;
+        js += ' ';
+        i = re.lastIndex;
+      }
+      if (!js.trim()) throw new Error('empty expression');
+      const v = Function('"use strict"; return (' + js + ')')();
+      if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error('the result is not a finite number');
+      return v;
+    }
     const TOOL_REGISTRY = {
       calculate: {
         description: 'Evaluate a mathematical expression. Use for arithmetic, unit conversions, percentages.',
@@ -9280,11 +9309,7 @@ self.addEventListener('message', async (e) => {
           required: ['expression'],
         },
         execute(args) {
-          try {
-            const expr = String(args.expression).replace(/[^0-9+\-*/.()% ]/g, '');
-            const result = Function('"use strict"; return (' + expr + ')')();
-            return { result: Number(result) };
-          } catch (e) { return { error: e.message }; }
+          try { return { result: evalMath(args.expression) }; } catch (e) { return { error: e.message }; }
         },
       },
       get_current_time: {

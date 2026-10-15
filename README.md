@@ -94,7 +94,7 @@ With Settings → JavaScript API on, `window.localmind` is an OpenAI-shaped clie
 ## Verify it yourself
 
 ```bash
-for t in rollin download-stall endpoint engine-fetch inference-worker moe-expert-stream token-count render; do
+for t in rollin download-stall endpoint engine-fetch inference-worker moe-expert-stream token-count render calculate; do
   node scripts/test-$t.mjs || { echo "FAILED: $t"; break; }
 done
 ```
