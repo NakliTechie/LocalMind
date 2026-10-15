@@ -13,7 +13,7 @@ assert.ok(block, 'IMAGE-STORE block missing');
 assert.match(block[0], /const IMAGE_DB = 'localmind-images', IMAGE_STORE = 'images';/);
 for (const fn of ['saveImageRecord', 'deleteImageRecord', 'clearImageRecords', 'listImageRecords']) assert.match(block[0], new RegExp(fn));
 
-const run = /async function runImageGen\(prompt\) \{[\s\S]*?\n    \}\n/.exec(src)[0];
+const run = /async function runImageGen\(prompt, \{ reuseRewrite = false \} = \{\}\) \{[\s\S]*?\n    \}\n/.exec(src)[0];
 assert.match(run, /saveImageRecord\(\{ id: `img-\$\{Date\.now\(\)\}-\$\{res\.seed\}`, created: Date\.now\(\), prompt, width: res\.width, height: res\.height,\s*seed: res\.seed, steps, engine:/);
 assert.match(run, /\.catch\(\(e\) => console\.warn\('Could not save the image to the Library:', e\)\);/, 'a failed save does not fail the run');
 assert.ok(run.indexOf('saveImageRecord(') < run.indexOf('showImagePreview(shown)'), 'saved as soon as the PNG exists');

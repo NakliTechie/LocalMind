@@ -2998,6 +2998,7 @@
             <input type="text" id="imageEndpointInput" placeholder="http://127.0.0.1:7860" style="width:180px" title="stable-diffusion.cpp sd-server base URL (no path). The server holds the weights; LocalMind sends the prompt and shows the image.">
           </label>
           <label id="imageCfgRow" style="display:none">CFG <input type="number" id="imageCfg" min="1" max="15" step="0.5" value="6" style="width:56px" title="Classifier-free guidance scale (Qwen-Image 2.1: ~6)"></label>
+          <label id="imageEnhanceRow" style="display:none" title="Before rendering, a small local model (Qwen-Image 2.1 prompt rewriter, 0.8B, ~812&nbsp;MB download on first use) expands your prompt into the detailed description Qwen-Image 2.1 was trained on and picks the aspect ratio. Runs in this tab; your prompt stays on this device.">Enhance prompt <input type="checkbox" id="imageEnhance"></label>
           <label>Size
             <select id="imageSize">
               <option value="512x512">512&times;512</option>
@@ -7791,6 +7792,9 @@ self.onmessage = async (e) => {
           temperature: cfg.temperature != null ? cfg.temperature : 0.7,
           top_p: cfg.top_p != null ? cfg.top_p : 0.9,
           top_k: cfg.top_k != null ? cfg.top_k : 40,
+          // The Image prompt rewriter (Qwen3.5 base) needs enable_thinking:false: with thinking on, all output goes to
+          // reasoning_content and the reply stays empty (night run 2026-10-06, item 2).
+          ...(cfg.chat_template_kwargs ? { chat_template_kwargs: cfg.chat_template_kwargs } : {}),
           abortSignal: abortController.signal,
         });
         for await (const chunk of stream) {
@@ -10720,6 +10724,7 @@ self.addEventListener('message', async (e) => {
     // model-cache list names them instead of falling through to "not in the picker".
     const COMPONENT_CACHE_LABELS = {
       'naklitechie/Qwen3.8-27B-DFlash2-ternary-bonsai2': 'DFlash 2 drafter \u00b7 Ternary Bonsai 2',
+      'ML-Intern-lab/Qwen-Image-2.1-PE-T2I-Pocket-0.8B': 'Image prompt rewriter \u00b7 Qwen-Image 2.1 Pocket 0.8B',
     };
     // A MODELS entry reads `repo` when its id is that HF repo, or a file URL inside it.
     const modelUsesRepo = (m, repo) => { const id = String(m.id || ''); return id === repo || (id.startsWith('http') && repoOfUrl(id) === repo); };
@@ -19789,6 +19794,8 @@ self.addEventListener('message', async (e) => {
     const imageEndpointInput = document.getElementById('imageEndpointInput');
     const imageCfgRow        = document.getElementById('imageCfgRow');
     const imageCfgInput      = document.getElementById('imageCfg');
+    const imageEnhanceRow    = document.getElementById('imageEnhanceRow');
+    const imageEnhanceInput  = document.getElementById('imageEnhance');
     const IMAGE_SERVER_DEFAULT_URL = 'http://127.0.0.1:7860';
     const isImageServer = () => imageModelSelect.value === 'local-server';
     function imageServerBase() {
@@ -19799,6 +19806,10 @@ self.addEventListener('message', async (e) => {
       const server = isImageServer();
       imageEndpointRow.style.display = server ? '' : 'none';
       imageCfgRow.style.display = server ? '' : 'none';
+      // The prompt rewriter is trained for Qwen-Image 2.1, which only the server engine runs (Chunk K notes: server
+      // engine only, not Bonsai), so the toggle shows with that engine alone.
+      imageEnhanceRow.style.display = server ? '' : 'none';
+      if (!server) unloadPromptRewriter();
       // Bonsai is a 4-step turbo model; a server-side flow model wants ~20 steps.
       // Each engine keeps its own step count, so switching back does not leave the
       // turbo model grinding through the server's 20 (5x slower, no better).
@@ -19850,6 +19861,153 @@ self.addEventListener('message', async (e) => {
       const savedImgEp = localStorage.getItem('lm_image_endpoint_url');
       if (savedImgEp) { imageEndpointInput.value = savedImgEp; settingsImageEndpointInput.value = savedImgEp; }
     } catch {}
+    // ── Image prompt rewriter (Chunk K, Route A) ──
+    // ML-Intern-lab's Qwen-Image-2.1-PE-T2I-Pocket-0.8B: a distilled copy of Qwen's own Qwen-Image 2.1 prompt
+    // rewriter. It turns a short request into one JSON object {"rewritten_prompt": "<long English description>",
+    // "wh_ratio": "16:9"}. 812 MB Q8_0 GGUF, run in its own wllama worker (the MiniCPM5 path, WebGPU when present).
+    // Two traps from the night run 2026-10-06: Qwen3.5's template thinks by default (all output lands in
+    // reasoning_content), so the call passes enable_thinking:false; and ~0.3% of draws are not valid JSON (model
+    // card), so a bad draw is resampled once and then the raw prompt is used. Pure helpers sit between the
+    // markers so scripts/test-prompt-rewriter.mjs runs them in Node.
+    /* promptRewriter:start */
+    // The ratios Qwen-Image 2.1 was trained on (the teacher's 2K table: 1:1, 4:3, 3:2, 16:9 and their transposes).
+    const REWRITE_RATIOS = [[1, 1], [4, 3], [3, 4], [3, 2], [2, 3], [16, 9], [9, 16]];
+    // "16:9" / "16/9" / "16x9" → the nearest allowed ratio as "W:H"; anything else → null (keep the chosen size).
+    function snapRewriteRatio(v) {
+      const m = /^\s*(\d+(?:\.\d+)?)\s*[:/x×]\s*(\d+(?:\.\d+)?)\s*$/i.exec(String(v == null ? '' : v));
+      if (!m) return null;
+      const r = parseFloat(m[1]) / parseFloat(m[2]);
+      if (!(r > 0) || !isFinite(r)) return null;
+      let best = null, bestD = Infinity;
+      for (const [w, h] of REWRITE_RATIOS) {
+        const d = Math.abs(Math.log(r) - Math.log(w / h));
+        if (d < bestD) { bestD = d; best = w + ':' + h; }
+      }
+      // Further than halfway past 16:9 (ratio ~2.4 or ~0.42) is not a ratio the model meant; ignore it.
+      return bestD <= 0.3 ? best : null;
+    }
+    // One model reply → { prompt, ratio } or null when it is not a usable rewrite. Tolerates a think block (the
+    // 9B teacher, or a template that thinks anyway), a code fence, and text around the object.
+    function parseRewriteOutput(text) {
+      let s = String(text == null ? '' : text);
+      const think = s.lastIndexOf('</think>');
+      if (think >= 0) s = s.slice(think + '</think>'.length);
+      const a = s.indexOf('{'), b = s.lastIndexOf('}');
+      if (a < 0 || b <= a) return null;
+      let j;
+      try { j = JSON.parse(s.slice(a, b + 1)); } catch { return null; }
+      if (!j || typeof j !== 'object') return null;
+      const prompt = typeof j.rewritten_prompt === 'string' ? j.rewritten_prompt.trim() : '';
+      if (prompt.length < 8) return null;
+      return { prompt, ratio: snapRewriteRatio(j.wh_ratio) };
+    }
+    // Width and height for a ratio at the chosen size's pixel count, each a multiple of 16 (the Qwen-Image VAE
+    // downsamples 8x and patches 2x2). No ratio → the chosen size unchanged.
+    function sizeForRewriteRatio(ratio, baseW, baseH, step = 16) {
+      const m = /^(\d+):(\d+)$/.exec(String(ratio || ''));
+      if (!m) return { width: baseW, height: baseH };
+      const r = parseInt(m[1], 10) / parseInt(m[2], 10);
+      const area = baseW * baseH;
+      const snap = (x) => Math.max(step, Math.round(x / step) * step);
+      return { width: snap(Math.sqrt(area * r)), height: snap(Math.sqrt(area / r)) };
+    }
+    // The rewriter keeps quoted in-image text verbatim only ~53% of the time (model card). Put back any quoted
+    // string from the request that the rewrite dropped, so a sign or a label still says what the user typed.
+    function reinjectQuotedText(request, rewritten) {
+      const quoted = [];
+      const re = /"([^"\n]{1,200})"|“([^”\n]{1,200})”/g;
+      let m;
+      while ((m = re.exec(String(request || '')))) {
+        const q = (m[1] || m[2] || '').trim();
+        if (q && !quoted.includes(q)) quoted.push(q);
+      }
+      const missing = quoted.filter((q) => !String(rewritten).includes(q));
+      if (!missing.length) return rewritten;
+      return String(rewritten).replace(/\s*$/, '') + ' The text in the image reads exactly: ' + missing.map((q) => '"' + q + '"').join(', ') + '.';
+    }
+    // generate(request) → raw model text. Up to `attempts` draws; the first one that parses wins. Every failure
+    // (bad JSON or a thrown error) falls back to the request as typed, with the reason.
+    async function rewriteImagePrompt(generate, request, attempts = 2) {
+      let reason = 'no valid JSON';
+      for (let i = 1; i <= attempts; i++) {
+        let out;
+        try { out = await generate(request); } catch (e) { reason = (e && e.message) || String(e); continue; }
+        const p = parseRewriteOutput(out);
+        if (p) return { prompt: reinjectQuotedText(request, p.prompt), ratio: p.ratio, rewritten: true, tries: i };
+      }
+      return { prompt: request, ratio: null, rewritten: false, tries: attempts, reason };
+    }
+    /* promptRewriter:end */
+    const PROMPT_REWRITER = {
+      repo: 'ML-Intern-lab/Qwen-Image-2.1-PE-T2I-Pocket-0.8B',
+      url: 'https://huggingface.co/ML-Intern-lab/Qwen-Image-2.1-PE-T2I-Pocket-0.8B/resolve/main/image21-pocket-rewriter-0.8B-Q8_0.gguf',
+      // The model card's sampling (temperature 1.0, top_p 0.95, top_k 20); a rewrite is ~450 tokens.
+      generationConfig: { max_new_tokens: 1024, temperature: 1.0, top_p: 0.95, top_k: 20, chat_template_kwargs: { enable_thinking: false } },
+    };
+    let rewriterWorker = null, rewriterReady = null;
+    function unloadPromptRewriter() {
+      const w = rewriterWorker;
+      rewriterWorker = null; rewriterReady = null;
+      if (w) { try { w.postMessage({ type: 'unload' }); } catch {} setTimeout(() => { try { w.terminate(); } catch {} }, 2000); }
+    }
+    // Load once per Image-mode visit; onProgress(loaded, total) while the GGUF downloads (OPFS-cached after).
+    function ensurePromptRewriter(onProgress) {
+      if (rewriterReady) return rewriterReady;
+      const w = createWllamaWorker();
+      rewriterWorker = w;
+      rewriterReady = new Promise((resolve, reject) => {
+        const onMsg = (e) => {
+          const d = e.data || {};
+          if (d.type === 'progress' && d.data && d.data.total) onProgress && onProgress(d.data.loaded, d.data.total);
+          else if (d.type === 'ready') { w.removeEventListener('message', onMsg); resolve(d.backend); }
+          else if (d.type === 'error') { w.removeEventListener('message', onMsg); reject(new Error(d.message)); }
+        };
+        w.addEventListener('message', onMsg);
+        w.addEventListener('error', (e) => reject(new Error((e && e.message) || 'the rewriter worker failed to start')));
+        w.postMessage({ type: 'load', modelId: PROMPT_REWRITER.url, contextSize: 2048 });
+      });
+      rewriterReady.catch(() => { if (rewriterWorker === w) unloadPromptRewriter(); });
+      return rewriterReady;
+    }
+    // One draw: the request as the only user turn (the model has no system prompt), the reply's text back.
+    function rewriterGenerate(request) {
+      const w = rewriterWorker;
+      if (!w) return Promise.reject(new Error('the prompt rewriter is not loaded'));
+      return new Promise((resolve, reject) => {
+        let out = '';
+        const done = () => { w.removeEventListener('message', onMsg); w.removeEventListener('error', onErr); };
+        const onMsg = (e) => {
+          const d = e.data || {};
+          if (d.type === 'token') out += d.token;
+          else if (d.type === 'complete') { done(); resolve(out); }
+          else if (d.type === 'error') { done(); reject(new Error(d.message)); }
+        };
+        const onErr = (e) => { done(); reject(new Error((e && e.message) || 'the rewriter worker stopped')); };
+        w.addEventListener('message', onMsg);
+        w.addEventListener('error', onErr);
+        w.postMessage({ type: 'generate', messages: [{ role: 'user', content: request }], generationConfig: PROMPT_REWRITER.generationConfig });
+      });
+    }
+    try { imageEnhanceInput.checked = localStorage.getItem('lm_image_enhance') === '1'; } catch {}
+    imageEnhanceInput.addEventListener('change', () => {
+      try { localStorage.setItem('lm_image_enhance', imageEnhanceInput.checked ? '1' : '0'); } catch {}
+      if (!imageEnhanceInput.checked) unloadPromptRewriter();
+    });
+    // The size the user picked, kept apart from a size a rewrite set, so the next rewrite keeps the user's pixel count.
+    imageSizeSel.dataset.userValue = imageSizeSel.value;
+    imageSizeSel.addEventListener('change', () => { imageSizeSel.dataset.userValue = imageSizeSel.value; });
+    // Show a rewrite's size in the Size field: select it, adding an option for it when the list has none.
+    function showRewriteSize(width, height) {
+      const v = width + 'x' + height;
+      for (const o of [...imageSizeSel.options]) if (o.dataset.rewrite && o.value !== v && o.value !== imageSizeSel.dataset.userValue) o.remove();
+      if (![...imageSizeSel.options].some((o) => o.value === v)) {
+        const o = document.createElement('option');
+        o.value = v; o.dataset.rewrite = '1'; o.textContent = width + '×' + height + ' (enhanced)';
+        imageSizeSel.appendChild(o);
+      }
+      imageSizeSel.value = v;
+    }
+    let lastRewrite = null;   // { request, prompt, ratio, width, height } — a re-roll reuses it instead of rewriting again
     // POST the prompt to sd-server and hand back the same {bytes,width,height,seed} shape the
     // in-tab worker returns, so the rendering path below is shared.
     async function generateImageViaServer({ prompt, width, height, steps, seed, cfg }) {
@@ -20110,6 +20268,7 @@ self.addEventListener('message', async (e) => {
       modeCommand('clone', 'Clone a voice', 'chipClone'),
       { id: 'mode.research', title: 'Deep research (needs web search)', group: 'Modes', run: () => { if (activeMode !== 'research') chipResearch.click(); }, enabled: () => !generating },
       { id: 'search.toggle', title: 'Web search for the next message: on / off', group: 'Modes', run: () => chipSearch.click(), enabled: () => !generating },
+      { id: 'image.enhance', title: 'Image: Enhance prompt on / off (local server engine)', group: 'Modes', run: () => imageEnhanceInput.click(), enabled: () => !generating && isImageServer() },
       { id: 'library.chats', title: 'Library: search all chats', group: 'Data', run: () => openLibrary('chats') },
       { id: 'library.images', title: 'Library: saved images', group: 'Data', run: () => openLibrary('images') },
       { id: 'memory.open', title: 'Library: Memory', group: 'Data', run: () => openLibrary('memory') },
@@ -20223,7 +20382,7 @@ self.addEventListener('message', async (e) => {
       if ((e.key === 'v' || e.key === 'V') && vKeyDown) { vKeyDown = false; if (activeMode === 'voice') voiceStopRecording(); }
     });
     imageStepsInput.addEventListener('input', () => { imageStepsVal.textContent = imageStepsInput.value; });
-    imageReroll.addEventListener('click', () => { if (generating || !lastImagePrompt) return; imageSeedInput.value = ''; runImageGen(lastImagePrompt); });
+    imageReroll.addEventListener('click', () => { if (generating || !lastImagePrompt) return; imageSeedInput.value = ''; runImageGen(lastImagePrompt, { reuseRewrite: true }); });
     // Phone/tablet check (touch + small viewport) — used to gate heavy capabilities.
     function isMobileDevice() {
       return window.matchMedia('(pointer: coarse)').matches && window.matchMedia('(max-width: 820px)').matches;
@@ -20312,7 +20471,52 @@ self.addEventListener('message', async (e) => {
       if (thumb) thumb.classList.add('current');
     }
 
-    async function runImageGen(prompt) {
+    // Enhance prompt (server engine only): rewrite the request, or reuse the last rewrite on a re-roll. Returns what
+    // to render: { renderPrompt, width, height, enhance } where enhance is null when the toggle is off.
+    async function prepareEnhancedPrompt(prompt, w, h, { reuse = false, onStatus } = {}) {
+      if (!(isImageServer() && imageEnhanceInput.checked)) return { renderPrompt: prompt, width: w, height: h, enhance: null };
+      const baseVal = imageSizeSel.dataset.userValue || imageSizeSel.value;
+      const [bw, bh] = baseVal.split('x').map(Number);
+      if (reuse && lastRewrite && lastRewrite.request === prompt && lastRewrite.base === baseVal) {
+        return { renderPrompt: lastRewrite.prompt, width: lastRewrite.width, height: lastRewrite.height, enhance: lastRewrite };
+      }
+      const t0 = Date.now();
+      let r;
+      try {
+        onStatus('Loading the prompt rewriter…', 2);
+        await ensurePromptRewriter((loaded, total) => onStatus(`Downloading the prompt rewriter (first use) — ${Math.round(loaded / 1048576)} / ${Math.round(total / 1048576)} MB`, Math.round(10 * loaded / total)));
+        onStatus('Enhancing the prompt…', 10);
+        r = await rewriteImagePrompt(rewriterGenerate, prompt);
+      } catch (e) {
+        r = { prompt, ratio: null, rewritten: false, tries: 0, reason: (e && e.message) || String(e) };
+      }
+      const size = r.rewritten ? sizeForRewriteRatio(r.ratio, bw, bh) : { width: w, height: h };
+      const enhance = { ...r, request: prompt, base: baseVal, width: size.width, height: size.height, seconds: (Date.now() - t0) / 1000 };
+      if (r.rewritten) { lastRewrite = enhance; showRewriteSize(size.width, size.height); }
+      return { renderPrompt: r.prompt, width: size.width, height: size.height, enhance };
+    }
+    // The rewrite under the image, collapsed: what was actually rendered, or why the prompt went as typed.
+    function enhanceNote(enhance) {
+      const box = document.createElement('details');
+      box.className = 'gen-image-meta gen-image-enhance';
+      const sum = document.createElement('summary');
+      if (enhance.rewritten) {
+        sum.textContent = `Enhanced prompt${enhance.ratio ? ' · ' + enhance.ratio : ''} · ${enhance.seconds.toFixed(1)}s`;
+        const body = document.createElement('div');
+        body.style.cssText = 'white-space:pre-wrap;margin-top:4px';
+        body.textContent = enhance.prompt;
+        box.append(sum, body);
+      } else {
+        sum.textContent = 'Enhance prompt: used your prompt as typed';
+        const body = document.createElement('div');
+        body.style.marginTop = '4px';
+        body.textContent = `The rewriter gave no usable result (${enhance.reason || 'no valid JSON'}).`;
+        box.append(sum, body);
+      }
+      return box;
+    }
+
+    async function runImageGen(prompt, { reuseRewrite = false } = {}) {
       if (generating) return;
       lastImagePrompt = prompt;
       generating = true; imageBusy = true;
@@ -20327,13 +20531,21 @@ self.addEventListener('message', async (e) => {
         const [w, h] = imageSizeSel.value.split('x').map(Number);
         const steps = parseInt(imageStepsInput.value, 10) || 4;
         const seed = imageSeedInput.value.trim() === '' ? Math.floor(Math.random() * 1e9) : (parseInt(imageSeedInput.value, 10) || 0);
-        let res;
+        let res, enhance = null;
         if (isImageServer()) {
           const cfg = parseFloat(imageCfgInput.value) || 6;
+          const prep = await prepareEnhancedPrompt(prompt, w, h, { reuse: reuseRewrite, onStatus: (text, pct) => {
+            imageProgressFill.style.width = pct + '%';
+            imageProgressText.textContent = text;
+            ph.bubble.innerHTML = '';
+            const sp = document.createElement('span'); sp.className = 'gen-image-meta'; sp.textContent = text;
+            ph.bubble.appendChild(sp);
+          } });
+          enhance = prep.enhance;
           imageProgressFill.style.width = '15%';
-          imageProgressText.textContent = `Generating on the local server — ${w}×${h}, ${steps} steps, cfg ${cfg}…`;
+          imageProgressText.textContent = `Generating on the local server — ${prep.width}×${prep.height}, ${steps} steps, cfg ${cfg}${enhance && enhance.rewritten ? ', enhanced prompt' : ''}…`;
           ph.bubble.innerHTML = `<span class="gen-image-meta">Generating on the local server (${steps} steps)…</span>`;
-          res = await generateImageViaServer({ prompt, width: w, height: h, steps, seed, cfg });
+          res = await generateImageViaServer({ prompt: prep.renderPrompt, width: prep.width, height: prep.height, steps, seed, cfg });
         } else res = await LocalMind.runtime.generateImage({
           prompt, width: w, height: h, steps, seed,
           onStep: (s, total) => {
@@ -20347,7 +20559,8 @@ self.addEventListener('message', async (e) => {
         const url = URL.createObjectURL(png);
         // Keep it for the Library's Images tab (best-effort: a storage failure does not fail the generation).
         saveImageRecord({ id: `img-${Date.now()}-${res.seed}`, created: Date.now(), prompt, width: res.width, height: res.height,
-          seed: res.seed, steps, engine: isImageServer() ? 'local-server' : imageModelSelect.value, ms, png })
+          seed: res.seed, steps, engine: isImageServer() ? 'local-server' : imageModelSelect.value, ms, png,
+          ...(enhance && enhance.rewritten ? { enhancedPrompt: enhance.prompt } : {}) })
           .catch((e) => console.warn('Could not save the image to the Library:', e));
         ph.bubble.innerHTML = '';
         const img = document.createElement('img');
@@ -20357,6 +20570,7 @@ self.addEventListener('message', async (e) => {
         meta.className = 'gen-image-meta';
         meta.textContent = `${res.width}×${res.height} · seed ${res.seed} · ${(ms / 1000).toFixed(1)}s · “${prompt}”`;
         ph.bubble.appendChild(meta);
+        if (enhance) ph.bubble.appendChild(enhanceNote(enhance));
         const thumb = document.createElement('img');
         thumb.src = url; thumb.title = prompt; thumb.alt = prompt;
         const shown = { url, prompt, meta: meta.textContent, seed: res.seed, thumb };
@@ -20393,6 +20607,7 @@ self.addEventListener('message', async (e) => {
     }
     function onLeaveImageMode() {
       try { LocalMind.runtime.unloadImage(); } catch {}
+      unloadPromptRewriter();
       imageProgressFill.style.width = '0%';
       imageProgressText.textContent = imageIdleText();
       maybeRestoreChat();
