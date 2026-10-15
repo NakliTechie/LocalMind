@@ -15,7 +15,7 @@
  *   const m = await Qwen35MoeSsd.load(null, { url: '…/Qwen3.6-35B-A3B-Q8_0.gguf', poolBytes });
  */
 
-import { MiniCpmVVision } from './minicpmv_vision.js';
+import { MiniCpmVVision, preprocessImage, roundEven } from './minicpmv_vision.js';
 import { Qwen3MoeSsd, STORAGE, COPY_SRC, COPY_DST, MAP_READ, UNIFORM, I8, TOK, Q6K_BLOCK, Q4_KERNELS, Q4_SG_KERNELS, Q4_BATCH_KERNELS } from './qwen3_moe_ssd.js';
 
 export const QWEN36_35B_A3B = {
@@ -1436,9 +1436,11 @@ export class MiniCpmV47Ssd extends Qwen35MoeSsd {
     return this.vision;
   }
 
-  // Prompt segments: text ids, and per image { embeds (tile tokens + the </image> separator row), nx, ny, n }.
-  // As llama.cpp's mtmd lays a MiniCPM-V 4.7 image out (mtmd.cpp, add_canvas_chunk): the text
-  // "<image_id>N</image_id><image>", then the overview tile's tokens and its separator.
+  // Prompt segments: text ids, and per image { embeds, rel, entries } (see imagePositions). As llama.cpp's mtmd lays
+  // a MiniCPM-V 4.7 image out (mtmd.cpp add_canvas_chunk): the text "<image_id>N</image_id><image>", then one canvas
+  // chunk: the overview tile and the slices row by row, each followed by its separator rows (v.tok_embd_sep:
+  // 0 </image>, 1 <slice>, 2 </slice>, 3 \n). An image part is { type: 'image', rgb (packed RGB bytes), width, height }
+  // (preprocessed here exactly as llama.cpp does), or { type: 'image', pixels, width, height }, one ready tile.
   async imageSegments(messages, opts) {
     const images = [];
     for (const m of messages) if (Array.isArray(m.content)) for (const x of m.content) if (x && x.type === 'image') images.push(x);
@@ -1450,21 +1452,51 @@ export class MiniCpmV47Ssd extends Qwen35MoeSsd {
       if (text) segs.push({ ids: this.tokenizer.encode(text) });
       if (k >= images.length) continue;
       const img = images[k];
-      if (img.width * img.height > 448 * 448 || img.width % 56 || img.height % 56) throw new Error(`image ${img.width}×${img.height}: one tile of at most 448×448, sides multiples of 56`);
-      const enc = await this.vision.encode(img.pixels, img.width, img.height);
-      const tile = await this.vision.readback(enc.buffer, enc.tokens * enc.dim);
-      enc.buffer.destroy();
-      if (enc.dim !== dim) throw new Error(`vision output ${enc.dim} wide, text model ${dim}`);
-      const n = enc.tokens + 1, embeds = new Float32Array(n * dim);
-      embeds.set(tile); embeds.set(sep.subarray(0, dim), enc.tokens * dim);   // separator row 0: </image>
-      segs.push({ embeds, n, nx: img.width / 56, ny: img.height / 56 });
+      const pre = img.rgb ? preprocessImage(img.rgb, img.width, img.height) : { tiles: [img], grid: null };
+      const [gx, gy] = pre.grid || [0, 0];
+      const entries = [], rows = [];
+      for (let e = 0; e < pre.tiles.length; e++) {
+        const tile = pre.tiles[e];
+        if (tile.width % 56 || tile.height % 56) throw new Error(`image tile ${tile.width}×${tile.height}: sides must be multiples of 56`);
+        const enc = await this.vision.encode(tile.pixels, tile.width, tile.height);
+        if (enc.dim !== dim) throw new Error(`vision output ${enc.dim} wide, text model ${dim}`);
+        rows.push(await this.vision.readback(enc.buffer, enc.tokens * enc.dim));
+        enc.buffer.destroy();
+        const s = e - 1, last = e === pre.tiles.length - 1;
+        const seps = e === 0 ? (pre.grid ? [0, 1] : [0]) : last ? [2] : (s % gx === gx - 1 ? [2, 3, 1] : [2, 1]);
+        for (const r of seps) rows.push(sep.subarray(r * dim, (r + 1) * dim));
+        entries.push({ gw: tile.width / 56, gh: tile.height / 56, seps: seps.length });
+      }
+      const n = entries.reduce((a, e) => a + e.gw * e.gh + e.seps, 0), embeds = new Float32Array(n * dim);
+      let o = 0; for (const r of rows) { embeds.set(r, o); o += r.length; }
+      segs.push({ embeds, n, entries, grid: pre.grid, rel: MiniCpmV47Ssd.imagePositions(entries, pre.grid) });
     }
     return segs;
   }
 
-  // Positions as mtmd_canvas_decoder_pos gives them for an overview-only image: every tile token shares t = the
-  // position after <image>; its sections are z = base (<image>'s position), y = base + row, x = base + col; the
-  // separator takes t + 1 in every slot. The image uses 2 text positions.
+  // Relative positions for one image's tokens, as mtmd_canvas_decoder_pos gives them: per token [dt, dy, dx, sep]
+  // where a tile token's position is t = pos0 + dt, z = base, y = base + dy, x = base + dx (base = pos0 - 1, the
+  // <image> token), and a separator's (sep = 1) is pos0 + dt in every slot. Tiles share one t each; separators take
+  // one each. The canvas is grid × the last tile's token grid; the overview is stretched over it (round(linspace),
+  // ties to even) and slice s fills cell (s % cols, s / cols).
+  static imagePositions(entries, grid) {
+    const last = entries[entries.length - 1], nx = last.gw, ny = last.gh;
+    const cw = grid ? grid[0] * nx : nx, ch = grid ? grid[1] * ny : ny;
+    const scale = (c, g, cv) => (g <= 1 || cv <= 1 ? 0 : Math.min(roundEven((c * (cv - 1)) / (g - 1)), cv - 1));
+    const rel = [];
+    let t = 0;
+    entries.forEach((e, k) => {
+      for (let i = 0; i < e.gw * e.gh; i++) {
+        const row = Math.floor(i / e.gw), col = i % e.gw;
+        const [h, w] = k === 0 ? [scale(row, e.gh, ch), scale(col, e.gw, cw)] : [Math.floor((k - 1) / grid[0]) * ny + row, ((k - 1) % grid[0]) * nx + col];
+        rel.push([t, h, w, 0]);
+      }
+      for (let j = 0; j < e.seps; j++) rel.push([t + 1 + j, 0, 0, 1]);
+      t += 1 + e.seps;
+    });
+    return { rel, nPos: t };
+  }
+
   async prefillSegments(segs, want = 'argmax') {
     this.reset();
     let r = null;
@@ -1477,11 +1509,23 @@ export class MiniCpmV47Ssd extends Qwen35MoeSsd {
         }
         continue;
       }
-      if (sg.n > this.chunkTokens) throw new Error(`image of ${sg.n} tokens > chunk ${this.chunkTokens}`);
-      const pos0 = this.tNext, base = pos0 - 1, nt = sg.nx * sg.ny, pos = new Int32Array(sg.n * 4);
-      for (let i = 0; i < nt; i++) pos.set([pos0, base, base + Math.floor(i / sg.nx), base + (i % sg.nx)], i * 4);
-      for (let j = nt; j < sg.n; j++) { const p = pos0 + 1 + (j - nt); pos.set([p, p, p, p], j * 4); }
-      r = await this.prefillChunk(new Array(sg.n).fill(0xffffffff), last ? want : 'none', { embeds: sg.embeds, pos, tNext: pos0 + 1 + (sg.n - nt) });
+      // Whole tiles (with their separators) per chunk: a tile's tokens must see each other, so a tile never splits.
+      const pos0 = this.tNext, base = pos0 - 1, dim = this.cfg.hidden, { rel, nPos } = sg.rel;
+      const spans = []; let at = 0;
+      for (const e of sg.entries) { const len = e.gw * e.gh + e.seps; if (len > this.chunkTokens) throw new Error(`a tile of ${len} tokens > chunk ${this.chunkTokens}`); spans.push([at, len]); at += len; }
+      let ci = 0;
+      while (ci < spans.length) {
+        const start = spans[ci][0]; let len = 0;
+        while (ci < spans.length && len + spans[ci][1] <= this.chunkTokens) { len += spans[ci][1]; ci++; }
+        const pos = new Int32Array(len * 4);
+        for (let i = 0; i < len; i++) {
+          const [dt, dy, dx, isSep] = rel[start + i];
+          if (isSep) pos.fill(pos0 + dt, i * 4, i * 4 + 4); else pos.set([pos0 + dt, base, base + dy, base + dx], i * 4);
+        }
+        const end = ci >= spans.length;
+        r = await this.prefillChunk(new Array(len).fill(0xffffffff), last && end ? want : 'none',
+          { embeds: sg.embeds.subarray(start * dim, (start + len) * dim), pos, tNext: pos0 + nPos });
+      }
     }
     return r;
   }

@@ -210,6 +210,110 @@ struct P { gw: u32, C: u32, nq: u32, withMean: u32 }
 }`,
 };
 
+// ── Preprocessing: llama.cpp a0e6dc738's MiniCPM-V path (mtmd-image.cpp: mtmd_image_preprocessor_minicpmv over
+// llava_uhd), so a PNG gives the same pixels as llama-mtmd-cli. Slice size 448, alignment 56 (patch 14 × 4), sizes
+// rounded half to even (Python's round), at most 9 slices, Pillow's bicubic (a = -0.5, 22-bit fixed point), no padding.
+const SLICE = 448, ALIGN = 56, MAX_SLICES = 9;
+export const roundEven = (v) => { const f = Math.floor(v), d = v - f; return d > 0.5 ? f + 1 : d < 0.5 ? f : (f % 2 === 0 ? f : f + 1); };
+const ensureDivide = (len, a) => Math.max(roundEven(len / a) * a, a);
+// get_best_resize: float32 arithmetic as the C++ does it.
+function bestResize(w, h, res, a, upscale) {
+  if (w * h > res * res || upscale) {
+    const r = Math.fround(w / h);
+    h = Math.trunc(Math.fround(res / Math.fround(Math.sqrt(r))));
+    w = Math.trunc(Math.fround(h * r));
+  }
+  return [ensureDivide(w, a), ensureDivide(h, a)];
+}
+function bestGrid(multiple, logRatio) {
+  const cands = [];
+  for (const n of [multiple - 1, multiple, multiple + 1]) {
+    if (n === 1 || n > MAX_SLICES) continue;
+    for (let m = 1; m <= n; m++) if (n % m === 0) cands.push([m, n / m]);
+  }
+  let best = [1, 1], minErr = Infinity;
+  for (const g of cands) { const err = Math.fround(Math.abs(logRatio - Math.log(g[0] / g[1]))); if (err < minErr) { best = g; minErr = err; } }
+  return best;
+}
+// The tiles of a w × h image: { overview: [w, h], grid: [cols, rows] | null, cell: [w, h], refined: [w, h] }.
+export function planImage(w, h) {
+  const ratio = Math.fround(Math.fround(w * h) / (SLICE * SLICE));
+  if (ratio <= 1) return { overview: bestResize(w, h, SLICE, ALIGN, true), grid: null, cell: null, refined: null };
+  const overview = bestResize(w, h, SLICE, ALIGN, false);
+  const grid = bestGrid(Math.min(Math.ceil(ratio), MAX_SLICES), Math.fround(Math.log(Math.fround(w / h))));
+  const rw = ensureDivide(w, grid[0]), rh = ensureDivide(h, grid[1]);
+  const cell = bestResize(Math.trunc(rw / grid[0]), Math.trunc(rh / grid[1]), SLICE, ALIGN, true);
+  return { overview, grid, cell, refined: [cell[0] * grid[0], cell[1] * grid[1]] };
+}
+// Pillow-compatible separable bicubic resize of packed RGB bytes (img_tool::resize_pillow).
+export function resizeBicubic(src, sw, sh, tw, th) {
+  if (sw === tw && sh === th) return src;
+  const PB = 22, filter = (x) => { x = Math.abs(x); const a = -0.5; return x < 1 ? ((a + 2) * x - (a + 3)) * x * x + 1 : x < 2 ? (((x - 5) * x + 8) * x - 4) * a : 0; };
+  const weights = (inSize, outSize) => {
+    const scale = inSize / outSize, fs = Math.max(1, scale), support = 2 * fs, ksize = Math.ceil(support) * 2 + 1;
+    const bounds = new Int32Array(outSize * 2), k = new Int32Array(outSize * ksize), pre = new Float64Array(ksize);
+    for (let xx = 0; xx < outSize; xx++) {
+      const center = (xx + 0.5) * scale, ss = 1 / fs;
+      let xmin = Math.trunc(center - support + 0.5); if (xmin < 0) xmin = 0;
+      let xmax = Math.trunc(center + support + 0.5); if (xmax > inSize) xmax = inSize;
+      xmax -= xmin;
+      let ww = 0;
+      for (let x = 0; x < xmax; x++) { const w = filter((x + xmin - center + 0.5) * ss); pre[x] = w; ww += w; }
+      for (let x = 0; x < ksize; x++) {
+        const w = x < xmax ? (ww !== 0 ? pre[x] / ww : pre[x]) : 0;
+        k[xx * ksize + x] = Math.trunc(w * 4194304 + (w < 0 ? -0.5 : 0.5));
+      }
+      bounds[xx * 2] = xmin; bounds[xx * 2 + 1] = xmax;
+    }
+    return { bounds, k, ksize };
+  };
+  const clip8 = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
+  let cur = src, cw = sw;
+  if (tw !== sw) {
+    const { bounds, k, ksize } = weights(sw, tw), out = new Uint8Array(tw * sh * 3);
+    for (let y = 0; y < sh; y++) for (let xx = 0; xx < tw; xx++) {
+      const xmin = bounds[xx * 2], cnt = bounds[xx * 2 + 1], kb = xx * ksize;
+      let s0 = 1 << (PB - 1), s1 = s0, s2 = s0;
+      for (let x = 0; x < cnt; x++) { const p = (y * sw + xmin + x) * 3, w = k[kb + x]; s0 += cur[p] * w; s1 += cur[p + 1] * w; s2 += cur[p + 2] * w; }
+      const o = (y * tw + xx) * 3; out[o] = clip8(s0 >> PB); out[o + 1] = clip8(s1 >> PB); out[o + 2] = clip8(s2 >> PB);
+    }
+    cur = out; cw = tw;
+  }
+  if (th !== sh) {
+    const { bounds, k, ksize } = weights(sh, th), row = cw * 3, out = new Uint8Array(row * th), acc = new Float64Array(row);
+    for (let yy = 0; yy < th; yy++) {
+      const ymin = bounds[yy * 2], cnt = bounds[yy * 2 + 1], kb = yy * ksize;
+      acc.fill(1 << (PB - 1));
+      for (let y = 0; y < cnt; y++) { const w = k[kb + y], rb = (ymin + y) * row; for (let i = 0; i < row; i++) acc[i] += cur[rb + i] * w; }
+      for (let i = 0; i < row; i++) out[yy * row + i] = clip8(acc[i] >> PB);
+    }
+    cur = out;
+  }
+  return cur;
+}
+// (x / 255 - 0.5) / 0.5 in float32, as clip_image_f32::normalize.
+function normalize(rgb) {
+  const out = new Float32Array(rgb.length);
+  for (let i = 0; i < rgb.length; i++) out[i] = Math.fround(Math.fround(Math.fround(rgb[i] / 255) - 0.5) / 0.5);
+  return out;
+}
+function crop(src, sw, x0, y0, w, h) {
+  const out = new Uint8Array(w * h * 3);
+  for (let y = 0; y < h; y++) out.set(src.subarray(((y0 + y) * sw + x0) * 3, ((y0 + y) * sw + x0 + w) * 3), y * w * 3);
+  return out;
+}
+// An image (packed RGB bytes, w × h) → its tiles, overview first then slices row by row, each { pixels, width, height },
+// and the slice grid ([cols, rows], or null for an overview-only image).
+export function preprocessImage(rgb, w, h) {
+  const plan = planImage(w, h);
+  const tiles = [{ width: plan.overview[0], height: plan.overview[1], pixels: normalize(resizeBicubic(rgb, w, h, plan.overview[0], plan.overview[1])) }];
+  if (plan.grid) {
+    const [rw, rh] = plan.refined, refined = resizeBicubic(rgb, w, h, rw, rh), [cw, ch] = plan.cell;
+    for (let r = 0; r < plan.grid[1]; r++) for (let c = 0; c < plan.grid[0]; c++) tiles.push({ width: cw, height: ch, pixels: normalize(crop(refined, rw, c * cw, r * ch, cw, ch)) });
+  }
+  return { tiles, grid: plan.grid, plan };
+}
+
 export class MiniCpmVVision {
   // read(off, len) → Uint8Array of the mmproj GGUF's bytes [off, off + len). size: the file's byte length.
   static async load(device, { read, onProgress = () => {} } = {}) {

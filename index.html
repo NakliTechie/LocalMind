@@ -2653,7 +2653,7 @@
               <li><strong>LFM2.5 230M &middot; GGUF</strong> (~170 MB) &mdash; the same LFM2.5 230M through wllama (llama.cpp &rarr; WebAssembly), reading a Q5_K_M GGUF. WebGPU when your browser has it, CPU otherwise, so it also runs where WebGPU is missing.</li>
               <li><strong>MiniCPM5 2B &middot; GGUF</strong> (~1.6 GB) &mdash; text + agent (tool calling). OpenBMB&rsquo;s MiniCPM5-2B (Sept 2026, Apache-2.0) loaded from its first-party GGUF through wllama (llama.cpp &rarr; WebAssembly) &mdash; there is no ONNX export, so this is the only way to run it in the tab. WebGPU when your browser has it, CPU otherwise. Gets <strong>16K context</strong>, twice the other GGUF models, because its 2 KV heads make the cache unusually cheap; its native 131K is capped since wllama reserves the whole cache up front. Long-document retrieval is what it is best at. It emits tool calls in its own XML format rather than the <code>&lt;tool_call&gt;</code> JSON the other models use; LocalMind parses both. Short-horizon tool use is its strength &mdash; don&rsquo;t expect long multi-step agent runs to hold up.</li>
               <li><strong>Qwen3.6 35B-A3B &middot; SSD-streamed (experimental)</strong> (~37 GB) &mdash; text, with reasoning. Alibaba's Qwen3.6-35B-A3B mixture-of-experts at Q8_0 (36.9 GB, more than most laptops' RAM) on a from-scratch WebGPU engine: the dense layers, router, KV cache and Gated-DeltaNet state stay on the GPU while the 10,240 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~37 GB of disk; a Hugging Face token in Settings speeds the download). About 9 tokens/s on an M4 Pro with 24 GB; prompts are read one token at a time for now. Greedy output matches llama.cpp. Flip <strong>Show reasoning</strong> for its chain-of-thought.</li>
-              <li><strong>MiniCPM-V 4.7 35B-A3B &middot; SSD-streamed (experimental)</strong> (~20 GB) &mdash; text and images, with reasoning. OpenBMB's MiniCPM-V 4.7 (released 2026-10): a 35B mixture-of-experts (256 experts, 8 active per token, about 3B parameters per token) built on the same architecture as Qwen3.6 35B-A3B, from OpenBMB's own 4-bit (Q4_0) GGUF. Attention, the recurrent layers, routers and KV cache stay on the GPU while the routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~20 GB of disk). Attach an image and it reads it: the first image downloads the vision encoder (1.1 GB) into this browser's storage once. Each image is scaled to one 448 &times; 448 tile for now, so fine print in a large image can be lost. It can use tools (calculator, time, memory, reminders): it called the right tool on 6 of 6 test prompts and answered 5 of 5 plain questions without one.</li>
+              <li><strong>MiniCPM-V 4.7 35B-A3B &middot; SSD-streamed (experimental)</strong> (~20 GB) &mdash; text and images, with reasoning. OpenBMB's MiniCPM-V 4.7 (released 2026-10): a 35B mixture-of-experts (256 experts, 8 active per token, about 3B parameters per token) built on the same architecture as Qwen3.6 35B-A3B, from OpenBMB's own 4-bit (Q4_0) GGUF. Attention, the recurrent layers, routers and KV cache stay on the GPU while the routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~20 GB of disk). Attach an image and it reads it: the first image downloads the vision encoder (1.1 GB) into this browser's storage once. A large image is read as an overview plus up to 9 tiles of about 448 &times; 448 (up to about 650 image tokens), as the model was trained. It can use tools (calculator, time, memory, reminders): it called the right tool on 6 of 6 test prompts and answered 5 of 5 plain questions without one.</li>
               <li><strong>Gemma 4 26B-A4B &middot; SSD-streamed (experimental)</strong> (~14 GB) &mdash; text, with reasoning. Google's Gemma 4 26B-A4B mixture-of-experts (128 experts, 8 active per token) from its official 4-bit QAT GGUF (14.4 GB) on the same from-scratch WebGPU engine family: attention, the dense MLP, routers and KV cache stay on the GPU (~1.6 GB plus a 4 GB expert pool) while the 3,840 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~14 GB of disk; about 12 minutes on a fast connection). About 23 tokens/s on an M4 Pro with 24 GB, and prompts are read in chunks at about 55 tokens/s. Greedy output matches llama.cpp. Flip <strong>Show reasoning</strong> for its thinking.</li>
               <li><strong>LFM2.5 24B-A2B &middot; SSD-streamed (experimental)</strong> (~13.6 GB) &mdash; text, reasoning-only. Liquid AI's LFM2.5-24B-A2B (released 2026-10-13): a 24B mixture-of-experts (64 experts, 4 active per token, about 2.4B parameters per token) with short-convolution and attention layers, from Liquid's own 4-bit GGUF. Short-convolution and attention layers, routers and KV cache stay on the GPU while the 2,432 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~13.6 GB of disk). About 16 tokens/s on an M4 Pro with 24 GB, and prompts are read in chunks at about 50 tokens/s. Greedy output matches llama.cpp (8 of 8 prompts). It always reasons before it answers, so every reply opens with its reasoning. It can use tools (calculator, time, memory, reminders): it called the right tool on 6 of 6 test prompts and answered 5 of 5 plain questions without one.</li>
             </ul>
@@ -8343,21 +8343,16 @@ let lastHistoryLen = 0; // tracks conversation length to restart the state on a 
 
 const WEIGHTS_LABEL = `${MODEL_NAME} into on-device storage`;
 const post = (m) => self.postMessage(m);
-// One vision tile (MiniCPM-V 4.7, layer 1): the image scaled to about 448 × 448 pixels of area, aspect ratio kept,
-// sides rounded to multiples of 56 (14-pixel patches, two 2×2 merges), normalised to (x/255 - 0.5) / 0.5. A larger
-// image loses detail here; slicing it into tiles is the next layer.
-async function tilePixels(buf, mimeType) {
-  const bmp = await createImageBitmap(new Blob([buf], { type: mimeType || 'image/jpeg' }));
-  const s = Math.sqrt((448 * 448) / (bmp.width * bmp.height));
-  let w = Math.max(56, Math.round((bmp.width * s) / 56) * 56), h = Math.max(56, Math.round((bmp.height * s) / 56) * 56);
-  while (w * h > 448 * 448) { if (w >= h) w -= 56; else h -= 56; }
-  const cv = new OffscreenCanvas(w, h), cx = cv.getContext('2d');
-  cx.imageSmoothingEnabled = true; cx.imageSmoothingQuality = 'high';
-  cx.drawImage(bmp, 0, 0, w, h);
+// An image attachment as packed RGB bytes at its own size (no colour conversion, no premultiplied alpha), for the
+// engine to slice and resize exactly as llama.cpp does (minicpmv_vision.js preprocessImage).
+async function imageRgb(buf, mimeType) {
+  const bmp = await createImageBitmap(new Blob([buf], { type: mimeType || 'image/jpeg' }), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+  const w = bmp.width, h = bmp.height, cv = new OffscreenCanvas(w, h), cx = cv.getContext('2d');
+  cx.drawImage(bmp, 0, 0);
   bmp.close();
-  const px = cx.getImageData(0, 0, w, h).data, out = new Float32Array(w * h * 3);
-  for (let i = 0, j = 0; i < px.length; i += 4) { out[j++] = px[i] / 127.5 - 1; out[j++] = px[i + 1] / 127.5 - 1; out[j++] = px[i + 2] / 127.5 - 1; }
-  return { type: 'image', pixels: out, width: w, height: h };
+  const px = cx.getImageData(0, 0, w, h).data, rgb = new Uint8Array(w * h * 3);
+  for (let i = 0, j = 0; i < px.length; i += 4) { rgb[j++] = px[i]; rgb[j++] = px[i + 1]; rgb[j++] = px[i + 2]; }
+  return { type: 'image', rgb, width: w, height: h };
 }
 // The hidden-tab rAF shim, `hfToken` and `engineFetch` come from the shared
 // prelude (#engineWorkerPreludeSrc) that the factory prepends to this source.
@@ -8420,7 +8415,7 @@ self.onmessage = async (e) => {
         if (vision && Array.isArray(m.content) && m.content.some((b) => b && b.type === 'image')) {
           const parts = [];
           for (const b of m.content) {
-            if (b && b.type === 'image' && ai < atts.length) parts.push(await tilePixels(atts[ai].data, atts[ai++].mimeType));
+            if (b && b.type === 'image' && ai < atts.length) parts.push(await imageRgb(atts[ai].data, atts[ai++].mimeType));
             else if (b && b.type === 'text') parts.push({ type: 'text', text: b.text });
           }
           msgs.push({ role, content: parts });
@@ -9077,7 +9072,7 @@ self.addEventListener('message', async (e) => {
         gguf: { file: 'MiniCPM-V-4_7-35B-A3B-Q4_0.gguf', size: 19714550688 },   // MINICPM_V47_35B_A3B in qwen35_moe_ssd.js
         type: 'causal',
         multimodal: true,
-        imageInput: true, audioInput: false, videoInput: false,   // one tile per image (minicpmv_vision.js); the 1.1 GB encoder loads on the first image
+        imageInput: true, audioInput: false, videoInput: false,   // overview + up to 9 slices (minicpmv_vision.js); the 1.1 GB encoder loads on the first image
         // Decided by scripts/tool-battery.mjs through the app (2026-10-14): 6/6 calls with right arguments,
         // 5/5 plain answers without a tool, and a live calculate round trip that used the result.
         agentCapable: true,
@@ -36311,6 +36306,110 @@ struct P { gw: u32, C: u32, nq: u32, withMean: u32 }
 }`,
 };
 
+// ── Preprocessing: llama.cpp a0e6dc738's MiniCPM-V path (mtmd-image.cpp: mtmd_image_preprocessor_minicpmv over
+// llava_uhd), so a PNG gives the same pixels as llama-mtmd-cli. Slice size 448, alignment 56 (patch 14 × 4), sizes
+// rounded half to even (Python's round), at most 9 slices, Pillow's bicubic (a = -0.5, 22-bit fixed point), no padding.
+const SLICE = 448, ALIGN = 56, MAX_SLICES = 9;
+export const roundEven = (v) => { const f = Math.floor(v), d = v - f; return d > 0.5 ? f + 1 : d < 0.5 ? f : (f % 2 === 0 ? f : f + 1); };
+const ensureDivide = (len, a) => Math.max(roundEven(len / a) * a, a);
+// get_best_resize: float32 arithmetic as the C++ does it.
+function bestResize(w, h, res, a, upscale) {
+  if (w * h > res * res || upscale) {
+    const r = Math.fround(w / h);
+    h = Math.trunc(Math.fround(res / Math.fround(Math.sqrt(r))));
+    w = Math.trunc(Math.fround(h * r));
+  }
+  return [ensureDivide(w, a), ensureDivide(h, a)];
+}
+function bestGrid(multiple, logRatio) {
+  const cands = [];
+  for (const n of [multiple - 1, multiple, multiple + 1]) {
+    if (n === 1 || n > MAX_SLICES) continue;
+    for (let m = 1; m <= n; m++) if (n % m === 0) cands.push([m, n / m]);
+  }
+  let best = [1, 1], minErr = Infinity;
+  for (const g of cands) { const err = Math.fround(Math.abs(logRatio - Math.log(g[0] / g[1]))); if (err < minErr) { best = g; minErr = err; } }
+  return best;
+}
+// The tiles of a w × h image: { overview: [w, h], grid: [cols, rows] | null, cell: [w, h], refined: [w, h] }.
+export function planImage(w, h) {
+  const ratio = Math.fround(Math.fround(w * h) / (SLICE * SLICE));
+  if (ratio <= 1) return { overview: bestResize(w, h, SLICE, ALIGN, true), grid: null, cell: null, refined: null };
+  const overview = bestResize(w, h, SLICE, ALIGN, false);
+  const grid = bestGrid(Math.min(Math.ceil(ratio), MAX_SLICES), Math.fround(Math.log(Math.fround(w / h))));
+  const rw = ensureDivide(w, grid[0]), rh = ensureDivide(h, grid[1]);
+  const cell = bestResize(Math.trunc(rw / grid[0]), Math.trunc(rh / grid[1]), SLICE, ALIGN, true);
+  return { overview, grid, cell, refined: [cell[0] * grid[0], cell[1] * grid[1]] };
+}
+// Pillow-compatible separable bicubic resize of packed RGB bytes (img_tool::resize_pillow).
+export function resizeBicubic(src, sw, sh, tw, th) {
+  if (sw === tw && sh === th) return src;
+  const PB = 22, filter = (x) => { x = Math.abs(x); const a = -0.5; return x < 1 ? ((a + 2) * x - (a + 3)) * x * x + 1 : x < 2 ? (((x - 5) * x + 8) * x - 4) * a : 0; };
+  const weights = (inSize, outSize) => {
+    const scale = inSize / outSize, fs = Math.max(1, scale), support = 2 * fs, ksize = Math.ceil(support) * 2 + 1;
+    const bounds = new Int32Array(outSize * 2), k = new Int32Array(outSize * ksize), pre = new Float64Array(ksize);
+    for (let xx = 0; xx < outSize; xx++) {
+      const center = (xx + 0.5) * scale, ss = 1 / fs;
+      let xmin = Math.trunc(center - support + 0.5); if (xmin < 0) xmin = 0;
+      let xmax = Math.trunc(center + support + 0.5); if (xmax > inSize) xmax = inSize;
+      xmax -= xmin;
+      let ww = 0;
+      for (let x = 0; x < xmax; x++) { const w = filter((x + xmin - center + 0.5) * ss); pre[x] = w; ww += w; }
+      for (let x = 0; x < ksize; x++) {
+        const w = x < xmax ? (ww !== 0 ? pre[x] / ww : pre[x]) : 0;
+        k[xx * ksize + x] = Math.trunc(w * 4194304 + (w < 0 ? -0.5 : 0.5));
+      }
+      bounds[xx * 2] = xmin; bounds[xx * 2 + 1] = xmax;
+    }
+    return { bounds, k, ksize };
+  };
+  const clip8 = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
+  let cur = src, cw = sw;
+  if (tw !== sw) {
+    const { bounds, k, ksize } = weights(sw, tw), out = new Uint8Array(tw * sh * 3);
+    for (let y = 0; y < sh; y++) for (let xx = 0; xx < tw; xx++) {
+      const xmin = bounds[xx * 2], cnt = bounds[xx * 2 + 1], kb = xx * ksize;
+      let s0 = 1 << (PB - 1), s1 = s0, s2 = s0;
+      for (let x = 0; x < cnt; x++) { const p = (y * sw + xmin + x) * 3, w = k[kb + x]; s0 += cur[p] * w; s1 += cur[p + 1] * w; s2 += cur[p + 2] * w; }
+      const o = (y * tw + xx) * 3; out[o] = clip8(s0 >> PB); out[o + 1] = clip8(s1 >> PB); out[o + 2] = clip8(s2 >> PB);
+    }
+    cur = out; cw = tw;
+  }
+  if (th !== sh) {
+    const { bounds, k, ksize } = weights(sh, th), row = cw * 3, out = new Uint8Array(row * th), acc = new Float64Array(row);
+    for (let yy = 0; yy < th; yy++) {
+      const ymin = bounds[yy * 2], cnt = bounds[yy * 2 + 1], kb = yy * ksize;
+      acc.fill(1 << (PB - 1));
+      for (let y = 0; y < cnt; y++) { const w = k[kb + y], rb = (ymin + y) * row; for (let i = 0; i < row; i++) acc[i] += cur[rb + i] * w; }
+      for (let i = 0; i < row; i++) out[yy * row + i] = clip8(acc[i] >> PB);
+    }
+    cur = out;
+  }
+  return cur;
+}
+// (x / 255 - 0.5) / 0.5 in float32, as clip_image_f32::normalize.
+function normalize(rgb) {
+  const out = new Float32Array(rgb.length);
+  for (let i = 0; i < rgb.length; i++) out[i] = Math.fround(Math.fround(Math.fround(rgb[i] / 255) - 0.5) / 0.5);
+  return out;
+}
+function crop(src, sw, x0, y0, w, h) {
+  const out = new Uint8Array(w * h * 3);
+  for (let y = 0; y < h; y++) out.set(src.subarray(((y0 + y) * sw + x0) * 3, ((y0 + y) * sw + x0 + w) * 3), y * w * 3);
+  return out;
+}
+// An image (packed RGB bytes, w × h) → its tiles, overview first then slices row by row, each { pixels, width, height },
+// and the slice grid ([cols, rows], or null for an overview-only image).
+export function preprocessImage(rgb, w, h) {
+  const plan = planImage(w, h);
+  const tiles = [{ width: plan.overview[0], height: plan.overview[1], pixels: normalize(resizeBicubic(rgb, w, h, plan.overview[0], plan.overview[1])) }];
+  if (plan.grid) {
+    const [rw, rh] = plan.refined, refined = resizeBicubic(rgb, w, h, rw, rh), [cw, ch] = plan.cell;
+    for (let r = 0; r < plan.grid[1]; r++) for (let c = 0; c < plan.grid[0]; c++) tiles.push({ width: cw, height: ch, pixels: normalize(crop(refined, rw, c * cw, r * ch, cw, ch)) });
+  }
+  return { tiles, grid: plan.grid, plan };
+}
+
 export class MiniCpmVVision {
   // read(off, len) → Uint8Array of the mmproj GGUF's bytes [off, off + len). size: the file's byte length.
   static async load(device, { read, onProgress = () => {} } = {}) {
@@ -37857,7 +37956,7 @@ export { PREFILL_KERNELS as QWEN35_DENSE_PREFILL_KERNELS };
  *   const m = await Qwen35MoeSsd.load(null, { url: '…/Qwen3.6-35B-A3B-Q8_0.gguf', poolBytes });
  */
 
-import { MiniCpmVVision } from './minicpmv_vision.js';
+import { MiniCpmVVision, preprocessImage, roundEven } from './minicpmv_vision.js';
 import { Qwen3MoeSsd, STORAGE, COPY_SRC, COPY_DST, MAP_READ, UNIFORM, I8, TOK, Q6K_BLOCK, Q4_KERNELS, Q4_SG_KERNELS, Q4_BATCH_KERNELS } from './qwen3_moe_ssd.js';
 
 export const QWEN36_35B_A3B = {
@@ -39278,9 +39377,11 @@ export class MiniCpmV47Ssd extends Qwen35MoeSsd {
     return this.vision;
   }
 
-  // Prompt segments: text ids, and per image { embeds (tile tokens + the </image> separator row), nx, ny, n }.
-  // As llama.cpp's mtmd lays a MiniCPM-V 4.7 image out (mtmd.cpp, add_canvas_chunk): the text
-  // "<image_id>N</image_id><image>", then the overview tile's tokens and its separator.
+  // Prompt segments: text ids, and per image { embeds, rel, entries } (see imagePositions). As llama.cpp's mtmd lays
+  // a MiniCPM-V 4.7 image out (mtmd.cpp add_canvas_chunk): the text "<image_id>N</image_id><image>", then one canvas
+  // chunk: the overview tile and the slices row by row, each followed by its separator rows (v.tok_embd_sep:
+  // 0 </image>, 1 <slice>, 2 </slice>, 3 \n). An image part is { type: 'image', rgb (packed RGB bytes), width, height }
+  // (preprocessed here exactly as llama.cpp does), or { type: 'image', pixels, width, height }, one ready tile.
   async imageSegments(messages, opts) {
     const images = [];
     for (const m of messages) if (Array.isArray(m.content)) for (const x of m.content) if (x && x.type === 'image') images.push(x);
@@ -39292,21 +39393,51 @@ export class MiniCpmV47Ssd extends Qwen35MoeSsd {
       if (text) segs.push({ ids: this.tokenizer.encode(text) });
       if (k >= images.length) continue;
       const img = images[k];
-      if (img.width * img.height > 448 * 448 || img.width % 56 || img.height % 56) throw new Error(`image ${img.width}×${img.height}: one tile of at most 448×448, sides multiples of 56`);
-      const enc = await this.vision.encode(img.pixels, img.width, img.height);
-      const tile = await this.vision.readback(enc.buffer, enc.tokens * enc.dim);
-      enc.buffer.destroy();
-      if (enc.dim !== dim) throw new Error(`vision output ${enc.dim} wide, text model ${dim}`);
-      const n = enc.tokens + 1, embeds = new Float32Array(n * dim);
-      embeds.set(tile); embeds.set(sep.subarray(0, dim), enc.tokens * dim);   // separator row 0: </image>
-      segs.push({ embeds, n, nx: img.width / 56, ny: img.height / 56 });
+      const pre = img.rgb ? preprocessImage(img.rgb, img.width, img.height) : { tiles: [img], grid: null };
+      const [gx, gy] = pre.grid || [0, 0];
+      const entries = [], rows = [];
+      for (let e = 0; e < pre.tiles.length; e++) {
+        const tile = pre.tiles[e];
+        if (tile.width % 56 || tile.height % 56) throw new Error(`image tile ${tile.width}×${tile.height}: sides must be multiples of 56`);
+        const enc = await this.vision.encode(tile.pixels, tile.width, tile.height);
+        if (enc.dim !== dim) throw new Error(`vision output ${enc.dim} wide, text model ${dim}`);
+        rows.push(await this.vision.readback(enc.buffer, enc.tokens * enc.dim));
+        enc.buffer.destroy();
+        const s = e - 1, last = e === pre.tiles.length - 1;
+        const seps = e === 0 ? (pre.grid ? [0, 1] : [0]) : last ? [2] : (s % gx === gx - 1 ? [2, 3, 1] : [2, 1]);
+        for (const r of seps) rows.push(sep.subarray(r * dim, (r + 1) * dim));
+        entries.push({ gw: tile.width / 56, gh: tile.height / 56, seps: seps.length });
+      }
+      const n = entries.reduce((a, e) => a + e.gw * e.gh + e.seps, 0), embeds = new Float32Array(n * dim);
+      let o = 0; for (const r of rows) { embeds.set(r, o); o += r.length; }
+      segs.push({ embeds, n, entries, grid: pre.grid, rel: MiniCpmV47Ssd.imagePositions(entries, pre.grid) });
     }
     return segs;
   }
 
-  // Positions as mtmd_canvas_decoder_pos gives them for an overview-only image: every tile token shares t = the
-  // position after <image>; its sections are z = base (<image>'s position), y = base + row, x = base + col; the
-  // separator takes t + 1 in every slot. The image uses 2 text positions.
+  // Relative positions for one image's tokens, as mtmd_canvas_decoder_pos gives them: per token [dt, dy, dx, sep]
+  // where a tile token's position is t = pos0 + dt, z = base, y = base + dy, x = base + dx (base = pos0 - 1, the
+  // <image> token), and a separator's (sep = 1) is pos0 + dt in every slot. Tiles share one t each; separators take
+  // one each. The canvas is grid × the last tile's token grid; the overview is stretched over it (round(linspace),
+  // ties to even) and slice s fills cell (s % cols, s / cols).
+  static imagePositions(entries, grid) {
+    const last = entries[entries.length - 1], nx = last.gw, ny = last.gh;
+    const cw = grid ? grid[0] * nx : nx, ch = grid ? grid[1] * ny : ny;
+    const scale = (c, g, cv) => (g <= 1 || cv <= 1 ? 0 : Math.min(roundEven((c * (cv - 1)) / (g - 1)), cv - 1));
+    const rel = [];
+    let t = 0;
+    entries.forEach((e, k) => {
+      for (let i = 0; i < e.gw * e.gh; i++) {
+        const row = Math.floor(i / e.gw), col = i % e.gw;
+        const [h, w] = k === 0 ? [scale(row, e.gh, ch), scale(col, e.gw, cw)] : [Math.floor((k - 1) / grid[0]) * ny + row, ((k - 1) % grid[0]) * nx + col];
+        rel.push([t, h, w, 0]);
+      }
+      for (let j = 0; j < e.seps; j++) rel.push([t + 1 + j, 0, 0, 1]);
+      t += 1 + e.seps;
+    });
+    return { rel, nPos: t };
+  }
+
   async prefillSegments(segs, want = 'argmax') {
     this.reset();
     let r = null;
@@ -39319,11 +39450,23 @@ export class MiniCpmV47Ssd extends Qwen35MoeSsd {
         }
         continue;
       }
-      if (sg.n > this.chunkTokens) throw new Error(`image of ${sg.n} tokens > chunk ${this.chunkTokens}`);
-      const pos0 = this.tNext, base = pos0 - 1, nt = sg.nx * sg.ny, pos = new Int32Array(sg.n * 4);
-      for (let i = 0; i < nt; i++) pos.set([pos0, base, base + Math.floor(i / sg.nx), base + (i % sg.nx)], i * 4);
-      for (let j = nt; j < sg.n; j++) { const p = pos0 + 1 + (j - nt); pos.set([p, p, p, p], j * 4); }
-      r = await this.prefillChunk(new Array(sg.n).fill(0xffffffff), last ? want : 'none', { embeds: sg.embeds, pos, tNext: pos0 + 1 + (sg.n - nt) });
+      // Whole tiles (with their separators) per chunk: a tile's tokens must see each other, so a tile never splits.
+      const pos0 = this.tNext, base = pos0 - 1, dim = this.cfg.hidden, { rel, nPos } = sg.rel;
+      const spans = []; let at = 0;
+      for (const e of sg.entries) { const len = e.gw * e.gh + e.seps; if (len > this.chunkTokens) throw new Error(`a tile of ${len} tokens > chunk ${this.chunkTokens}`); spans.push([at, len]); at += len; }
+      let ci = 0;
+      while (ci < spans.length) {
+        const start = spans[ci][0]; let len = 0;
+        while (ci < spans.length && len + spans[ci][1] <= this.chunkTokens) { len += spans[ci][1]; ci++; }
+        const pos = new Int32Array(len * 4);
+        for (let i = 0; i < len; i++) {
+          const [dt, dy, dx, isSep] = rel[start + i];
+          if (isSep) pos.fill(pos0 + dt, i * 4, i * 4 + 4); else pos.set([pos0 + dt, base, base + dy, base + dx], i * 4);
+        }
+        const end = ci >= spans.length;
+        r = await this.prefillChunk(new Array(len).fill(0xffffffff), last && end ? want : 'none',
+          { embeds: sg.embeds.subarray(start * dim, (start + len) * dim), pos, tNext: pos0 + nPos });
+      }
     }
     return r;
   }
