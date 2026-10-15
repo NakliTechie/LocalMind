@@ -8246,6 +8246,20 @@ self.onmessage = async (e) => {
       const genIds = [];          // every token id generated this turn, across passes
       let thinkCount = 0;         // tokens inside the thought
       let answerCount = 0;        // tokens after it
+      // Repetition guard: decoding is greedy (the engine picks the top token on the GPU, no sampling or penalty), and a
+      // greedy reply can loop on one sentence (Bonsai 2 2B / 4B with the tool prompt and thinking off: 1 of 12 prompts
+      // each, 2026-10-16). When a sentence of 30+ characters completes a second time, the turn ends there.
+      let answerText = '', looped = false;
+      const seenSentences = new Set();
+      const repeatsItself = () => {
+        const done = answerText.split(/(?<=[.!?])\s+|\n+/);
+        done.pop();
+        const last = (done[done.length - 1] || '').trim();
+        if (last.length < 30) return false;
+        if (seenSentences.has(last) && done.slice(0, -1).some((x) => x.trim() === last)) return true;
+        seenSentences.add(last);
+        return false;
+      };
       // One generate() call. `assistantPrefix` (engine patch 4) is raw text after the generation prompt:
       // the turn so far plus any forced text, so a later pass continues the same reply; the engine's token
       // ledger finds the cached prompt + reply as a prefix and prefills only the new part.
@@ -8280,6 +8294,7 @@ self.onmessage = async (e) => {
           }
           if (tok != null) { if (inThink) thinkCount++; else answerCount++; }
           if (delta) post({ type: 'token', token: delta });
+          if (!inThink && delta) { answerText += delta; if (/[.!?\n]/.test(delta) && repeatsItself()) { looped = true; break; } }
           if (tok != null && tagIds.has(tok)) post({ type: 'token', token: tagIds.get(tok) });
         }
         return n;
@@ -8288,7 +8303,7 @@ self.onmessage = async (e) => {
       try {
         if (thinkBudget > 0) {
           const n1 = await pass(thinkBudget, '');
-          if (!stopFlag && n1 >= thinkBudget) {
+          if (!stopFlag && !looped && n1 >= thinkBudget) {
             if (inThink) {
               // Budget spent inside the thought: force-close it and let the answer through.
               const FORCE = '\n\nNow produce the complete answer.';
