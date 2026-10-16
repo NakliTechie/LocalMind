@@ -2761,7 +2761,7 @@
           </label>
           <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
             Fetches a 451 MB multi-token-prediction head (once, cached) that drafts
-            <select id="mtpDepthSelect" style="font-size:0.7rem"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="auto">auto (up to 2)</option></select>
+            <select id="mtpDepthSelect" style="font-size:0.7rem"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="auto" selected>auto (up to 2)</option></select>
             tokens per step for the 27B model to check. Unchanged output. Applies to the next model load.
           </div>
         </div>
@@ -13004,7 +13004,9 @@ self.addEventListener('message', async (e) => {
     }
     // MTP speculative decoding for Ternary Bonsai 2 (default OFF; when on it replaces DFlash; read at load time).
     function mtpEnabled() { try { return localStorage.getItem('lm_mtp') === '1'; } catch { return false; } }
-    function mtpDepth() { try { const v = localStorage.getItem('lm_mtp_depth'); if (v === 'auto') return 'auto'; const d = Number(v); return d >= 1 && d <= 3 ? d : 2; } catch { return 2; } }
+    // Default 'auto' (2026-10-16): adaptive depth was the best MTP mode on prose and cut the story-prompt loss to -8 %
+    // where fixed depth 2 lost 36 % (plan/2026-10-16-bonsai2-mtp-build.md).
+    function mtpDepth() { try { const v = localStorage.getItem('lm_mtp_depth'); if (v === null || v === 'auto') return 'auto'; const d = Number(v); return d >= 1 && d <= 3 ? d : 'auto'; } catch { return 'auto'; } }
     const mtpToggle = document.getElementById('mtpToggle');
     const mtpDepthSelect = document.getElementById('mtpDepthSelect');
     if (mtpToggle) {
