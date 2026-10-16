@@ -52,16 +52,16 @@ Settings → General → Appearance picks light, dark or your system's theme. On
 with attach and voice stacked beside a taller text box, and everything else moves into the menu.
 
 ## Pick a model, or bring your own
-
-The picker groups models as on this device, partly downloaded, or to download, with each size. They range from LFM2.5
+ The picker groups models as on this device, partly downloaded, or to download, with each size. They range from LFM2.5
 230M on hand-written WebGPU kernels (~1,060 tokens/s on an M4 Pro) to two 27B models, Ternary Bonsai 2 and Underdog
 Saluki (a 7.9 GB IQ2-mix GGUF tuned for tool calls), plus Chrome's built-in Gemini Nano with no download at all. Ternary
-Bonsai 2 also comes as 2B (430 MB) and 4B (950 MB) on the same engine, 24 of 24 on the tool test. Three experimental
-engines stream mixture-of-experts models larger than GPU memory (Qwen3.6 35B-A3B, OpenBMB's MiniCPM-V 4.7 35B-A3B, Gemma
-4 26B-A4B and Liquid AI's LFM2.5 24B-A2B) from the browser's private storage: MiniCPM-V is a 19.7 GB download that ran
-in 6.4 GB of GPU memory on an M4 Pro, uses tools (11 of 11 on the test set) and reads images, its vision encoder (1.1
-GB) running on WebGPU with tokens identical to llama.cpp on the test images. Ten engines in all serve 18 models. Their
-disk tier and engines are also a library, [diskformer.js](https://github.com/NakliTechie/diskformer.js), with a demo at
+Bonsai 2 also comes as 2B (430 MB) and 4B (950 MB) on the same engine, 24 of 24 on the tool test. Experimental engines
+stream mixture-of-experts models larger than GPU memory (Qwen3.6 35B-A3B, OpenBMB's MiniCPM-V 4.7 35B-A3B, Gemma 4
+26B-A4B, Liquid AI's LFM2.5 24B-A2B and Tencent's Hy-Memory 30B-A3B) from the browser's private storage: MiniCPM-V is a
+19.7 GB download that ran in 6.4 GB of GPU memory on an M4 Pro, uses tools (11 of 11 on the test set) and reads images,
+its vision encoder (1.1 GB) running on WebGPU with tokens identical to llama.cpp on the test images. Eleven engines in
+all serve 19 models. Their disk tier and engines are also a library,
+[diskformer.js](https://github.com/NakliTechie/diskformer.js), with a demo at
 [diskformer.naklitechie.com](https://diskformer.naklitechie.com). If their GGUF is already on your disk (a Hugging Face
 or LM Studio folder), Settings → Models → Load .gguf from disk… copies it in instead of downloading it.
 
@@ -73,9 +73,9 @@ Settings → Models adds any Hugging Face ONNX repo or GGUF URL to the picker.
 
 Drop PDFs, Word files, notes or a whole folder into a chat and ask across them, in one language about documents in
 another. LocalMind remembers between sessions: Memory → Write memories from this chat has the loaded model save new
-facts about you and update the ones they change, with Mem0's prompts (the harness Tencent's Hy-Memory 30B-A3B was
-trained in). OCR turns photos and scanned PDFs into selectable text with GLM-OCR on your GPU. Image mode draws with a
-4B diffusion model in the tab, or sends the prompt to your own stable-diffusion.cpp server for bigger models.
+facts about you and update the ones they change, with Mem0's prompts; Tencent's Hy-Memory 30B-A3B, trained for that job,
+runs in the tab too. OCR turns photos and scanned PDFs into selectable text with GLM-OCR on your GPU. Image mode draws
+with a 4B diffusion model in the tab or on your own stable-diffusion.cpp server.
 
 Voice mode is hold-to-talk: Moonshine transcribes, the model answers and Kokoro reads the reply aloud. Clone makes any
 text sound like a 5–10 second voice sample, with Chatterbox. Each model downloads once and runs on your device.
