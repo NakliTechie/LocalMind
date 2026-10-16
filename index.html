@@ -2745,13 +2745,14 @@
         </div>
         <div class="settings-divider" data-tab="models">
           <label class="toggle-row">
-            <input type="checkbox" id="dflashToggle" checked>
+            <input type="checkbox" id="dflashToggle">
             Speculative decoding for Ternary Bonsai 2 27B
           </label>
           <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
             After the model loads, fetches a 1.1 GB DFlash 2 drafter (once, cached) and lets the
-            27B model check several drafted tokens per step: ~1.1&ndash;1.2&times; faster on code and
-            structured text, unchanged output. Uses ~1 GB more GPU memory. Applies to the next model load.
+            27B model check several drafted tokens per step. Unchanged output. Off by default: on an M4 Pro (Oct 2026)
+            it streamed code ~1.2&times; faster but started ~2 s later, and slowed prose. Uses ~1 GB more GPU memory.
+            Applies to the next model load.
           </div>
         </div>
         <div class="settings-divider" data-tab="models">
@@ -12996,7 +12997,9 @@ self.addEventListener('message', async (e) => {
     }
     function hfToken() { try { return (localStorage.getItem('lm_hf_token') || '').trim() || null; } catch { return null; } }
     // DFlash 2 speculative decoding for Ternary Bonsai 2 (default on; read at load time).
-    function dflashEnabled() { try { return localStorage.getItem('lm_dflash') !== '0'; } catch { return true; } }
+    // Off by default since 2026-10-16: on a non-swapping M4 Pro the drafter streamed code +23 % but started 2 s later
+    // (slower overall) and slowed prose 32 % (plan/2026-10-16-dflash-mtp-promo-build/raw/spec-*.json).
+    function dflashEnabled() { try { return localStorage.getItem('lm_dflash') === '1'; } catch { return false; } }
     const dflashToggle = document.getElementById('dflashToggle');
     if (dflashToggle) {
       dflashToggle.checked = dflashEnabled();
