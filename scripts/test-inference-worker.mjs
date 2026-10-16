@@ -74,7 +74,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   assert.match(indexSource, /post\(\{ type: 'ready', backend: 'webgpu' \}\);\s*if \(d\.mtp === true\) attachMTP\(d\.mtpDepth\)[^\n]*\n\s*else if \(d\.dflash !== false\) attachDFlash\(\)/);
   assert.match(indexSource, /target\.model\.dflashRunner = runner;/);
   assert.match(indexSource, /id="dflashToggle"/);
-  assert.match(indexSource, /dflash: isBonsai2Webgpu \? dflashEnabled\(\) : false/);
+  assert.match(indexSource, /dflash: isBonsai2Webgpu && modelId === 'prism-ml\/Ternary-Bonsai-2-27B-gguf' \? dflashEnabled\(\) : false/);   // the drafter is the 27B's only
   assert.match(indexSource, /data\.type === 'dflash'/);
 }
 // MTP speculative decoding: the runner module uses the same seam and internals hook, the trunk's verify/prefill graph
@@ -103,7 +103,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   assert.match(indexSource, /moduleUrl\('ternary_bonsai_2_mtp\.js'\)/);
   assert.match(indexSource, /id="mtpToggle"/);
   assert.match(indexSource, /function mtpEnabled\(\) \{ try \{ return localStorage\.getItem\('lm_mtp'\) === '1'; \}/);
-  assert.match(indexSource, /mtp: isBonsai2Webgpu \? mtpEnabled\(\) : false, mtpDepth: mtpDepth\(\)/);
+  assert.match(indexSource, /mtp: isBonsai2Webgpu && modelId === 'prism-ml\/Ternary-Bonsai-2-27B-gguf' \? mtpEnabled\(\) : false, mtpDepth: mtpDepth\(\)/);
 }
 // Picker ↔ registry parity: every <option> in #modelSelect has a MODELS entry and vice versa.
 {
@@ -113,7 +113,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'));
   const keys = [...registry.slice(0, registry.indexOf('\n    };')).matchAll(/^      '([^']+)': \{/gm)].map((m) => m[1]);
   assert.deepEqual([...options].sort(), [...keys].sort(), 'picker options and MODELS registry keys must match');
-  assert.equal(options.length, 17);
+  assert.equal(options.length, 18);   // 2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out
 }
 // window.localmind.load() sets the select before loading, so the composer's picker names the loaded model.
 assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ modelSelect\.value = key; \} catch \{\}\s*loadModel\(key\);/);

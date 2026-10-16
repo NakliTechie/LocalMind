@@ -16,6 +16,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { applyDFlashPatches } from './bonsai2-dflash-patches.mjs';
+import { applySmallModelPatches } from './bonsai2-small-patches.mjs';
 
 const root = new URL('../', import.meta.url);
 
@@ -115,6 +116,7 @@ export function extractTernaryBonsai2Engine(html) {
   //    the recurrence rewind. Every marker is guarded there; the runner itself lives in
   //    ternary_bonsai_2_dflash.js and is attached by the worker.
   engine = applyDFlashPatches(engine);
+  engine = applySmallModelPatches(engine);
 
   return (
     '/* ternary_bonsai_2_27b.js — vendored engine, extracted near-verbatim from the\n' +
