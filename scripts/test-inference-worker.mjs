@@ -71,11 +71,39 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   assert.doesNotMatch(dflashModule, /^import\s/m);
   assert.match(indexSource, /moduleUrl\('ternary_bonsai_2_dflash\.js'\)/);
   assert.match(indexSource, /const DRAFTER_URL = 'https:\/\/huggingface\.co\/naklitechie\/Qwen3\.8-27B-DFlash2-ternary-bonsai2\/resolve\/main\/Qwen3\.8-27B-DFlash2-r3-Q4_K_M\.gguf'/);
-  assert.match(indexSource, /post\(\{ type: 'ready', backend: 'webgpu' \}\);\s*if \(d\.dflash !== false\) attachDFlash\(\)/);
+  assert.match(indexSource, /post\(\{ type: 'ready', backend: 'webgpu' \}\);\s*if \(d\.mtp === true\) attachMTP\(d\.mtpDepth\)[^\n]*\n\s*else if \(d\.dflash !== false\) attachDFlash\(\)/);
   assert.match(indexSource, /target\.model\.dflashRunner = runner;/);
   assert.match(indexSource, /id="dflashToggle"/);
   assert.match(indexSource, /dflash: isBonsai2Webgpu && modelId === 'prism-ml\/Ternary-Bonsai-2-27B-gguf' \? dflashEnabled\(\) : false/);   // the drafter is the 27B's only
   assert.match(indexSource, /data\.type === 'dflash'/);
+}
+// MTP speculative decoding: the runner module uses the same seam and internals hook, the trunk's verify/prefill graph
+// can output its final hidden rows (finalHidden), and the worker attaches it only when the Settings toggle (default
+// off) is on, in place of DFlash.
+{
+  const mtpModule = await readFile(new URL('../src/ternary_bonsai_2_mtp.js', import.meta.url), 'utf8');
+  assert.match(bonsai2Engine, /\$v\?\.finalHidden&&J\.output\(Je,"mtp\.hidden"\)/);
+  const internals = new Set([...(/zl\.__dflashInternals=\{([\s\S]*?)\};/.exec(bonsai2Engine)[1]).matchAll(/get ([\w$]+)\(\)/g)].map((m) => m[1]));
+  const reached = new Set([...mtpModule.matchAll(/\bI\.([\w$]+)/g)].map((m) => m[1]));
+  assert.ok(reached.has('r2') && reached.has('RewindSession'), 'MTP runner internals scan found ' + [...reached]);
+  for (const name of reached) assert.ok(internals.has(name), `MTP runner uses I.${name}, the engine's __dflashInternals does not export it`);
+  assert.match(mtpModule, /^export \{ MTPRunner, MTPHead, MTP_HEAD, MCFG \};$/m);
+  assert.match(mtpModule, /async \*generate\(tokenIds, cache, generationArgs, beginDecode, eosTokenId\)/);
+  assert.doesNotMatch(mtpModule, /^import\s/m);
+  // the pinned head ranges: output_norm (20 KB) + the head block to the end of the 6,397,970,272-byte file
+  const { MTP_HEAD } = await import(new URL('../src/ternary_bonsai_2_mtp.js', import.meta.url));
+  const [, [hs, hl]] = MTP_HEAD.ranges;
+  assert.equal(hs + hl, MTP_HEAD.fileSize);
+  assert.equal(MTP_HEAD.bytes, MTP_HEAD.ranges.reduce((s, [, l]) => s + l, 0));
+  for (const [name, [off, type, K, N]] of Object.entries(MTP_HEAD.tensors)) {
+    const size = type === 0 ? K * 4 : (K / 32) * 34 * N;
+    assert.ok(MTP_HEAD.ranges.some(([s, l]) => off >= s && off + size <= s + l), `${name} lies outside the downloaded ranges`);
+  }
+  assert.match(MTP_HEAD.url, /^https:\/\/huggingface\.co\/CaryPalmer\/Ternary-Bonsai-2-27B-262k-GGUF\/resolve\/[0-9a-f]{40}\//);
+  assert.match(indexSource, /moduleUrl\('ternary_bonsai_2_mtp\.js'\)/);
+  assert.match(indexSource, /id="mtpToggle"/);
+  assert.match(indexSource, /function mtpEnabled\(\) \{ try \{ return localStorage\.getItem\('lm_mtp'\) === '1'; \}/);
+  assert.match(indexSource, /mtp: isBonsai2Webgpu && modelId === 'prism-ml\/Ternary-Bonsai-2-27B-gguf' \? mtpEnabled\(\) : false, mtpDepth: mtpDepth\(\)/);
 }
 // Picker ↔ registry parity: every <option> in #modelSelect has a MODELS entry and vice versa.
 {

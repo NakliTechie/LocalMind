@@ -19,6 +19,9 @@
 //   (e) `com.xenova.Lut2SmallMGemm` (M<=8 ternary GEMM, bonsai2-smallm-op.mjs) as
 //       the verify-time projection + head path — the engine's own small-batch path
 //       costs 8 decode steps for an 8-token block.
+//   (g) `finalHidden` (same 4th arg of lh): outputs the last layer's rows as
+//       `mtp.hidden`, the trunk h the MTP draft head pairs with the next token
+//       (runner: ternary_bonsai_2_mtp.js).
 //   (f) recurrence tee + `RewindSession`: after a rollback, recompute only the
 //       linear-attention conv/recurrent state for the accepted rows (7–10 ms) instead
 //       of replaying them through the full model (50–118 ms).
@@ -71,7 +74,7 @@ export function applyDFlashPatches(src) {
     'J.output($lg,"verify_logits")}else ' + kiLoop;
   replaceOnce(
     'Ee(te,ge,Je)}let Ze=J.nodeCount,st=E0({g:J,w:re,weights:ke,model:e,hidden:Je,act:G,H:s,vocab:o,T:a,eps:l,finalNormOffset:ie.model_norm,lmHeadOffset:ie.lm_head});return{graph:J.finish({name:"qwen35-prefill",params:{T:a}}),weights:me,states:ne,paramsName:"params",lastRowUniform:st,...L?{realRowsInput:L.name}:{},nextTokenTailNodeCount:J.nodeCount-Ze}}',
-    'Ee(te,ge,Je)}$f&&J.output($f,"dspark.features");let Ze=J.nodeCount,$p;' +
+    'Ee(te,ge,Je)}$f&&J.output($f,"dspark.features");$v?.finalHidden&&J.output(Je,"mtp.hidden");let Ze=J.nodeCount,$p;' +
     'if($v?.allRowsHead){let $t=J.scratch("verify_tokens","uint32",[a]);' + smallMHead +
     'J.output($t,"verify_tokens"),$p={tokens:$t,uni:J.uniform("next_token_pick_uni",32)}}' +
     'let st=E0({g:J,w:re,weights:ke,model:e,hidden:Je,act:G,H:s,vocab:o,T:a,eps:l,finalNormOffset:ie.model_norm,lmHeadOffset:ie.lm_head,...$p?{nextTokenPick:$p}:{}});' +
