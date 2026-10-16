@@ -48,7 +48,6 @@ your own Ollama, LM Studio or llama.cpp server; the browser then only streams th
 The sidebar holds Chat, Image, Voice, Models and Library; Compare, Batch, Diffuse, OCR, Vision, Clone and Folder sit
 under More. Press ⌘K (Ctrl+K on Windows and Linux) for a palette of every action, from switching models to opening a
 setting. Library searches the full text of every saved chat, with your on-device memory in the tab beside it.
-
 Settings → General → Appearance picks light, dark or your system's theme. On a phone the composer gets the full width,
 with attach and voice stacked beside a taller text box, and everything else moves into the menu.
 
@@ -73,9 +72,10 @@ Settings → Models adds any Hugging Face ONNX repo or GGUF URL to the picker.
 ## Documents, images and voice
 
 Drop PDFs, Word files, notes or a whole folder into a chat and ask across them, in one language about documents in
-another. LocalMind remembers between sessions. OCR turns photos and scanned PDFs into selectable text with GLM-OCR on
-your GPU. Image mode draws with a 4B diffusion model in the tab, or sends the prompt to your own stable-diffusion.cpp
-server for bigger models.
+another. LocalMind remembers between sessions: Memory → Write memories from this chat has the loaded model save new
+facts about you and update the ones they change, with Mem0's prompts (the harness Tencent's Hy-Memory 30B-A3B was
+trained in). OCR turns photos and scanned PDFs into selectable text with GLM-OCR on your GPU. Image mode draws with a
+4B diffusion model in the tab, or sends the prompt to your own stable-diffusion.cpp server for bigger models.
 
 Voice mode is hold-to-talk: Moonshine transcribes, the model answers and Kokoro reads the reply aloud. Clone makes any
 text sound like a 5–10 second voice sample, with Chatterbox. Each model downloads once and runs on your device.
