@@ -140,6 +140,7 @@
     /* Help button */
     .help-wrap { position: relative; }
 
+    .theme-toggle { font-size: 0.95rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
     .help-btn {
       width: 26px;
       height: 26px;
@@ -2368,6 +2369,7 @@
       <h1>LocalMind</h1>
       <div class="header-right">
         <button class="install-btn" id="installBtn" title="Install LocalMind as an app" aria-label="Install LocalMind as an app" hidden>&#x2913; Install</button>
+        <button type="button" class="help-btn theme-toggle" id="themeToggleBtn" aria-label="Switch to dark mode" title="Switch to dark mode">&#9790;</button>
         <div class="help-wrap">
           <button class="help-btn" id="helpBtn" aria-label="Help">?</button>
           <div class="help-popover" id="helpPopover">
@@ -2477,7 +2479,7 @@
                 <li><strong>Math &amp; diagrams</strong> &mdash; inline <code>$\int x^2 dx$</code> and display <code>$$\\sum_{i=1}^n i$$</code> math render via KaTeX; <code>```mermaid</code> blocks render as SVG via lazy-loaded Mermaid.</li>
                 <li><strong>Artifact preview</strong> &mdash; <code>```html</code> / <code>```svg</code> / <code>```artifact</code> code blocks get a live sandboxed iframe below the code (<code>sandbox=&quot;allow-scripts&quot;</code>, no same-origin). Safe to run model-generated UI inline.</li>
                 <li><strong>Voice to text</strong> &mdash; 🗣 button left of the input records mic audio, decodes to 16 kHz mono PCM on-device, and runs Whisper-base via WebGPU to transcribe into the input. ~80 MB first-use download; nothing leaves the device.</li>
-                <li><strong>Read aloud</strong> &mdash; 🔊 button under any reply speaks it via Kokoro-82M (runs on WASM, so it never competes with the chat model). Streams sentence-by-sentence; English + Hindi voices in Settings. ~80 MB first-use download; nothing leaves the device.</li>
+                <li><strong>Read aloud</strong> &mdash; 🔊 button under any reply speaks it via Kokoro-82M (runs on WASM, so it never competes with the chat model). Streams sentence-by-sentence; English voices in Settings, and a Hindi reply uses the device&rsquo;s own Hindi voice when it has one. ~80 MB first-use download; nothing leaves the device.</li>
                 <li><strong>Voice mode</strong> &mdash; 🎙 chip opens a hands-free loop: hold the mic (or hold <strong>V</strong>) to talk, release to send. Moonshine transcribes on-device (English; other languages fall back to Whisper), the model answers, and Kokoro reads the reply back. Turn-based; the chat model stays loaded. ~180 MB first-use download.</li>
                 <li><strong>Python code tool</strong> (agent-capable models) &mdash; model can call <code>run_python</code> to execute Python in a sandboxed Pyodide worker. numpy / pandas / matplotlib auto-install on import. ~10 MB first-use download.</li>
                 <li><strong>Cache management</strong> &mdash; view/clear cached models in Settings</li>
@@ -2693,7 +2695,7 @@
           </select>
         </div>
         <div class="settings-divider" data-tab="general">
-          <label for="ttsVoiceSelect">Read aloud <span style="font-weight:400;color:var(--gray-500)">(🔊 on each reply &mdash; Kokoro-82M, on-device; Hindi replies auto-route to a Hindi voice)</span></label>
+          <label for="ttsVoiceSelect">Read aloud <span style="font-weight:400;color:var(--gray-500)">(🔊 on each reply &mdash; Kokoro-82M, on-device; English voices; a Hindi reply uses your device&rsquo;s own Hindi voice when it has one)</span></label>
           <select id="ttsVoiceSelect" class="settings-select">
             <optgroup label="English (US) — female">
               <option value="af_heart">Heart (default)</option>
@@ -2708,10 +2710,6 @@
             <optgroup label="English (UK)">
               <option value="bf_emma">Emma (female)</option>
               <option value="bm_george">George (male)</option>
-            </optgroup>
-            <optgroup label="Hindi">
-              <option value="hf_alpha">Alpha (female)</option>
-              <option value="hm_omega">Omega (male)</option>
             </optgroup>
           </select>
           <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
@@ -11045,12 +11043,28 @@ self.addEventListener('message', async (e) => {
     // A <head> script applies the stored choice before first paint; this keeps the select in step.
     const themeSelect = document.getElementById('themeSelect');
     try { themeSelect.value = localStorage.getItem('lm_theme') || 'system'; } catch { themeSelect.value = 'system'; }
-    themeSelect.addEventListener('change', () => {
-      const th = themeSelect.value;
+    // The header toggle flips between light and dark from whatever shows now (a 'system' choice included) and keeps
+    // the select in step; the select keeps 'system' for following the OS.
+    const themeToggleBtn = document.getElementById('themeToggleBtn');
+    const darkMq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    const themeIsDark = () => { const th = document.documentElement.dataset.theme; return th ? th === 'dark' : !!(darkMq && darkMq.matches); };
+    function syncThemeToggle() {
+      if (!themeToggleBtn) return;
+      const dark = themeIsDark(), label = dark ? 'Switch to light mode' : 'Switch to dark mode';
+      themeToggleBtn.innerHTML = dark ? '&#9728;' : '&#9790;';
+      themeToggleBtn.setAttribute('aria-label', label); themeToggleBtn.title = label;
+    }
+    function setTheme(th) {
       if (th === 'light' || th === 'dark') document.documentElement.dataset.theme = th;
       else delete document.documentElement.dataset.theme;
       try { localStorage.setItem('lm_theme', th); } catch {}
-    });
+      themeSelect.value = th;
+      syncThemeToggle();
+    }
+    themeSelect.addEventListener('change', () => setTheme(themeSelect.value));
+    if (themeToggleBtn) themeToggleBtn.addEventListener('click', () => setTheme(themeIsDark() ? 'light' : 'dark'));
+    if (darkMq && darkMq.addEventListener) darkMq.addEventListener('change', syncThemeToggle);
+    syncThemeToggle();
 
     // ── Settings panel ──────────────────────────────────────────
     settingsBtn.addEventListener('click', () => {
@@ -14079,7 +14093,8 @@ self.addEventListener('message', async (e) => {
     function showToast(msg) {
       const toast = document.createElement('div');
       toast.textContent = msg;
-      toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--gray-800);color:white;padding:10px 20px;border-radius:8px;font-size:0.82rem;z-index:1000;opacity:0;transition:opacity 0.3s';
+      // Text in --gray-100 (the page background), not white: dark mode flips --gray-800 to a light shade (2026-10-16).
+      toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--gray-800);color:var(--gray-100);padding:10px 20px;border-radius:8px;font-size:0.82rem;line-height:1.4;max-width:min(680px, calc(100vw - 32px));box-sizing:border-box;z-index:1000;opacity:0;transition:opacity 0.3s';
       document.body.appendChild(toast);
       requestAnimationFrame(() => toast.style.opacity = '1');
       setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
@@ -19633,17 +19648,25 @@ self.addEventListener('message', async (e) => {
 
     function ttsSettings() {
       return {
-        voice: localStorage.getItem('lm_tts_voice') || 'af_heart',
+        // Hindi Kokoro voices were listed until 2026-10-16 but kokoro-js never had them: a stored one falls back.
+        voice: ((v) => (v && !/^h[fm]_/.test(v) ? v : 'af_heart'))(localStorage.getItem('lm_tts_voice')),
         speed: parseFloat(localStorage.getItem('lm_tts_speed') || '1') || 1,
         autoplay: localStorage.getItem('lm_tts_autoplay') === '1',
       };
     }
 
-    // Language routing. Kokoro covers many languages; LocalMind's v1.0 read-aloud
-    // ships English + Hindi and DISABLES the button for scripts it doesn't voice
-    // (rather than mispronounce). Returns a voice id, or null = unsupported.
+    // Language routing. kokoro-js (1.2.1, the latest) voices and phonemizes English only, so English goes to Kokoro and
+    // Hindi to the browser's own Hindi voice when the device has one that runs locally (speechSynthesis, localService:
+    // macOS ships Lekha); other scripts DISABLE the button rather than mispronounce. Returns a voice id, or null.
+    function ttsLocalHindiVoice() {
+      try { return (window.speechSynthesis ? speechSynthesis.getVoices() : []).find((v) => /^hi/i.test(v.lang) && v.localService) || null; } catch (_) { return null; }
+    }
+    try { if (window.speechSynthesis) speechSynthesis.getVoices(); } catch (_) {}   // starts Chrome's voice list loading
     function ttsVoiceForText(text, settingVoice) {
-      if (/[ऀ-ॿ]/.test(text)) return 'hf_alpha';   // Devanagari → Hindi
+      if (/[ऀ-ॿ]/.test(text)) {   // Devanagari → Hindi. Voices load late in Chrome: an empty list means "not known yet".
+        const listed = window.speechSynthesis ? speechSynthesis.getVoices().length > 0 : false;
+        return !window.speechSynthesis || (listed && !ttsLocalHindiVoice()) ? null : 'web:hi';
+      }
       // Scripts v1.0 doesn't voice (JP kana, CJK, Hangul, Arabic, Cyrillic, Hebrew) → disable.
       if (/[぀-ヿ㐀-䶿一-鿿가-힯؀-ۿЀ-ӿ֐-׿]/.test(text)) return null;
       return settingVoice || 'af_heart';                     // Latin → selected English voice
@@ -19717,6 +19740,7 @@ self.addEventListener('message', async (e) => {
       const voice = opts.voice || ttsVoiceForText(text, st.voice);
       if (!voice) throw new Error('unsupported-language');
       const speed = opts.speed || st.speed;
+      if (voice === 'web:hi') return ttsSpeakWeb(text, speed, opts);
       if (opts.onState) opts.onState('loading');
       await ttsEnsureWorker();
 
@@ -19766,6 +19790,30 @@ self.addEventListener('message', async (e) => {
         TTS.sessions.set(id, session);
         TTS.active = { id, button: opts.button || null, session };
         TTS.worker.postMessage({ type: 'speak', id, text, voice, speed });
+      });
+    }
+
+    // Hindi read-aloud through the browser's on-device Hindi voice (see ttsVoiceForText). Same session shape as the
+    // Kokoro path, so Stop and the button states work unchanged.
+    function ttsSpeakWeb(text, speed, opts) {
+      const v = ttsLocalHindiVoice();
+      if (!v) { if (opts.onState) opts.onState('error', 'this device has no on-device Hindi voice'); return Promise.resolve({ state: 'error' }); }
+      return new Promise((resolve) => {
+        const u = new SpeechSynthesisUtterance(String(text).replace(/[*_#`>|]/g, ''));
+        u.voice = v; u.lang = v.lang; u.rate = speed;
+        const id = ++TTS.seq;
+        const session = { stop() { try { speechSynthesis.cancel(); } catch (_) {} } };
+        TTS.sessions.set(id, session); TTS.active = { id, session, button: opts.button };
+        let ended = false;
+        const done = (state, msg) => {
+          if (ended) return; ended = true;
+          TTS.sessions.delete(id); if (TTS.active && TTS.active.id === id) TTS.active = null;
+          if (opts.onState) opts.onState(state, msg); resolve({ state, msg });
+        };
+        u.onstart = () => { if (opts.onState) opts.onState('speaking'); };
+        u.onend = () => done('done');
+        u.onerror = (e) => done(e && (e.error === 'canceled' || e.error === 'interrupted') ? 'done' : 'error', e && e.error);
+        try { speechSynthesis.cancel(); speechSynthesis.speak(u); } catch (e) { done('error', String(e && e.message || e)); }
       });
     }
 
