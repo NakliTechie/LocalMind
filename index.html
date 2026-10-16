@@ -2763,7 +2763,7 @@
           </label>
           <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
             Fetches a 451 MB multi-token-prediction head (once, cached) that drafts
-            <select id="mtpDepthSelect" style="font-size:0.7rem"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
+            <select id="mtpDepthSelect" style="font-size:0.7rem"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="auto">auto (up to 2)</option></select>
             tokens per step for the 27B model to check. Unchanged output. Applies to the next model load.
           </div>
         </div>
@@ -8130,7 +8130,7 @@ const DFLASH_BLOCK = 5;   // verify block length: 1.17× on code at 5, 1.09× at
 let TernaryBonsai2 = null;
 let model = null;
 let dflash = null;          // the attached DFlashRunner, or null (plain decode)
-let lastDflashGen = 0, lastDflashStats = { cycles: 0, tokens: 0, accepted: 0 };
+let lastDflashGen = 0, lastDflashStats = { cycles: 0, tokens: 0, accepted: 0, drafted: 0, plainTokens: 0 };
 let abortController = null;
 let stopFlag = false;
 let lastHistoryLen = 0; // tracks conversation length to reset KV/recurrent state on a fresh chat
@@ -8347,9 +8347,11 @@ self.onmessage = async (e) => {
       if (inThink && thinkOpened) post({ type: 'token', token: '<|/think|>' });
       // Speculation telemetry for this turn (accepted drafts per verify cycle); the host logs it.
       if (dflash && dflash.stats.generations > lastDflashGen) {
-        const st = dflash.stats; const dc = st.cycles - lastDflashStats.cycles, dt = st.tokens - lastDflashStats.tokens, da = st.accepted - lastDflashStats.accepted;
-        lastDflashGen = st.generations; lastDflashStats = { cycles: st.cycles, tokens: st.tokens, accepted: st.accepted };
-        if (dc > 0) post({ type: 'dflash', kind: dflash.head ? 'mtp' : 'dflash', status: 'turn', cycles: dc, tokens: dt, tokensPerCycle: +(dt / dc).toFixed(2), acceptedPerCycle: +(da / dc).toFixed(2) });
+        const st = dflash.stats, L = lastDflashStats; const dc = st.cycles - L.cycles, da = st.accepted - L.accepted;
+        const dp = (st.plainTokens || 0) - L.plainTokens, dt = st.tokens - L.tokens - dp, dd = (st.drafted || 0) - L.drafted;
+        lastDflashGen = st.generations; lastDflashStats = { cycles: st.cycles, tokens: st.tokens, accepted: st.accepted, drafted: st.drafted || 0, plainTokens: st.plainTokens || 0 };
+        // tokens/cycle counts the verify cycles only; an adaptive MTP turn may also decode plainly (plainTokens)
+        if (dc > 0 || dp > 0) post({ type: 'dflash', kind: dflash.head ? 'mtp' : 'dflash', status: 'turn', cycles: dc, tokens: dt, tokensPerCycle: dc ? +(dt / dc).toFixed(2) : 0, acceptedPerCycle: dc ? +(da / dc).toFixed(2) : 0, ...(dflash.head ? { accepted: da, drafted: dd, plainTokens: dp } : {}) });
       }
       post({ type: 'complete' });
     } else if (d.type === 'stop') {
@@ -8481,15 +8483,17 @@ async function attachMTP(depth) {
     if (!r) throw new Error(`MTP head: bytes ${off}+${len} are outside the downloaded ranges`);
     return new Uint8Array(await blob.slice(r[2] + off - r[0], r[2] + off - r[0] + len).arrayBuffer());
   };
-  const d = Number(depth) >= 1 && Number(depth) <= 3 ? Number(depth) : 2;
+  // 'auto': adaptive depth up to 2 (drops to plain decode while drafts keep missing)
+  const adaptive = depth === 'auto';
+  const d = adaptive ? 2 : Number(depth) >= 1 && Number(depth) <= 3 ? Number(depth) : 2;
   const runner = await MTPRunner.create(target, {
-    head: source, depth: d,
+    head: source, depth: d, adaptive,
     onProgress: (p) => post({ type: 'dflash', kind: 'mtp', status: 'loading', loaded: p.done, total: p.total }),
   });
   if (model !== target) { runner.dispose(); return; }
   target.model.dflashRunner = runner;
   dflash = runner;
-  post({ type: 'dflash', kind: 'mtp', status: 'ready', depth: d, headBytes: runner.head.stats.weightBytes });
+  post({ type: 'dflash', kind: 'mtp', status: 'ready', depth: d, adaptive, headBytes: runner.head.stats.weightBytes });
 }
   </script>
   <!-- SSD-streamed MoE engine worker, one source for every custom-WGSL engine built on qwen3_moe_ssd.js:
@@ -12986,7 +12990,7 @@ self.addEventListener('message', async (e) => {
     }
     // MTP speculative decoding for Ternary Bonsai 2 (default OFF; when on it replaces DFlash; read at load time).
     function mtpEnabled() { try { return localStorage.getItem('lm_mtp') === '1'; } catch { return false; } }
-    function mtpDepth() { try { const d = Number(localStorage.getItem('lm_mtp_depth')); return d >= 1 && d <= 3 ? d : 2; } catch { return 2; } }
+    function mtpDepth() { try { const v = localStorage.getItem('lm_mtp_depth'); if (v === 'auto') return 'auto'; const d = Number(v); return d >= 1 && d <= 3 ? d : 2; } catch { return 2; } }
     const mtpToggle = document.getElementById('mtpToggle');
     const mtpDepthSelect = document.getElementById('mtpDepthSelect');
     if (mtpToggle) {
@@ -58429,12 +58433,20 @@ class MTPRunner {
     this.depth = opts.depth ?? 2;
     if (!(this.depth >= 1 && this.depth <= MCFG.MAXM - 1)) throw new Error(`MTPRunner: depth must be 1..${MCFG.MAXM - 1}`);
     this.window = opts.window ?? 1024;   // prompt rows (the tail of each prefill) fed to the head's KV cache
+    // Adaptive depth (up to `depth`): keep a running estimate of how often the draft at each position is accepted
+    // (given the earlier ones were), and before each cycle pick the depth with the most expected tokens per unit of
+    // time: depth d yields 1 + p1 + p1*p2 + ... tokens for a cycle that costs `cost[d]` plain decode steps (measured
+    // in headless Chrome, M4 Pro: a 2-row verify + one head step ~1.8 steps, a 3-row verify + two head steps ~2.15).
+    // Depth 0 = plain decode through the engine's own decode graph for `plainRun` tokens, then probe again at depth 1
+    // with the estimates pulled halfway back to the 0.8 prior.
+    this.adaptive = !!opts.adaptive;
+    this.cost = opts.cost ?? [1, 1.8, 2.15, 2.6]; this.alpha = opts.alpha ?? 0.1; this.plainRun = opts.plainRun ?? 32;
     this.smallM = opts.smallM === 'off' ? undefined : { precision: opts.smallM ?? 'f16' };
     this.log = opts.log || (() => {});
     this.H = this.cfg.hidden_size; this.VOC = this.cfg.vocab_size;
     if (this.H !== MCFG.H || this.VOC !== MCFG.VOCAB) throw new Error(`MTPRunner: target H/V ${this.H}/${this.VOC} != head ${MCFG.H}/${MCFG.VOCAB}`);
     this.res = new Map();
-    this.stats = { cycles: 0, tokens: 0, accepted: 0, drafted: 0, generations: 0 };
+    this.stats = { cycles: 0, tokens: 0, accepted: 0, drafted: 0, generations: 0, plainTokens: 0, depthChanges: 0 };
     this.disposed = false;
   }
 
@@ -58472,22 +58484,28 @@ class MTPRunner {
     if (!this.head.kvCap) await this.head.init(cache.maxLength + 8);
     const sessions = new Map();
     const session = async (T, opts) => { const key = T + (opts.allRowsHead ? 'v' : 'p'); let s = sessions.get(key); if (s) return s; class S extends I.ch { buildEmission() { return I.lh(this.model, this.cache, this.blockLen, opts); } } s = new S(inner, cache, T); await s.build(); sessions.set(key, s); return s; };
-    const verify = await session(LV, { allRowsHead: true, ...(smallM ? { smallM } : {}), teeRecurrence: true, finalHidden: true });
+    // one verify session + rewind per block length the loop can use (adaptive: every depth 1..depth)
+    const verifyBy = new Map(), rewinds = [];
+    for (let L = this.adaptive ? 2 : LV; L <= LV; ++L) {
+      const verify = await session(L, { allRowsHead: true, ...(smallM ? { smallM } : {}), teeRecurrence: true, finalHidden: true });
+      const rewind = new I.RewindSession(inner, cache, L, verify); await rewind.build(); rewinds.push(rewind);
+      verifyBy.set(L, { verify, rewind });
+    }
     const prefill = (T) => session(T, { finalHidden: true });
     await prefill(16); await prefill(512);
-    const rewind = new I.RewindSession(inner, cache, LV, verify); await rewind.build();
+    if (this.adaptive) await prefill(1);   // the last token of a plain stretch: next token + its hidden row
     const slot = await cache.allocateCheckpointSlot();
     // head KV bookkeeping: rows [kvLo, valid) of the head's KV cache are correct; hLastPos = the position whose
     // (token, h) pair Hlast completes (Hlast = normed trunk h at hLastPos - 1)
-    r = { sessions, verify, prefill, rewind, slot, kvLo: 0, valid: 0, hLastPos: -1 }; this.res.set(cache, r); return r;
+    r = { sessions, verifyBy, rewinds, verify: verifyBy.get(LV).verify, prefill, slot, kvLo: 0, valid: 0, hLastPos: -1 }; this.res.set(cache, r); return r;
   }
 
   // Change the draft depth; per-cache sessions (sized depth + 1) are rebuilt on the next generate.
-  setDepth(depth) {
+  setDepth(depth, adaptive = this.adaptive) {
     if (!(depth >= 1 && depth <= MCFG.MAXM - 1)) throw new Error(`MTPRunner: depth must be 1..${MCFG.MAXM - 1}`);
-    if (depth === this.depth) return;
+    if (depth === this.depth && !!adaptive === this.adaptive) return;
     for (const cache of [...this.res.keys()]) this.release(cache);
-    this.depth = depth;
+    this.depth = depth; this.adaptive = !!adaptive;
   }
 
   // Self-check of the trunk-hidden route: output_norm + the shared lm_head over the last verify run's row 0 must give
@@ -58497,7 +58515,7 @@ class MTPRunner {
     const ht = r.verify.compiled.tensor('mtp.hidden');
     const vt = Array.from(await this.rt.readTensor(r.verify.compiled.tensor('verify_tokens')));
     const got = [];
-    for (let j = 0; j < this.depth + 1; ++j) {
+    for (let j = 0; j < vt.length; ++j) {
       this.head.normTrunkRows(ht.buffer, (ht.byteOffset ?? 0) + j * this.H * 4, 1, 0);
       const e = this.dev.createCommandEncoder(); e.copyBufferToBuffer(this.head.buf.Hn, 0, this.headIn.buffer, this.headIn.byteOffset ?? 0, this.H * 4); this.dev.queue.submit([e.finish()]);
       this.headS.compiled.collector.enqueue(this.headS.steps);
@@ -58509,7 +58527,7 @@ class MTPRunner {
   release(cache) {
     const r = this.res.get(cache); if (!r) return; this.res.delete(cache);
     for (const s of r.sessions.values()) { try { s.dispose(); } catch (_) {} }
-    try { r.rewind.dispose(); } catch (_) {}
+    for (const rw of r.rewinds) { try { rw.dispose(); } catch (_) {} }
     try { this.I.r2(r.slot.storage); } catch (_) {}
   }
 
@@ -58544,6 +58562,20 @@ class MTPRunner {
     const e = this.dev.createCommandEncoder(); e.copyBufferToBuffer(this.head.buf.Hout, (toks.length - 1) * this.H * 4, this.headIn.buffer, this.headIn.byteOffset ?? 0, this.H * 4); this.dev.queue.submit([e.finish()]);
     this.headS.compiled.collector.enqueue(this.headS.steps);
     return (await this.rt.readTensor(this.headArg))[0];
+  }
+
+  // End a pipelined plain stretch: when the decode graph ran more steps than the cache keeps (a step in flight past
+  // an EOS or an abandoned yield), restore the checkpoint taken at the stretch start and replay the kept tokens.
+  async #unplain(plain, cache) {
+    for (const pr of plain.inflight) { try { await pr; } catch (_) {} }
+    const keep = cache.seqLength - plain.P0;
+    if (plain.submitted > keep) {
+      const r = this.res.get(cache);
+      r.slot.checkpoint.restore();
+      const toks = plain.fed.slice(0, keep);
+      if (toks.length) await plain.sess.replayKnownInputs(toks, plain.P0);
+    }
+    plain.inflight = [];
   }
 
   // ---- the engine seam ----
@@ -58594,19 +58626,65 @@ class MTPRunner {
     let pendTok = [anchor], pendPos = cache.seqLength;
     head.setHnRow(0, head.buf.Hlast);
     let eosSeen = false;
+    let plain = null;   // the plain stretch in progress (pipelined decode steps)
+    let depth = D; const pAcc = [0.8, 0.8, 0.8, 0.8];   // per-position acceptance estimates (adaptive)
+    const pick = () => { let best = 0, bestRate = 1; for (let d = 1; d <= Math.min(D, this.cost.length - 1); ++d) { let t = 1, q = 1; for (let i = 0; i < d; ++i) { q *= pAcc[i]; t += q; } const rate = t / this.cost[d]; if (rate > bestRate) { best = d; bestRate = rate; } } return best; };
     try {
       while (emitted < maxNewTokens && !eosSeen) {
         const P = cache.seqLength;
+        if (depth === 0) {
+          // plain stretch through the engine's decode graph. It leaves no head KV rows, so write the pending rows
+          // below P now and restart the head's attention after the stretch.
+          if (pendTok.length > 1) await this.#pass(r, pendTok.slice(0, -1), pendPos, false);
+          pendTok = []; pendPos = P;
+          const n = Math.min(this.plainRun, maxNewTokens - emitted);
+          if (P + n + 1 > cache.maxLength || P + n + 2 > head.kvCap) break;
+          // n - 1 steps through the decode graph, two in flight (each chained step reads the previous step's output
+          // on the GPU). A step submitted past an EOS (or past an abandoned yield) is undone in #unplain.
+          const sess = await beginDecode(cache);
+          r.slot.checkpoint.capture();
+          plain = { sess, P0: P, fed: [anchor], inflight: [], submitted: 0 };
+          const total = n - 1;
+          const submit = () => { plain.inflight.push(sess.submitStep(plain.submitted === 0 ? anchor : null, P + plain.submitted)); plain.submitted++; };
+          let tok = anchor;
+          if (total > 0) submit();
+          while (plain.inflight.length) {
+            if (plain.submitted < total) submit();
+            const next = await plain.inflight.shift(); cache.seqLength += 1;
+            if (isEos(next)) { eosSeen = true; break; }
+            plain.fed.push(next);
+            yield next; emitted++; this.stats.tokens++; this.stats.plainTokens++; tok = next;
+          }
+          await this.#unplain(plain, cache); plain = null;
+          if (eosSeen) break;
+          // the stretch's last token goes through a 1-row session that also returns its hidden row (the h the
+          // head pairs with the next token)
+          const run = await this.#runBlock(r, await r.prefill(1), [tok]); const next = run.next;
+          head.normTrunkRows(run.hidden.buffer, run.hidden.offset, 1, 0);
+          r.kvLo = run.pos + 1; r.valid = r.kvLo;
+          pendTok = [next]; pendPos = run.pos + 1;
+          if (isEos(next)) { eosSeen = true; break; }
+          yield next; emitted++; this.stats.tokens++; this.stats.plainTokens++;
+          anchor = next; depth = 1; this.stats.depthChanges++;
+          for (let i = 0; i < pAcc.length; ++i) pAcc[i] = (pAcc[i] + 0.8) / 2;   // half-forget: the text may have changed
+          continue;
+        }
+        const LV = depth + 1; const { verify, rewind } = r.verifyBy.get(LV); r.verify = verify;
         if (P + LV > cache.maxLength || P + LV + 1 > head.kvCap) break;
         // draft: first pass also re-writes the accepted rows' KV with the trunk's own h; later passes chain h'
         const drafts = [];
         drafts.push(await this.#pass(r, pendTok, pendPos, true));
-        for (let d = 1; d < D; ++d) { head.setHnRow(0, head.buf.Hout, d === 1 ? pendTok.length - 1 : 0); drafts.push(await this.#pass(r, [drafts[d - 1]], P + d, true)); }
-        this.stats.drafted += D;
+        for (let d = 1; d < depth; ++d) { head.setHnRow(0, head.buf.Hout, d === 1 ? pendTok.length - 1 : 0); drafts.push(await this.#pass(r, [drafts[d - 1]], P + d, true)); }
+        this.stats.drafted += depth;
         const block = [anchor, ...drafts];
         r.slot.checkpoint.capture();
-        const run = await this.#runBlock(r, r.verify, block); const vt = Array.from(await run.tokens());
-        let k = 0; while (k < D && vt[k] === drafts[k]) k++;
+        const run = await this.#runBlock(r, verify, block); const vt = Array.from(await run.tokens());
+        let k = 0; while (k < depth && vt[k] === drafts[k]) k++;
+        if (this.adaptive) {
+          // position i was tried only if positions < i were accepted
+          for (let i = 0; i < depth && i <= k; ++i) pAcc[i] += this.alpha * ((k > i ? 1 : 0) - pAcc[i]);
+          const next = pick(); if (next !== depth) { depth = next; this.stats.depthChanges++; }
+        }
         const bonus = vt[k];
         const out = [];
         for (let i = 0; i < k; ++i) { if (isEos(drafts[i])) { eosSeen = true; k = i; break; } out.push(drafts[i]); }
@@ -58617,12 +58695,13 @@ class MTPRunner {
         head.normTrunkRows(run.hidden.buffer, run.hidden.offset, keep, 0);
         pendTok = [...block.slice(1, keep), out[keep - 1] ?? bonus]; pendPos = P + 1;
         r.valid = Math.min(r.valid, P + 1);   // rows written from drafted h past P are speculative
-        if (keep < LV) { r.slot.checkpoint.restore(); r.rewind.run(keep); cache.seqLength = P + keep; }
+        if (keep < LV) { r.slot.checkpoint.restore(); rewind.run(keep); cache.seqLength = P + keep; }
         this.stats.cycles++; this.stats.accepted += k;
         for (let i = 0; i < y; ++i) { yield out[i]; emitted++; this.stats.tokens++; }
         anchor = bonus;
       }
     } finally {
+      if (plain) await this.#unplain(plain, cache);
       // leave the head's KV correct for every cached position, and Hlast for the next one
       const S = cache.seqLength;
       const n = Math.max(0, Math.min(pendTok.length, S + 1 - pendPos));

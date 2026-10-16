@@ -14,6 +14,7 @@
 //   node scripts/bench-engines.mjs --url http://127.0.0.1:8000/ --profile ~/.cache/lm-bench --out bench.json
 //   node scripts/bench-engines.mjs --list          # print the rows and exit
 //   node scripts/bench-engines.mjs --row-timeout 20 # minutes a row may show no progress (default 20)
+//   node scripts/bench-engines.mjs --suite mtp --match 'plain|adaptive'   # only the rows whose engine label matches
 //
 // Needs Chrome with WebGPU. The first run downloads every model in the suite into --profile (engines:
 // ~4.5 GB, dflash: ~7 GB, mtp: ~7.5 GB); later runs reuse that cache. Close other GPU-heavy work first: a busy
@@ -39,6 +40,7 @@ const PORT = Number(opt('port', 9431));
 const ROW_TIMEOUT_MS = Number(opt('row-timeout', 20)) * 60000;
 
 const PROSE = 'Explain how a hash map works: hashing, buckets, collisions and resizing.';
+const STORY = 'Write a short paragraph about lighthouses.';
 const CODE = 'Write a Python class HashMap with put, get, delete and automatic resizing, using separate chaining. Code only.';
 const TOK = { // tokenizer.json source per model family
   lfm2: 'LiquidAI/LFM2.5-1.2B-Instruct-ONNX',
@@ -66,18 +68,20 @@ const ROWS = [
   { suite: 'dflash', model: 'Ternary Bonsai 2 27B', engine: 'WGSL + DFlash 2 · code', key: 'ternary-bonsai-2-27b-webgpu', dflash: true, tok: 'qwen38', prompt: CODE },
   { suite: 'dflash', model: 'Ternary Bonsai 2 27B', engine: 'hand-written WGSL · prose', key: 'ternary-bonsai-2-27b-webgpu', dflash: false, tok: 'qwen38', prompt: PROSE },
   { suite: 'dflash', model: 'Ternary Bonsai 2 27B', engine: 'WGSL + DFlash 2 · prose', key: 'ternary-bonsai-2-27b-webgpu', dflash: true, tok: 'qwen38', prompt: PROSE },
-  ...['code', 'prose'].flatMap((p) => [
-    { suite: 'mtp', model: 'Ternary Bonsai 2 27B', engine: `hand-written WGSL · ${p}`, key: 'ternary-bonsai-2-27b-webgpu', dflash: false, tok: 'qwen38', prompt: p === 'code' ? CODE : PROSE },
-    { suite: 'mtp', model: 'Ternary Bonsai 2 27B', engine: `WGSL + DFlash 2 · ${p}`, key: 'ternary-bonsai-2-27b-webgpu', dflash: true, tok: 'qwen38', prompt: p === 'code' ? CODE : PROSE },
-    { suite: 'mtp', model: 'Ternary Bonsai 2 27B', engine: `WGSL + MTP depth 1 · ${p}`, key: 'ternary-bonsai-2-27b-webgpu', mtp: 1, tok: 'qwen38', prompt: p === 'code' ? CODE : PROSE },
-    { suite: 'mtp', model: 'Ternary Bonsai 2 27B', engine: `WGSL + MTP depth 2 · ${p}`, key: 'ternary-bonsai-2-27b-webgpu', mtp: 2, tok: 'qwen38', prompt: p === 'code' ? CODE : PROSE },
+  ...[['code', CODE], ['prose', PROSE], ['story', STORY]].flatMap(([p, text]) => [
+    { suite: 'mtp', model: 'Ternary Bonsai 2 27B', engine: `hand-written WGSL · ${p}`, key: 'ternary-bonsai-2-27b-webgpu', dflash: false, tok: 'qwen38', prompt: text },
+    { suite: 'mtp', model: 'Ternary Bonsai 2 27B', engine: `WGSL + DFlash 2 · ${p}`, key: 'ternary-bonsai-2-27b-webgpu', dflash: true, tok: 'qwen38', prompt: text },
+    { suite: 'mtp', model: 'Ternary Bonsai 2 27B', engine: `WGSL + MTP depth 1 · ${p}`, key: 'ternary-bonsai-2-27b-webgpu', mtp: 1, tok: 'qwen38', prompt: text },
+    { suite: 'mtp', model: 'Ternary Bonsai 2 27B', engine: `WGSL + MTP depth 2 · ${p}`, key: 'ternary-bonsai-2-27b-webgpu', mtp: 2, tok: 'qwen38', prompt: text },
+    { suite: 'mtp', model: 'Ternary Bonsai 2 27B', engine: `WGSL + MTP adaptive (up to 2) · ${p}`, key: 'ternary-bonsai-2-27b-webgpu', mtp: 'auto', tok: 'qwen38', prompt: text },
   ]),
   { suite: 'ple', model: 'Gemma 4 E2B', engine: 'WGSL · PLE resident · prose', key: 'gemma4-e2b-webgpu', ple: false, tok: 'gemma4', prompt: PROSE },
   { suite: 'ple', model: 'Gemma 4 E2B', engine: 'WGSL · PLE from OPFS · prose', key: 'gemma4-e2b-webgpu', ple: true, tok: 'gemma4', prompt: PROSE },
   { suite: 'ple', model: 'Gemma 4 E2B', engine: 'WGSL · PLE resident · code', key: 'gemma4-e2b-webgpu', ple: false, tok: 'gemma4', prompt: CODE },
   { suite: 'ple', model: 'Gemma 4 E2B', engine: 'WGSL · PLE from OPFS · code', key: 'gemma4-e2b-webgpu', ple: true, tok: 'gemma4', prompt: CODE },
 ];
-const rows = ROWS.filter((r) => SUITE === 'all' || r.suite === SUITE);
+const MATCH = opt('match', null);   // keep only rows whose engine label matches this regex
+const rows = ROWS.filter((r) => (SUITE === 'all' || r.suite === SUITE) && (!MATCH || new RegExp(MATCH).test(r.engine)));
 // Every row's boot registers ALL the custom baselines, not just its own. LFM2.5-230M-ONNX is on the app's
 // retired list, and the boot sweep deletes a retired repo's cache unless a custom entry reads it, so a row
 // that dropped it would make the next run download it again.
@@ -178,9 +182,9 @@ async function runRow(cdp, row, ctx) {
     if (row.dflash || row.mtp) {
       const turns = (await ev('window.__benchSpecTurns')) || [];
       const cycles = turns.reduce((s, t) => s + t.cycles, 0), toks = turns.reduce((s, t) => s + t.tokens, 0);
-      const acc = turns.reduce((s, t) => s + t.acceptedPerCycle * t.cycles, 0);
+      const acc = turns.reduce((s, t) => s + t.acceptedPerCycle * t.cycles, 0), drafted = turns.reduce((s, t) => s + (t.drafted || 0), 0);
       runs[r].spec = { cycles, tokensPerCycle: cycles ? +(toks / cycles).toFixed(2) : null, acceptedPerCycle: cycles ? +(acc / cycles).toFixed(2) : null,
-        ...(row.mtp ? { acceptance: cycles ? +(acc / (cycles * row.mtp)).toFixed(3) : null } : {}) };
+        ...(row.mtp ? { acceptance: drafted ? +(acc / drafted).toFixed(3) : null, plainTokens: turns.reduce((s, t) => s + (t.plainTokens || 0), 0) } : {}) };
     }
     step();
   }
@@ -196,10 +200,10 @@ async function runRow(cdp, row, ctx) {
   ctx.identifier = null;
   const per = runs.map((x, i) => ({ tokens: counts[i], ttftMs: x.ttftMs, tokPerSec: (counts[i] - 1) / (x.decodeMs / 1000), ...(x.spec ? { spec: x.spec } : {}) }));
   const warm = per.length > 1 ? per.slice(1) : per;
-  return { ...row, custom: undefined, prompt: row.prompt === CODE ? 'code' : 'prose', runs: per, pleMode,
+  return { ...row, custom: undefined, prompt: row.prompt === CODE ? 'code' : row.prompt === STORY ? 'story' : 'prose', runs: per, pleMode,
     tokens: warm.map((x) => x.tokens), ttftMs: Math.round(median(warm.map((x) => x.ttftMs))),
     tokPerSec: +median(warm.map((x) => x.tokPerSec)).toFixed(1),
-    identicalRuns: new Set(runs.map((x) => x.text)).size === 1, firstText: runs[0].text };
+    identicalRuns: new Set(runs.map((x) => x.text)).size === 1, textStart: runs[0].text.slice(0, 120), firstText: runs[0].text };
 }
 
 // Runs a row under a no-progress watchdog: the row fails once ROW_TIMEOUT_MS pass with the page's status and
