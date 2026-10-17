@@ -61,7 +61,6 @@ assert.deepEqual(catalog('qwen36-35b-a3b-ssd'), pinned(await read('src/qwen35_mo
 assert.deepEqual(catalog('minicpm-v47-35b-a3b-ssd'), pinned(await read('src/qwen35_moe_ssd.js'), 'MINICPM_V47_35B_A3B'));
 assert.deepEqual(catalog('gemma4-26b-a4b-ssd'), pinned(await read('src/gemma4_moe_ssd.js'), 'GEMMA4_26B_A4B'));
 assert.deepEqual(catalog('lfm25-24b-a2b-ssd'), pinned(await read('src/lfm2_moe_ssd.js'), 'LFM25_24B_A2B'));
-assert.deepEqual(catalog('hy-memory-30b-a3b-ssd'), pinned(await read('src/hy_v3_moe_ssd.js'), 'HY_MEMORY_30B_A3B'));
 assert.deepEqual(catalog('underdog-saluki-27b'), pinned(await read('src/qwen35_dense.js'), 'UNDERDOG_SALUKI_27B'));
 
 // 3. Wiring.

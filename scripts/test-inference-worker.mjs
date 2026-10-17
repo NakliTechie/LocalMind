@@ -113,7 +113,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'));
   const keys = [...registry.slice(0, registry.indexOf('\n    };')).matchAll(/^      '([^']+)': \{/gm)].map((m) => m[1]);
   assert.deepEqual([...options].sort(), [...keys].sort(), 'picker options and MODELS registry keys must match');
-  assert.equal(options.length, 19);   // 2026-10-16: Hy-Memory 30B-A3B in (18 before: Ternary Bonsai 2 2B + 4B in, Bonsai 4B out)
+  assert.equal(options.length, 18);   // 2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out
 }
 // window.localmind.load() sets the select before loading, so the composer's picker names the loaded model.
 assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ modelSelect\.value = key; \} catch \{\}\s*loadModel\(key\);/);
@@ -130,8 +130,6 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   // LFM2.5 24B-A2B (rung 2d) on the same worker; reasoning-only, so the worker marks every reply as reasoning.
   assert.match(indexSource, /'lfm25-24b-a2b-ssd': \{\s*id: 'LiquidAI\/LFM2\.5-24B-A2B-GGUF',[^]*?backend: 'lfm2moe-ssd'/);
   assert.match(indexSource, /'lfm2moe-ssd': \{ engine: 'lfm2_moe_ssd\.js', exportName: 'Lfm2MoeSsd'/);
-  assert.match(indexSource, /'hy-memory-30b-a3b-ssd': \{\s*id: 'naklitechie\/Hy-Memory-30B-A3B-GGUF',[^]*?backend: 'hyv3-ssd'/);
-  assert.match(indexSource, /'hyv3-ssd': \{ engine: 'hy_v3_moe_ssd\.js', exportName: 'HyV3MoeSsd'/);
   // Tools on, decided by scripts/tool-battery.mjs (2026-10-14).
   assert.match(indexSource, /'lfm25-24b-a2b-ssd': \{(?:(?!genConfig)[^])*?agentCapable: true,/);
   // SSD worker: a character split across tokens (trailing U+FFFD) is held back, not streamed.

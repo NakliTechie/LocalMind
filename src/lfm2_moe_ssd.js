@@ -53,8 +53,8 @@ export function configFromGgufLfm2Moe(kv) {
 
 // The OPFS layout from the header alone. One expert record = gate rows then up rows (nibble plane, then scale
 // plane), then down; the store holds the 38 MoE layers, indexed from 0.
-// `cfg` lets another architecture with the same store shape reuse it (hy_v3: hy_v3_moe_ssd.js).
-export function planLayoutLfm2Moe(gguf, cfg = configFromGgufLfm2Moe(gguf.kv)) {
+export function planLayoutLfm2Moe(gguf) {
+  const cfg = configFromGgufLfm2Moe(gguf.kv);
   const H = cfg.hidden, F = cfg.expertFf;
   const nib = (rows, cols) => rows * cols / 2, scl = (rows, cols) => rows * (cols / 32) * 2;
   const parts = {
@@ -164,8 +164,7 @@ export function lfm2ChatPrompt(messages) {
 
 // ── WGSL ────────────────────────────────────────────────────────────────────
 // Router: probs = sigmoid(l); pick the top k of probs + bias (lowest index on ties); weights = picked probs over
-// their sum, the sum clamped at 6.103515625e-5, times expert_weights_scale (llama.cpp build_moe_ffn; 1 for LFM).
-// sel = k ids then k weights (f32 bits).
+// their sum, the sum clamped at 6.103515625e-5 (llama.cpp build_moe_ffn). sel = k ids then k weights (f32 bits).
 const TOPK_SIG_BODY = `
   let t = l.x; let n = p.n;
   var mine = -3.4e38; var pr = 0.0;
@@ -185,11 +184,11 @@ const TOPK_SIG_BODY = `
     var wsum = 0.0;
     for (var j = 0u; j < p.k; j++) { wsum += probs[j]; }
     wsum = max(wsum, 6.103515625e-5);
-    for (var j = 0u; j < p.k; j++) { sel[sb + j] = picks[j]; sel[sb + p.k + j] = bitcast<u32>(probs[j] / wsum * p.scale); }
+    for (var j = 0u; j < p.k; j++) { sel[sb + j] = picks[j]; sel[sb + p.k + j] = bitcast<u32>(probs[j] / wsum); }
   }
 }`;
 const TOPK_SIG_DECL = `
-struct P { n: u32, k: u32, scale: f32 }
+struct P { n: u32, k: u32 }
 @group(0) @binding(0) var<storage, read> lg: array<f32>;
 @group(0) @binding(1) var<storage, read> bias: array<f32>;
 @group(0) @binding(2) var<storage, read_write> sel: array<u32>;
@@ -345,14 +344,14 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
   }
 
   // KV cache only on the attention layers.
-  kvBytes() { const c = this.cfg, hd = c.attnHeadDim || c.hidden / c.heads; return c.attn.filter(Boolean).length * 2 * 2 * this.maxCtx * c.kvHeadsAttn * hd; }
+  kvBytes() { const c = this.cfg, hd = c.hidden / c.heads; return c.attn.filter(Boolean).length * 2 * 2 * this.maxCtx * c.kvHeadsAttn * hd; }
 
   // The Q6_K table into planes (Gemma's uploadDense); this model has no rope_freqs.
   async uploadDense(onProgress) { await super.uploadDense(onProgress); this.ropeFreqs = null; }
 
   initBuffers() {
     const c = this.cfg, H = c.hidden, K = c.topK, E = c.experts, F = c.expertFf, DF = c.denseFf, ML = c.modelLayers;
-    const hd = c.attnHeadDim || H / c.heads, QN = c.heads * hd, KVN = c.kvHeadsAttn * hd, SF = c.shexpFf || 0;
+    const hd = H / c.heads, QN = H, KVN = c.kvHeadsAttn * hd;
     if (2 * K * 4 > 256) throw new Error(`top-k ${K} > 32`);
     if (E > 256) throw new Error(`${E} experts: the router top-k kernel handles at most 256`);
     if ((DF * 4) % 256) throw new Error(`dense FFN ${DF}: gate/up halves must sit on 256-byte offsets`);
@@ -378,11 +377,10 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
     const u = {
       embed: this.uniform([H, H / 256, f(1)]), rmsH: this.uniform([H, eps]), nH: this.uniform([H]),
       inProj: this.uniform([3 * H, H]), mmH: this.uniform([H, H]), conv: this.uniform([H]),
-      mmQ: this.uniform([QN, H]), mmO: this.uniform([H, QN]), mmKV: this.uniform([KVN, H]), qk: this.uniform([hd, eps]), kvn: this.uniform([KVN]),
+      mmQ: this.uniform([QN, H]), mmKV: this.uniform([KVN, H]), qk: this.uniform([hd, eps]), kvn: this.uniform([KVN]),
       att: this.uniform([c.heads, c.kvHeadsAttn, hd, f(Math.fround(1 / Math.sqrt(hd)))]), attOut: this.uniform([c.heads, c.kvHeadsAttn, hd, 0]),
       mmG: this.uniform([DF, H]), mmD: this.uniform([H, DF]), siluD: this.uniform([DF, 1]),
-      router: this.uniform([E, H]), topk: this.uniform([E, K, f(c.expScale ?? 1)]),
-      ...(SF ? { mmSG: this.uniform([SF, H]), mmSD: this.uniform([H, SF]), siluS: this.uniform([SF, 1]) } : {}),
+      router: this.uniform([E, H]), topk: this.uniform([E, K]),
       gu: this.uniform([2 * F, H, 2 * F, 0]), dn: this.uniform([H, F, H, 1]), siluE: this.uniform([F, K]), acc: this.uniform([H, K]),
       lm: this.uniform([c.vocab, H]), am: this.uniform([c.vocab]),
     };
@@ -405,7 +403,7 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
           score: this.bind('attnScore', [a.q, this.kc[L], a.sc, this.tok, u.att]),
           soft: this.bind('softmax', [a.sc, this.tok]),
           attOut: this.bind('attnOut', [a.sc, this.vc[L], a.att, this.tok, u.attOut]),
-          o: this.bind('matmulQ4', [a.att, p('attn_output.weight').q, p('attn_output.weight').s, a.o, u.mmO]),
+          o: this.bind('matmulQ4', [a.att, p('attn_output.weight').q, p('attn_output.weight').s, a.o, u.mmH]),
         });
       } else {
         Object.assign(ly, {
@@ -433,31 +431,23 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
       const L = l + c.lead, p = (n) => W[`blk.${L}.${n}`];
       this.layers.push({
         router: this.bind('matmulF32', [a.xn, p('ffn_gate_inp.weight').raw, a.rl, u.router]),
-        topk: this.bind('topkSig', [a.rl, (p('exp_probs_b.bias') || p('exp_probs_b')).raw, a.sel, u.topk]),
+        topk: this.bind('topkSig', [a.rl, p('exp_probs_b.bias').raw, a.sel, u.topk]),
         // Routers of MoE layers l+1..l+lookahead on this layer's post-operator state: the prefetch guesses.
         pf: Array.from({ length: Math.min(this.lookahead, c.layers - 1 - l) }, (_, i) => {
           const at = (n) => W[`blk.${L + 1 + i}.${n}`];
           return {
             rms: this.bind('rmsnorm', [a.x, at('ffn_norm.weight').raw, a.pxn, u.rmsH]),
             router: this.bind('matmulF32', [a.pxn, at('ffn_gate_inp.weight').raw, a.prl, u.router]),
-            topk: this.bindR('topkSig', [a.prl, (at('exp_probs_b.bias') || at('exp_probs_b')).raw, { buffer: a.psel, offset: 256 * i, size: 8 * K }, u.topk]),
+            topk: this.bindR('topkSig', [a.prl, at('exp_probs_b.bias').raw, { buffer: a.psel, offset: 256 * i, size: 8 * K }, u.topk]),
           };
         }),
         gu: this.bind('expertQ4', [a.xn, this.pool.guQ, this.pool.guS, a.gu, u.gu, a.slots]),
         act: this.bind('siluMulMoe', [a.gu, a.act, u.siluE]),
         dn: this.bind('expertQ4', [a.act, this.pool.dQ, this.pool.dS, a.dn, u.dn, a.slots]),
         acc: this.bind('moeAccum', [a.dn, a.sel, a.x, u.acc]),
-        // The shared expert (always on, no gate; hy_v3): x += down(SiLU(gate(xn)) · up(xn)).
-        ...(SF ? { sh: {
-          g: this.bindR('matmulQ4', [a.xn, p('ffn_gate_shexp.weight').q, p('ffn_gate_shexp.weight').s, { buffer: a.mgu, offset: 0, size: SF * 4 }, u.mmSG]),
-          u: this.bindR('matmulQ4', [a.xn, p('ffn_up_shexp.weight').q, p('ffn_up_shexp.weight').s, { buffer: a.mgu, offset: SF * 4, size: SF * 4 }, u.mmSG]),
-          act: this.bind('siluMulMoe', [a.mgu, a.ma, u.siluS]),
-          d: this.bind('matmulQ4', [a.ma, p('ffn_down_shexp.weight').q, p('ffn_down_shexp.weight').s, a.o, u.mmSD]),
-          add: this.bind('addInPlace', [a.x, a.o, u.nH]),
-        } } : {}),
       });
     }
-    this.g.rmsOut = this.bind('rmsnorm', [a.x, (W['token_embd_norm.weight'] || W['output_norm.weight']).raw, a.xn, u.rmsH]);
+    this.g.rmsOut = this.bind('rmsnorm', [a.x, W['token_embd_norm.weight'].raw, a.xn, u.rmsH]);
     this.g.lm = this.bind('matmulQ6K', [...q6, a.xn, a.logits, u.lm]);
     this.g.am = this.bind('argmax', [a.logits, a.am, u.am]);
     if (Math.min(c.experts, this.chunkTokens * c.topK) > this.poolSlots / 2) this.chunkTokens = Math.max(2, Math.floor(this.poolSlots / 2 / c.topK));
@@ -466,7 +456,7 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
 
   initBatch() {
     const c = this.cfg, B = this.chunkTokens, W = this.w, H = c.hidden, K = c.topK, E = c.experts, F = c.expertFf, DF = c.denseFf;
-    const hd = c.attnHeadDim || H / c.heads, QN = c.heads * hd, KVN = c.kvHeadsAttn * hd, SF = c.shexpFf || 0;
+    const hd = H / c.heads, QN = H, KVN = c.kvHeadsAttn * hd;
     const A = (n) => this.buffer(n * 4, STORAGE | COPY_SRC | COPY_DST, 'batch');
     const b = this.b = {
       ids: A(B), x: A(B * H), xn: A(B * H), bcx: A(B * 3 * H), y: A(B * H), q: A(B * QN), k: A(B * KVN), v: A(B * KVN),
@@ -478,11 +468,10 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
     this.rbSelB = this.buffer(B * 2 * K * 4, MAP_READ | COPY_DST, 'batch');
     const U = (w) => this.uniform(w), eps = { f: c.eps }, qb = this.qb;
     const u = {
-      embed: U([H, H / 256, { f: 1 }]), rmsH: U([H, eps]), nH: U([H]), inProj: U([3 * H, H]), mmH: U([H, H]), mmO: U([H, QN]), conv: U([H]),
+      embed: U([H, H / 256, { f: 1 }]), rmsH: U([H, eps]), nH: U([H]), inProj: U([3 * H, H]), mmH: U([H, H]), conv: U([H]),
       q: U([QN, H]), kv: U([KVN, H]), ropeQ: U([hd, QN, eps]), ropeK: U([hd, KVN, eps]), kvn: U([KVN]),
       att: U([c.heads, c.kvHeadsAttn, hd, { f: Math.fround(1 / Math.sqrt(hd)) }]), attOut: U([c.heads, c.kvHeadsAttn, hd, 0]),
-      mg: U([DF, H]), md: U([H, DF]), silu: U([DF]), router: U([E, H]), topk: U([E, K, { f: c.expScale ?? 1 }]),
-      ...(SF ? { sg: U([SF, H]), sd: U([H, SF]), siluS: U([SF]) } : {}),
+      mg: U([DF, H]), md: U([H, DF]), silu: U([DF]), router: U([E, H]), topk: U([E, K]),
       gu: U([2 * F, H, 2 * F, 0, K]), dn: U([H, F, H, 1, K]), siluE: U([F, B * K]), acc: U([H, K]),
     };
     const q4 = (name, x, y, uni) => this.bind('matmulQ4T', [x, W[name].q, W[name].s, y, uni, qb]);
@@ -499,7 +488,7 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
           score: this.bind('attnScoreB', [b.q, this.kc[L], b.sc, u.att, qb]),
           soft: this.bind('softmaxB', [b.sc, qb]),
           attOut: this.bind('attnOutB', [b.sc, this.vc[L], b.att, u.attOut, qb]),
-          o: q4(n('attn_output.weight'), b.att, b.o, u.mmO),
+          o: q4(n('attn_output.weight'), b.att, b.o, u.mmH),
         });
       } else {
         Object.assign(B_, {
@@ -523,17 +512,11 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
       const raw = (t) => W[`blk.${l + c.lead}.${t}`].raw;
       this.layers[l].B = {
         router: this.bind('matmulF32T', [b.xn, raw('ffn_gate_inp.weight'), b.rl, u.router]),
-        topk: this.bind('topkSigB', [b.rl, (W[`blk.${l + c.lead}.exp_probs_b.bias`] || W[`blk.${l + c.lead}.exp_probs_b`]).raw, b.sel, u.topk]),
+        topk: this.bind('topkSigB', [b.rl, raw('exp_probs_b.bias'), b.sel, u.topk]),
         gu: this.bind('expertQ4B', [b.xn, this.pool.guQ, this.pool.guS, b.gu, u.gu, b.slots]),
         act: this.bind('siluMulMoe', [b.gu, b.act, u.siluE]),
         dn: this.bind('expertQ4B', [b.act, this.pool.dQ, this.pool.dS, b.dn, u.dn, b.slots]),
         acc: this.bind('moeAccumB', [b.dn, b.sel, b.x, u.acc, qb]),
-        ...(SF ? { sh: {
-          g: q4(`blk.${l + c.lead}.ffn_gate_shexp.weight`, b.xn, b.mg, u.sg), u: q4(`blk.${l + c.lead}.ffn_up_shexp.weight`, b.xn, b.mu, u.sg),
-          act: this.bind('siluSplitB', [b.mg, b.mu, b.ma, u.siluS, qb]),
-          d: q4(`blk.${l + c.lead}.ffn_down_shexp.weight`, b.ma, b.o, u.sd),
-          add: this.bind('addInPlaceB', [b.x, b.o, u.nH, qb]),
-        } } : {}),
       };
     }
   }
@@ -542,15 +525,15 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
   // Model layer L's operator and residual add, then its FFN norm; the dense layers also run their FFN.
   encodeModelLayer(pass, L, seqLen) {
     const c = this.cfg, g = this.mlayers[L], d = (n, gr, x, y, z) => this.dispatch(pass, n, gr, x, y, z);
-    const H = c.hidden, hd = c.attnHeadDim || H / c.heads, QN = c.heads * hd, KVN = c.kvHeadsAttn * hd;
+    const H = c.hidden, hd = H / c.heads, KVN = c.kvHeadsAttn * hd;
     d('rmsnorm', g.rmsA, 1);
     if (g.attn) {
-      d('matmulQ4', g.q, Math.ceil(QN / 4)); d('matmulQ4', g.k, Math.ceil(KVN / 4)); d('matmulQ4', g.v, Math.ceil(KVN / 4));
+      d('matmulQ4', g.q, Math.ceil(H / 4)); d('matmulQ4', g.k, Math.ceil(KVN / 4)); d('matmulQ4', g.v, Math.ceil(KVN / 4));
       d('qkNormRope', g.ropeQ, c.heads); d('qkNormRope', g.ropeK, c.kvHeadsAttn);
       d('kvStore', g.kv, Math.ceil(KVN / 256));
       d('attnScore', g.score, Math.ceil(c.heads * seqLen / 256));
       d('softmax', g.soft, c.heads);
-      d('attnOut', g.attOut, Math.ceil(QN / 256));
+      d('attnOut', g.attOut, Math.ceil(H / 256));
       d('matmulQ4', g.o, Math.ceil(H / 4));
     } else {
       d('matmulQ4', g.inProj, Math.ceil(3 * H / 4));
@@ -582,13 +565,6 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
     d('siluMulMoe', g.act, Math.ceil(c.topK * c.expertFf / 256));
     d('expertQ4', g.dn, Math.ceil(c.hidden / 4), 1, c.topK);
     d('moeAccum', g.acc, Math.ceil(c.hidden / 256));
-    if (g.sh) {
-      const s = g.sh;
-      d('matmulQ4', s.g, Math.ceil(c.shexpFf / 4)); d('matmulQ4', s.u, Math.ceil(c.shexpFf / 4));
-      d('siluMulMoe', s.act, Math.ceil(c.shexpFf / 256));
-      d('matmulQ4', s.d, Math.ceil(c.hidden / 4));
-      d('addInPlace', s.add, Math.ceil(c.hidden / 256));
-    }
     const cap = this.mlayers[l + c.lead].cap;
     if (cap) d('copyAt', cap, Math.ceil(c.hidden / 256));
   }
@@ -602,15 +578,15 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
   // ── forward, a chunk of T tokens ──
   encodeModelLayerB(pass, L, T, S) {
     const c = this.cfg, g = this.mlayers[L].B, d = (nm, gr, x, y, z) => this.dispatch(pass, nm, gr, x, y, z);
-    const H = c.hidden, hd = c.attnHeadDim || H / c.heads, QN = c.heads * hd, KVN = c.kvHeadsAttn * hd, tt = Math.ceil(T / 16), mm = (n) => Math.ceil(n / 16);
+    const H = c.hidden, hd = H / c.heads, KVN = c.kvHeadsAttn * hd, tt = Math.ceil(T / 16), mm = (n) => Math.ceil(n / 16);
     d('rmsnormB', g.rmsA, T);
     if (this.mlayers[L].attn) {
-      d('matmulQ4T', g.q, mm(QN), tt); d('matmulQ4T', g.k, mm(KVN), tt); d('matmulQ4T', g.v, mm(KVN), tt);
+      d('matmulQ4T', g.q, mm(H), tt); d('matmulQ4T', g.k, mm(KVN), tt); d('matmulQ4T', g.v, mm(KVN), tt);
       d('qkNormRopeB', g.ropeQ, c.heads, T); d('qkNormRopeB', g.ropeK, c.kvHeadsAttn, T);
       d('kvStoreB', g.kv, Math.ceil(KVN / 256), T);
       d('attnScoreB', g.score, Math.ceil(c.heads * T * S / 256));
       d('softmaxB', g.soft, c.heads * T);
-      d('attnOutB', g.attOut, Math.ceil(QN / 256), T);
+      d('attnOutB', g.attOut, Math.ceil(H / 256), T);
       d('matmulQ4T', g.o, mm(H), tt);
     } else {
       d('matmulQ4T', g.inProj, mm(3 * H), tt);
@@ -639,13 +615,6 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
     d('siluMulMoe', g.act, Math.ceil(T * c.topK * c.expertFf / 256));
     d('expertQ4B', g.dn, Math.ceil(c.hidden / 4), 1, T * c.topK);
     d('moeAccumB', g.acc, Math.ceil(c.hidden / 256), T);
-    if (g.sh) {
-      const s = g.sh, tt = Math.ceil(T / 16), mm = (n) => Math.ceil(n / 16);
-      d('matmulQ4T', s.g, mm(c.shexpFf), tt); d('matmulQ4T', s.u, mm(c.shexpFf), tt);
-      d('siluSplitB', s.act, Math.ceil(c.shexpFf / 256), T);
-      d('matmulQ4T', s.d, mm(c.hidden), tt);
-      d('addInPlaceB', s.add, Math.ceil(c.hidden / 256), T);
-    }
   }
 
   // The conv state cannot rewind, so any change before the cached end restarts from token 0.
