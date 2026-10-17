@@ -41,6 +41,13 @@ ok('missing colon after a key', () => {
   assert.equal(ev[0].text, "Works as a nurse at a children's hospital");
   assert.equal(ev[0].event, 'ADD');
 });
+ok('writer model setting: off by default, Hy-Memory wired to its engine', () => {
+  assert.match(html, /return WRITER_MODELS\[k\] \? k : 'chat';/);
+  assert.match(html, /<option value="chat">the chat model<\/option>\s*<option value="hy-memory-30b-a3b">Hy-Memory 30B-A3B &middot; tech demo/);
+  assert.match(html, /'hy-memory-30b-a3b': \{ label: 'Hy-Memory 30B-A3B', backend: 'hyv3-ssd'/);
+  assert.match(html, /'hyv3-ssd': \{ engine: 'hy_v3_moe_ssd\.js', exportName: 'HyV3MoeSsd'/);
+  assert.ok(!/value="hy-memory-30b-a3b-ssd"/.test(html), 'Hy-Memory is the writer only, not in the chat picker');
+});
 ok('python repr', () => {
   assert.equal(W.pyRepr(['a', "it's", 'say "x"', `both ' and "`]), `['a', "it's", 'say "x"', 'both \\' and "']`);
   assert.equal(W.pyRepr({ id: '0', text: 'x\ny' }), "{'id': '0', 'text': 'x\\ny'}");

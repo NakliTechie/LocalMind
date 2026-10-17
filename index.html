@@ -2746,10 +2746,10 @@
             Write memories with
             <select id="memoryWriterModelSelect" class="settings-input" style="width:auto">
               <option value="chat">the chat model</option>
-              <option value="hy-memory-30b-a3b">Hy-Memory 30B-A3B (~32 GB)</option>
+              <option value="hy-memory-30b-a3b">Hy-Memory 30B-A3B &middot; tech demo (~32 GB)</option>
             </select>
           </label>
-          <div style="font-size:0.75rem;color:var(--gray-500);margin-top:2px">Hy-Memory 30B-A3B is Tencent&rsquo;s model trained only to write memories; on Tencent&rsquo;s memory tests it scores above Claude Opus 5. It runs in the background next to your chat model, streaming its experts from this browser&rsquo;s storage. The first write downloads it once (~32 GB of disk); it unloads from the GPU after 5 idle minutes.</div>
+          <div style="font-size:0.75rem;color:var(--gray-500);margin-top:2px">Hy-Memory 30B-A3B is Tencent&rsquo;s model trained only to write memories; on Tencent&rsquo;s memory tests it scores above Claude Opus 5. It runs in the background next to your chat model, streaming its experts from this browser&rsquo;s storage. The first write downloads it once (~32 GB of disk); it unloads from the GPU after 5 idle minutes. A tech demo: in LocalMind&rsquo;s 10-conversation test it matched Ternary Bonsai 2 27B writing its own memories on facts (15 of 15) and recall (8 of 8), handled one more change, stored more off-topic items, and took about 4 minutes per write.</div>
         </div>
         <div class="settings-divider" data-tab="models">
           <label>Custom models <span style="font-weight:400;color:var(--gray-500)">(HF ONNX repo, a GGUF URL, or a local .gguf file)</span></label>
