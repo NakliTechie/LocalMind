@@ -11382,9 +11382,17 @@ self.addEventListener('message', async (e) => {
       return out.replace(/,(\s*[}\]])/g, '$1');
     }
 
+    // A key followed by its value with the colon missing ({"text" "Works as a nurse"}): a 4-bit 30B model wrote this in
+    // the update step on 2026-10-16 (llama.cpp wrote the same bytes). A string right after `{` or `,` and followed by
+    // another string is a key.
+    function restoreMissingColons(s) {
+      return s.replace(/([{,]\s*"(?:[^"\\]|\\.)*")(\s*)(?=")/g, '$1:$2');
+    }
+
     function tryParseJson(s) {
       try { return JSON.parse(s); } catch {}
       try { return JSON.parse(pythonishToJson(s)); } catch {}
+      try { return JSON.parse(restoreMissingColons(pythonishToJson(s))); } catch {}
       return undefined;
     }
 

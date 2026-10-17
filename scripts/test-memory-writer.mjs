@@ -34,6 +34,13 @@ ok('update prompt with memories', () => {
 ok('update prompt, empty memory', () => {
   assert.equal(W.buildMemoryUpdatePrompt([], ['Moved from Pune to Delhi', 'Says "hi" a lot']), fixtures.upd_empty);
 });
+ok('missing colon after a key', () => {
+  const raw = '{\n    "memory" : [\n        {\n            "id" : "2",\n            "text" "Works as a nurse at a children\'s hospital",\n            "event" : "ADD"\n        }\n    ]\n}';
+  const ev = W.parseMemoryEvents(raw);
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].text, "Works as a nurse at a children's hospital");
+  assert.equal(ev[0].event, 'ADD');
+});
 ok('python repr', () => {
   assert.equal(W.pyRepr(['a', "it's", 'say "x"', `both ' and "`]), `['a', "it's", 'say "x"', 'both \\' and "']`);
   assert.equal(W.pyRepr({ id: '0', text: 'x\ny' }), "{'id': '0', 'text': 'x\\ny'}");
