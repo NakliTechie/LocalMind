@@ -2742,6 +2742,14 @@
           <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:400;cursor:pointer">
             <input type="checkbox" id="memoryWriterAutoToggle"> Write memories after each reply <span style="font-weight:400;color:var(--gray-500)">(when a reply finishes, the loaded model reads that exchange, saves new facts about you and updates or removes memories they change; it waits for the reply, and stops when you send the next message. Best with Hy-Memory 30B-A3B. Memory panel &rarr; &ldquo;Write memories from this chat&rdquo; does the same for the whole chat)</span>
           </label>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:400">
+            Write memories with
+            <select id="memoryWriterModelSelect" class="settings-input" style="width:auto">
+              <option value="chat">the chat model</option>
+              <option value="hy-memory-30b-a3b">Hy-Memory 30B-A3B (~32 GB)</option>
+            </select>
+          </label>
+          <div style="font-size:0.75rem;color:var(--gray-500);margin-top:2px">Hy-Memory 30B-A3B is Tencent&rsquo;s model trained only to write memories; on Tencent&rsquo;s memory tests it scores above Claude Opus 5. It runs in the background next to your chat model, streaming its experts from this browser&rsquo;s storage. The first write downloads it once (~32 GB of disk); it unloads from the GPU after 5 idle minutes.</div>
         </div>
         <div class="settings-divider" data-tab="models">
           <label>Custom models <span style="font-weight:400;color:var(--gray-500)">(HF ONNX repo, a GGUF URL, or a local .gguf file)</span></label>
@@ -10696,7 +10704,7 @@ self.addEventListener('message', async (e) => {
     const SYNC_SETTINGS_KEYS = ['lm_search_provider', 'lm_searxng_url', 'lm_planner_enabled',
       'lm_resumable_downloads', 'lm_auto_backup', 'lm_sam_model', 'lm_voice_language', 'lm_api_enabled', 'lm_theme',
       'lm_tts_voice', 'lm_tts_speed', 'lm_tts_autoplay', 'lm_auto_escalation',
-      'lm_rag_rerank', 'lm_memory_writer_auto'];
+      'lm_rag_rerank', 'lm_memory_writer_auto', 'lm_memory_writer_model'];
 
     function openSyncDB() {
       return new Promise((resolve, reject) => {
@@ -13903,7 +13911,76 @@ self.addEventListener('message', async (e) => {
     function memoryWriterDebug() { try { return localStorage.getItem('lm_debug_memory_writer') === '1'; } catch { return false; } }
     function memoryWriterAutoOn() { try { return localStorage.getItem(MEMORY_WRITER_AUTO_KEY) === '1'; } catch { return false; } }
 
+    // ── Memory writer model ─────────────────────────────────────────
+    // Settings → Memory → "Write memories with": the chat model, or Hy-Memory 30B-A3B (Tencent's memory writer, the
+    // community Q8_0 GGUF) in its own background worker next to the chat model. It loads on the first write (the first
+    // time it copies the 32 GB file into this browser's storage), stays on the GPU while writes keep coming, and
+    // unloads after WRITER_IDLE_MS so the GPU memory goes back to the chat model. Only offered as the writer, not in
+    // the chat picker (Chirag, 2026-10-17): it was trained to write memories, not to chat.
+    const WRITER_MODELS = {
+      'hy-memory-30b-a3b': { label: 'Hy-Memory 30B-A3B', backend: 'hyv3-ssd', id: 'rapatsky/Hy-Memory-30B-A3B-GGUF', contextSize: 8192 },
+    };
+    const WRITER_IDLE_MS = 5 * 60 * 1000;
+    let writerWorker = null, writerLoading = null, writerIdle = null;
+    function memoryWriterModel() {
+      try { const k = localStorage.getItem('lm_memory_writer_model'); return WRITER_MODELS[k] ? k : 'chat'; } catch { return 'chat'; }
+    }
+    function writerUnload() {
+      clearTimeout(writerIdle); writerIdle = null;
+      if (writerWorker) { try { writerWorker.terminate(); } catch {} }
+      writerWorker = null; writerLoading = null;
+    }
+    function writerLoad(key, onProgress) {
+      if (writerLoading) return writerLoading;
+      const m = WRITER_MODELS[key], w = createMoeSsdWorker(moeSsdEngine(m.backend));
+      writerWorker = w;
+      writerLoading = new Promise((resolve, reject) => {
+        const onMsg = (e) => {
+          const d = e.data;
+          if (d.type === 'progress') { if (onProgress) try { onProgress(d.data); } catch {} }
+          else if (d.type === 'ready') { w.removeEventListener('message', onMsg); resolve(w); }
+          else if (d.type === 'error') { w.removeEventListener('message', onMsg); writerUnload(); reject(new Error(d.message || `${m.label} failed to load`)); }
+        };
+        w.addEventListener('message', onMsg);
+        w.addEventListener('error', (ev) => { writerUnload(); reject(new Error(ev.message || `${m.label} worker failed to start`)); });
+        w.postMessage({ type: 'load', modelId: m.id, contextSize: m.contextSize, localFile: null, hfToken: hfToken() });
+      });
+      return writerLoading;
+    }
+    async function writerGenerate(key, chatMessages, maxTokens, signal, onProgress) {
+      clearTimeout(writerIdle);
+      const w = await writerLoad(key, onProgress);
+      try {
+        return await new Promise((resolve, reject) => {
+          let text = '';
+          const onAbort = () => { try { w.postMessage({ type: 'stop' }); } catch {} };
+          const done = () => { w.removeEventListener('message', onMsg); if (signal) signal.removeEventListener('abort', onAbort); };
+          const onMsg = (e) => {
+            const d = e.data;
+            if (d.type === 'token') text += d.token;
+            else if (d.type === 'complete') { done(); resolve(text); }
+            else if (d.type === 'error') { done(); reject(new Error(d.message || 'memory writer failed')); }
+          };
+          w.addEventListener('message', onMsg);
+          if (signal) signal.addEventListener('abort', onAbort);
+          w.postMessage({ type: 'generate', messages: chatMessages, enableThinking: false, generationConfig: { max_new_tokens: maxTokens } });
+        });
+      } finally { writerIdle = setTimeout(writerUnload, WRITER_IDLE_MS); }
+    }
+    // The writer's load progress on the Memory panel's button (the first load downloads 32 GB).
+    function writerProgress(p) {
+      if (!p || !memoryWriterJob) return;
+      if (p.status === 'progress_total' && p.total > 0) memoryWriteBtn.textContent = `Loading the memory writer… ${Math.floor(100 * p.loaded / p.total)}%`;
+      else if (p.status === 'loading' || p.status === 'initiate') memoryWriteBtn.textContent = 'Loading the memory writer…';
+    }
+
     async function memoryWriterGenerate(chatMessages, maxTokens, signal) {
+      const writerKey = memoryWriterModel();
+      if (writerKey !== 'chat') {
+        const text = await writerGenerate(writerKey, chatMessages, maxTokens, signal, writerProgress);
+        if (memoryWriterJob && !signal.aborted) memoryWriteBtn.textContent = 'Writing memories…';
+        return text;
+      }
       const m = MODELS[activeModelKey];
       let text = '', error = null;
       try {
@@ -13973,9 +14050,10 @@ self.addEventListener('message', async (e) => {
     async function writeMemoriesFromChat({ auto = false } = {}) {
       const say = (msg) => { if (!auto) showToast(msg); };
       if (memoryWriterJob) { say('Memory writer is already running.'); return null; }
-      if (!modelReady) { say('Load a model first: the loaded model writes the memories.'); return null; }
+      const writerKey = memoryWriterModel();
+      if (!modelReady && writerKey === 'chat') { say('Load a model first: the loaded model writes the memories.'); return null; }
       if (generating || currentAssistantEl) { say('Wait for the reply to finish, then write memories.'); return null; }
-      const roles = isHyMemoryModel(MODELS[activeModelKey], activeModelKey) ? 'mem0' : 'fewshot';
+      const roles = writerKey !== 'chat' || isHyMemoryModel(MODELS[activeModelKey], activeModelKey) ? 'mem0' : 'fewshot';
       // The button reads the whole chat once, then only what came after the last finished run: re-reading written
       // turns costs time, and LFM2.5 1.2B missed the Pune → Delhi move in a 4-turn input it caught in 2 turns.
       const markValid = !!(memoryWriterMark && messages[memoryWriterMark.upto - 1] === memoryWriterMark.msg);
@@ -14063,6 +14141,15 @@ self.addEventListener('message', async (e) => {
       memoryWriterAutoToggle.checked = memoryWriterAutoOn();
       memoryWriterAutoToggle.addEventListener('change', () => {
         try { localStorage.setItem(MEMORY_WRITER_AUTO_KEY, memoryWriterAutoToggle.checked ? '1' : '0'); } catch {}
+        scheduleSync();
+      });
+    }
+    const memoryWriterModelSelect = document.getElementById('memoryWriterModelSelect');
+    if (memoryWriterModelSelect) {
+      memoryWriterModelSelect.value = memoryWriterModel();
+      memoryWriterModelSelect.addEventListener('change', () => {
+        try { localStorage.setItem('lm_memory_writer_model', memoryWriterModelSelect.value); } catch {}
+        if (memoryWriterModelSelect.value === 'chat') writerUnload();
         scheduleSync();
       });
     }
@@ -17428,6 +17515,7 @@ self.addEventListener('message', async (e) => {
         'minicpmv-ssd': { engine: 'qwen35_moe_ssd.js', exportName: 'MiniCpmV47Ssd', label: 'MiniCPM-V 4.7 35B-A3B (Q4_0)' },
         'gemma4moe-ssd': { engine: 'gemma4_moe_ssd.js', exportName: 'Gemma4MoeSsd', label: 'Gemma 4 26B-A4B (Q4_0)' },
         'lfm2moe-ssd': { engine: 'lfm2_moe_ssd.js', exportName: 'Lfm2MoeSsd', label: 'LFM2.5 24B-A2B (Q4_0)' },
+        'hyv3-ssd': { engine: 'hy_v3_moe_ssd.js', exportName: 'HyV3MoeSsd', label: 'Hy-Memory 30B-A3B (Q8_0)' },   // the memory writer only (WRITER_MODELS)
         'qwen35dense': { engine: 'qwen35_dense.js', exportName: 'Qwen35Dense', label: 'Underdog Saluki 27B (IQ2-mix)' },
       })[backend] || null;
     }
@@ -30113,7 +30201,7 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
     tables(ls, null, this.b.ropeS); tables(lf, this.ropeFreqs, this.b.ropeF);
     const selBytes = T * 2 * K * 4;
     let enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
-    this.dispatch(pass, 'embedQ6KB', this.gB.embed, Math.ceil(H / 256), T);
+    this.dispatch(pass, this.embedKernelB || 'embedQ6KB', this.gB.embed, Math.ceil(H / 256), T);   // embedKernelB: an engine with another table type (hy_v3 Q8_0)
     this.encodeTrunkB(pass, 0, T, S);
     pass.end();
     enc.copyBufferToBuffer(this.b.sel, 0, this.rbSelB, 0, selBytes);
@@ -30186,7 +30274,7 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
     return r;
   }
 
-  encodeEmbed(pass) { this.dispatch(pass, 'embedQ6K', this.g.embed, Math.ceil(this.cfg.hidden / 256)); }
+  encodeEmbed(pass) { this.dispatch(pass, this.embedKernel || 'embedQ6K', this.g.embed, Math.ceil(this.cfg.hidden / 256)); }
   encodeHead(pass, want) {
     const c = this.cfg;
     this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);
@@ -30365,6 +30453,205 @@ export function splitQ4(src, q, s) {
     qd[o] = a[i + 1]; qd[o + 1] = a[i + 2]; qd[o + 2] = a[i + 3]; qd[o + 3] = a[i + 4];
     qd[o + 4] = a[i + 5]; qd[o + 5] = a[i + 6]; qd[o + 6] = a[i + 7]; qd[o + 7] = a[i + 8];
   }
+}
+</script>
+<script type="text/plain" data-module="hy_v3_moe_ssd.js">/* hy_v3_moe_ssd.js — Tencent Hy-Memory-30B-A3B (GGUF arch `hy_v3`) with its routed experts on disk: rung 2f of the
+ * SSD-streaming ladder. Hy-Memory is a long-term-memory writer (it extracts and updates memory entries; arXiv
+ * 2610.22196); as an engine it is a plain GQA transformer with a DeepSeek-style router, so it reuses the LFM2.5 rung
+ * (lfm2_moe_ssd.js: sigmoid router + selection bias, dense leading layers run inside MoE layer 0's trunk pass,
+ * Q4_0 / Q6_K kernels) with every layer an attention layer.
+ *
+ * The math follows llama.cpp src/models/hy-v3.cpp. 48 layers, each:
+ *   x += attn(rms_norm(x) · attn_norm): Q/K/V (32 / 4 / 4 heads × 128; Q is 4096 wide, wider than the 2048 hidden),
+ *     per-head weighted RMS norm on Q and K, NeoX RoPE (base 11158840, all 128 dims), softmax(QKᵀ/√128) V, output
+ *     projection 4096 → 2048.
+ *   x += ffn(rms_norm(x) · ffn_norm): a dense SwiGLU (6912) on layer 0; on layers 1–47 a MoE of 128 experts, top 8 by
+ *     sigmoid(router) + exp_probs_b (the bias only picks), weights = the picked sigmoids over their sum × 2.826
+ *     (expert_weights_scale), SwiGLU experts (1536), plus one always-on shared SwiGLU expert (1536, no gate).
+ * Embedding: Q8_0 rows (no scale); head: rms_norm(x) · output_norm, then output.weight (Q8_0, untied).
+ *
+ * File: the community Q8_0 GGUF (rapatsky/Hy-Memory-30B-A3B-GGUF): every matrix, the experts and both vocab tables
+ * Q8_0; norms, router and router bias F32. The LFM2.5 rung's graph runs on the Q8_0 kernels of the Qwen rungs.
+ */
+
+import { Qwen3MoeSsd, BpeTokenizer } from './qwen3_moe_ssd.js';
+import { QWEN35_BATCH_KERNELS } from './qwen35_moe_ssd.js';
+import { Gemma4MoeSsd } from './gemma4_moe_ssd.js';
+import { Lfm2MoeSsd, planLayoutLfm2Moe, planUnitsLfm2Moe } from './lfm2_moe_ssd.js';
+
+export function configFromGgufHyV3(kv) {
+  const a = kv['general.architecture'];
+  if (a !== 'hy_v3') throw new Error(`expected an hy_v3 GGUF, got ${a}`);
+  const g = (k) => kv[`${a}.${k}`];
+  // llama.cpp defaults hy_v3 to the sigmoid router when the key is absent (hy-v3.cpp load_arch_hparams).
+  if ((g('expert_gating_func') ?? 2) !== 2) throw new Error(`hy_v3 expert_gating_func ${g('expert_gating_func')}: this engine implements sigmoid (2)`);
+  if (g('expert_weights_norm') === false) throw new Error('hy_v3 without expert_weights_norm: not implemented');
+  if (g('nextn_predict_layers')) throw new Error('hy_v3 GGUF with MTP layers: convert with --no-mtp');
+  const modelLayers = g('block_count'), lead = g('leading_dense_block_count') ?? 1, layers = modelLayers - lead;
+  const H = g('embedding_length'), heads = g('attention.head_count'), kvH = g('attention.head_count_kv');
+  const hd = g('attention.key_length') || H / heads, theta = g('rope.freq_base');
+  if (g('rope.dimension_count') && g('rope.dimension_count') !== hd) throw new Error('hy_v3 partial RoPE: not implemented');
+  return {
+    arch: a, modelLayers, lead, layers,
+    attn: Array(modelLayers).fill(true),
+    hidden: H, denseFf: g('feed_forward_length'), heads, kvHeadsAttn: kvH, attnHeadDim: hd,
+    experts: g('expert_count'), topK: g('expert_used_count'), expertFf: g('expert_feed_forward_length'),
+    shexpFf: g('expert_shared_feed_forward_length'), expScale: g('expert_weights_scale') ?? 1,
+    eps: g('attention.layer_norm_rms_epsilon'), contextLength: g('context_length'),
+    vocab: kv['tokenizer.ggml.tokens'].length,
+    bos: kv['tokenizer.ggml.bos_token_id'], eos: kv['tokenizer.ggml.eos_token_id'],
+    swa: Array(layers).fill(false), headDim: Array(layers).fill(hd), ropeTheta: Array(layers).fill(theta), softcap: 0,
+    kvHeads: Array(layers).fill(kvH),
+  };
+}
+
+// The LFM2.5 store shape. The GGUF has no leading_dense_block_count key, so the layout checks the default (1) against
+// the tensors: dense layers have ffn_gate.weight, MoE layers ffn_gate_inp.weight.
+export function planLayoutHyV3(gguf) {
+  const cfg = configFromGgufHyV3(gguf.kv), names = new Set(gguf.tensors.map((t) => t.name));
+  let lead = 0;
+  while (names.has(`blk.${lead}.ffn_gate.weight`)) lead++;
+  if (lead !== cfg.lead || !names.has(`blk.${lead}.ffn_gate_inp.weight`)) throw new Error(`hy_v3: ${lead} dense leading layers, expected ${cfg.lead}`);
+  return planLayoutLfm2Moe(gguf, cfg);
+}
+export const HYV3_INGEST_PLAN = { layout: planLayoutHyV3, units: planUnitsLfm2Moe };
+
+// The community Q8_0 GGUF (rapatsky; its card: converted from Tencent's release with the expert width corrected to 768).
+// Q8_0 chosen by Chirag 2026-10-17 over the 4-bit files for quality (our Q4_0 measured KLD 0.094 vs bf16).
+export const HY_MEMORY_30B_A3B = {
+  repo: 'rapatsky/Hy-Memory-30B-A3B-GGUF',
+  file: 'Hy-Memory-30B-A3B-Q8_0.gguf',
+  revision: '8674f68e9f60b9ec237c37130244ecee6baf3364',
+  sha256: 'b5375575b238d1f03eace82a092b2e3c95e31ad336337f72a20d985f208821bf',
+  size: 31985729056,
+};
+
+// ── Tokenizer: byte-level BPE; tokenizer.json's pre-tokenizer is a Sequence of three Isolated splits (llama.cpp
+// LLAMA_VOCAB_PRE_TYPE_HY_V4 has the same three regexes): digit runs of up to 3, CJK / kana runs, then the word split.
+// Each split keeps both the matches and the text between them, and the next split runs over every piece.
+const HY_SPLITS = [
+  /\p{N}{1,3}/gu,
+  /[一-龥぀-ゟ゠-ヿ]+/gu,
+  /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~][A-Za-z]+|[^\r\n\p{L}\p{P}\p{S}]?[\p{L}\p{M}]+| ?[\p{P}\p{S}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+/gu,
+];
+function isolate(pieces, re) {
+  const out = [];
+  for (const s of pieces) {
+    let last = 0;
+    for (const m of s.matchAll(re)) {
+      if (m.index > last) out.push(s.slice(last, m.index));
+      if (m[0]) out.push(m[0]);
+      last = m.index + m[0].length;
+    }
+    if (last < s.length) out.push(s.slice(last));
+  }
+  return out;
+}
+export class HyV3Tokenizer extends BpeTokenizer {
+  constructor(kv) {
+    super(kv);
+    // preRe is matched with matchAll over each special-free piece; this one yields the three-split pieces.
+    this.preRe = { [Symbol.matchAll]: (s) => HY_SPLITS.reduce(isolate, [s]).map((p) => [p])[Symbol.iterator]() };
+  }
+  // The vocab lacks some single bytes (\r = "č"). tokenizers' BPE (no unk token) drops such a character before merging,
+  // so "\r\n\r\n" is "ĊĊ"; do the same.
+  bpe(word) {
+    try { return super.bpe(word); } catch {
+      let parts = Array.from(word).filter((ch) => this.ids.has(ch));
+      while (parts.length > 1) {
+        let best = -1, bestRank = Infinity;
+        for (let i = 0; i < parts.length - 1; i++) {
+          const r = this.ranks.get(parts[i] + ' ' + parts[i + 1]);
+          if (r !== undefined && r < bestRank) { bestRank = r; best = i; }
+        }
+        if (best < 0) break;
+        parts = [...parts.slice(0, best), parts[best] + parts[best + 1], ...parts.slice(best + 2)];
+      }
+      return parts.map((p) => this.ids.get(p)).filter((id) => id !== undefined);
+    }
+  }
+}
+
+// The chat template (tokenizer chat_template.jinja), text turns, no tools: BOS, the system text raw, the reasoning
+// mode marker, then <｜hy_User｜>… and <｜hy_Assistant｜><think></think>…<eos> per turn. Thinking off is the template's
+// default `no_think` (the generation prompt closes an empty think block); thinking on uses `low` (it opens one).
+export function hyChatPrompt(messages, { enableThinking = false } = {}) {
+  const effort = enableThinking ? 'low' : 'no_think';
+  let sys = '';
+  for (const m of messages) if (m.role === 'system') sys += String(m.content ?? '');
+  let s = '<｜hy_begin▁of▁sentence｜>' + sys + '<｜reasoning_mode｜>reasoning_effort:' + effort;
+  const turns = messages.filter((m) => m.role === 'user' || m.role === 'assistant');
+  turns.forEach((m, i) => {
+    let c = String(m.content ?? '');
+    if (m.role === 'user') { s += '<｜hy_User｜>' + c; return; }
+    // Earlier replies lose their reasoning: the model's own </think> and LocalMind's <|think|> … <|/think|> markers.
+    c = c.replace(/<\|think\|>[\s\S]*?<\|\/think\|>/g, '');
+    if (c.includes('</think>')) c = c.split('</think>').pop();
+    s += '<｜hy_Assistant｜><think></think>' + c.trim() + (i < turns.length - 1 ? '<eos:6124c78e>' : '');
+  });
+  if (turns.length && turns[turns.length - 1].role === 'assistant') return s;
+  return s + '<｜hy_Assistant｜><think>' + (enableThinking ? '' : '</think>');
+}
+
+// ── Engine ──────────────────────────────────────────────────────────────────
+// Expert prefetch off by default. Measured 2026-10-17 on the Q8_0 file (M4 Pro, internal disk, ~400-token prompt, 256
+// tokens warm): 4 GB pool (856 slots) → prefill 21.0 tok/s and decode 4.76 with prefetch off, 17.7 / 4.69 at lookahead 1,
+// 15.1 / 4.42 at 2; 8 GB pool (1,365 slots, the binding cap) at lookahead 1 → 16.1 / 4.99. A memory write is mostly
+// prompt reading, so prefill decides (plan/2026-10-16-hymemory-harness/h-bench-q8.js, Seagate 2026-10-17-hymemory-q8-gate).
+export class HyV3MoeSsd extends Lfm2MoeSsd {
+  static configFrom(kv) { return configFromGgufHyV3(kv); }
+  static get ingestPlan() { return HYV3_INGEST_PLAN; }
+  static tokenizerFrom(kv) { return new HyV3Tokenizer(kv); }
+  static load(modelId, opts = {}) { return Qwen3MoeSsd.load.call(this, modelId, { ...opts, source: opts.source || HY_MEMORY_30B_A3B }); }
+
+  constructor(device, manifest, gguf, opts) {
+    super(device, manifest, gguf, opts);
+    this.prefetch = opts.prefetch ?? false;
+  }
+
+  chatPrompt(messages, opts) { return hyChatPrompt(messages, opts); }
+  get stopTokenIds() {
+    const t = this.tokenizer.ids;
+    return [this.cfg.eos, t.get('<eos:6124c78e>'), t.get('<｜hy_end▁of▁sentence｜>'), t.get('<｜hy_EOT｜>')].filter((x) => x !== undefined);
+  }
+  get thinkOpenTokenId() { return this.tokenizer.ids.get('<think>') ?? null; }
+  get thinkCloseTokenId() { return this.tokenizer.ids.get('</think>') ?? null; }
+  get thinkInPrompt() { return true; }
+  get alwaysThinks() { return false; }
+  get thinkPreamble() { return ''; }
+
+  // Q8_0 throughout (the community Q8_0 GGUF): matrices and experts through the Q8_0 kernels, the token table and the
+  // untied head as plain Q8_0 planes (no Q6_K split).
+  get kq() { return { mm: 'matmulQ8', mmT: 'matmulQ8T', ex: 'expertQ8', exB: 'expertQ8B' }; }
+  get embedKernel() { return 'embedQ8'; }
+  get embedKernelB() { return 'embedQ8B'; }
+  get lmKernel() { return 'matmulQ8'; }
+  get kernels() {
+    return (this._hyKernels ||= {
+      ...super.kernels,
+      ...(this.batchPrefill ? Object.fromEntries(['matmulQ8T', 'expertQ8B', 'embedQ8B'].map((k) => [k, QWEN35_BATCH_KERNELS[k]])) : {}),
+    });
+  }
+  async uploadDense(onProgress) {
+    const dt = this.manifest.dense.tensors;
+    for (const [name, d] of Object.entries(dt)) if (d.type !== 'f32' && d.type !== 'q8') throw new Error(`${name}: ${d.type} in a Q8_0 hy_v3 file`);
+    await Qwen3MoeSsd.prototype.uploadDense.call(this, onProgress);
+    this.ropeFreqs = null;
+  }
+  initBuffers() {
+    super.initBuffers();
+    const W = this.w, H = this.cfg.hidden;
+    this.g.embed = this.bind('embedQ8', [W['token_embd.weight'].q, W['token_embd.weight'].s, this.a.x, this.tok, this.uniform([H])]);
+    this.g.lm = this.bind('matmulQ8', [this.a.xn, W['output.weight'].q, W['output.weight'].s, this.a.logits, this.uniform([this.cfg.vocab, H])]);
+  }
+  initBatch() {
+    super.initBatch();
+    const W = this.w;
+    this.gB.embed = this.bind('embedQ8B', [W['token_embd.weight'].q, W['token_embd.weight'].s, this.b.ids, this.b.x, this.uniform([this.cfg.hidden]), this.qb]);
+  }
+
+  // No recurrent state: thinking follows the request (LFM2.5 forces it on).
+  async *generateTurn(messages, opts = {}) { yield* Gemma4MoeSsd.prototype.generateTurn.call(this, messages, opts); }
 }
 </script>
 <script type="text/plain" data-module="inference-worker.js">/*
@@ -37323,6 +37610,7 @@ ${d}`}var Mm=e=>Bo(e,{wrapInTimeLoop:!0,useLayerOffsets:!0,indent:4}),Bm=e=>Bo(e
 
 import { Qwen3MoeSsd, BpeTokenizer, GGML, Q4_BLOCK, tensorBytes, TOK, STORAGE, COPY_SRC, COPY_DST, MAP_READ } from './qwen3_moe_ssd.js';
 import { Gemma4MoeSsd } from './gemma4_moe_ssd.js';
+import { Q8_BLOCK } from './gguf.js';
 import { QWEN35_BATCH_KERNELS } from './qwen35_moe_ssd.js';
 
 export function configFromGgufLfm2Moe(kv) {
@@ -37353,10 +37641,12 @@ export function configFromGgufLfm2Moe(kv) {
 
 // The OPFS layout from the header alone. One expert record = gate rows then up rows (nibble plane, then scale
 // plane), then down; the store holds the 38 MoE layers, indexed from 0.
-export function planLayoutLfm2Moe(gguf) {
-  const cfg = configFromGgufLfm2Moe(gguf.kv);
+// `cfg` lets another architecture with the same store shape reuse it (hy_v3: hy_v3_moe_ssd.js).
+export function planLayoutLfm2Moe(gguf, cfg = configFromGgufLfm2Moe(gguf.kv)) {
   const H = cfg.hidden, F = cfg.expertFf;
-  const nib = (rows, cols) => rows * cols / 2, scl = (rows, cols) => rows * (cols / 32) * 2;
+  // Expert planes: Q4_0 → a nibble plane (16 B per 32 values), Q8_0 → an int8 plane (32 B); both with an f16 scale plane.
+  const q8 = gguf.tensors.find((t) => /_exps\.weight$/.test(t.name))?.type === GGML.Q8_0;
+  const nib = (rows, cols) => rows * cols / (q8 ? 1 : 2), scl = (rows, cols) => rows * (cols / 32) * 2;
   const parts = {
     guQ: { off: 0, bytes: nib(2 * F, H) },
     guS: { off: nib(2 * F, H), bytes: scl(2 * F, H) },
@@ -37372,11 +37662,13 @@ export function planLayoutLfm2Moe(gguf) {
     const n = t.dims.reduce((x, y) => x * y, 1);
     if (t.type === GGML.Q4_0) {
       dense[t.name] = { type: 'q4', dims: t.dims, q: { off: take(n / 2), bytes: n / 2 }, s: { off: take(n / 16), bytes: n / 16 } };
+    } else if (t.type === GGML.Q8_0) {
+      dense[t.name] = { type: 'q8', dims: t.dims, q: { off: take(n), bytes: n }, s: { off: take(n / 16), bytes: n / 16 } };
     } else if (t.type === GGML.Q6_K) {
       dense[t.name] = { type: 'q6k', dims: t.dims, raw: { off: take(tensorBytes(t)), bytes: tensorBytes(t) } };
     } else if (t.type === GGML.F32) {
       dense[t.name] = { type: 'f32', dims: t.dims, raw: { off: take(n * 4), bytes: n * 4 } };
-    } else throw new Error(`dense tensor ${t.name}: unsupported type ${t.type} (this engine reads the QAD-Q4_0 file)`);
+    } else throw new Error(`dense tensor ${t.name}: unsupported type ${t.type} (this engine reads Q4_0 or Q8_0 files)`);
   }
   return {
     config: cfg,
@@ -37393,24 +37685,25 @@ export function planUnitsLfm2Moe(gguf, layout) {
     const abs = gguf.dataStart + t.offset;
     const m = /^blk\.(\d+)\.ffn_(gate|up|down)_exps\.weight$/.exec(t.name);
     if (m) {
-      if (t.type !== GGML.Q4_0) throw new Error(`${t.name}: experts must be Q4_0`);
+      if (t.type !== GGML.Q4_0 && t.type !== GGML.Q8_0) throw new Error(`${t.name}: experts must be Q4_0 or Q8_0`);
+      const kind = t.type === GGML.Q4_0 ? { kind: 'q4' } : {};
       const layer = Number(m[1]) - lead, which = m[2];
       const slice = tensorBytes(t) / perLayer;
       const qOff = which === 'down' ? parts.dQ.off : parts.guQ.off + (which === 'up' ? half.q : 0);
       const sOff = which === 'down' ? parts.dS.off : parts.guS.off + (which === 'up' ? half.s : 0);
       for (let e = 0; e < perLayer; e++) {
         const rec = (layer * perLayer + e) * record;
-        units.push({ kind: 'q4', src: abs + e * slice, len: slice, file: 'experts', q: rec + qOff, s: rec + sOff });
+        units.push({ ...kind, src: abs + e * slice, len: slice, file: 'experts', q: rec + qOff, s: rec + sOff });
       }
       continue;
     }
     const d = layout.dense.tensors[t.name];
-    if (d.type !== 'q4') { units.push({ src: abs, len: d.raw.bytes, file: 'dense', raw: d.raw.off }); continue; }
-    const cols = t.dims[0], rows = (d.q.bytes * 2) / cols, rowBytes = (cols / 32) * Q4_BLOCK;
+    if (d.type !== 'q4' && d.type !== 'q8') { units.push({ src: abs, len: d.raw.bytes, file: 'dense', raw: d.raw.off }); continue; }
+    const q4 = d.type === 'q4', cols = t.dims[0], rows = (q4 ? d.q.bytes * 2 : d.q.bytes) / cols, rowBytes = (cols / 32) * (q4 ? Q4_BLOCK : Q8_BLOCK);
     const band = Math.max(1, Math.floor((8 << 20) / rowBytes));
     for (let r = 0; r < rows; r += band) {
       const nr = Math.min(band, rows - r);
-      units.push({ kind: 'q4', src: abs + r * rowBytes, len: nr * rowBytes, file: 'dense', q: d.q.off + r * cols / 2, s: d.s.off + r * (cols / 32) * 2 });
+      units.push({ ...(q4 ? { kind: 'q4' } : {}), src: abs + r * rowBytes, len: nr * rowBytes, file: 'dense', q: d.q.off + r * (q4 ? cols / 2 : cols), s: d.s.off + r * (cols / 32) * 2 });
     }
   }
   units.sort((a, b) => a.src - b.src);
@@ -37464,7 +37757,8 @@ export function lfm2ChatPrompt(messages) {
 
 // ── WGSL ────────────────────────────────────────────────────────────────────
 // Router: probs = sigmoid(l); pick the top k of probs + bias (lowest index on ties); weights = picked probs over
-// their sum, the sum clamped at 6.103515625e-5 (llama.cpp build_moe_ffn). sel = k ids then k weights (f32 bits).
+// their sum, the sum clamped at 6.103515625e-5, times expert_weights_scale (llama.cpp build_moe_ffn; 1 for LFM).
+// sel = k ids then k weights (f32 bits).
 const TOPK_SIG_BODY = `
   let t = l.x; let n = p.n;
   var mine = -3.4e38; var pr = 0.0;
@@ -37484,11 +37778,11 @@ const TOPK_SIG_BODY = `
     var wsum = 0.0;
     for (var j = 0u; j < p.k; j++) { wsum += probs[j]; }
     wsum = max(wsum, 6.103515625e-5);
-    for (var j = 0u; j < p.k; j++) { sel[sb + j] = picks[j]; sel[sb + p.k + j] = bitcast<u32>(probs[j] / wsum); }
+    for (var j = 0u; j < p.k; j++) { sel[sb + j] = picks[j]; sel[sb + p.k + j] = bitcast<u32>(probs[j] / wsum * p.scale); }
   }
 }`;
 const TOPK_SIG_DECL = `
-struct P { n: u32, k: u32 }
+struct P { n: u32, k: u32, scale: f32 }
 @group(0) @binding(0) var<storage, read> lg: array<f32>;
 @group(0) @binding(1) var<storage, read> bias: array<f32>;
 @group(0) @binding(2) var<storage, read_write> sel: array<u32>;
@@ -37628,6 +37922,10 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
     this.lookahead = Math.max(1, Math.floor(opts.lookahead ?? 1));
   }
 
+  // Kernel names for the matrix and expert weights: Q4_0 here; an engine reading a Q8_0 file (hy_v3_moe_ssd.js) swaps
+  // in the Q8_0 kernels, which take the same bindings and dispatch sizes.
+  get kq() { return { mm: 'matmulQ4', mmT: 'matmulQ4T', ex: 'expertQ4', exB: 'expertQ4B' }; }
+
   chatPrompt(messages) { return lfm2ChatPrompt(messages); }
   get stopTokenIds() { return [this.cfg.eos, this.tokenizer.ids.get('<|im_end|>'), this.tokenizer.ids.get('<|endoftext|>')].filter((t) => t !== undefined); }
   get thinkOpenTokenId() { return this.tokenizer.ids.get('<think>') ?? null; }
@@ -37644,14 +37942,14 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
   }
 
   // KV cache only on the attention layers.
-  kvBytes() { const c = this.cfg, hd = c.hidden / c.heads; return c.attn.filter(Boolean).length * 2 * 2 * this.maxCtx * c.kvHeadsAttn * hd; }
+  kvBytes() { const c = this.cfg, hd = c.attnHeadDim || c.hidden / c.heads; return c.attn.filter(Boolean).length * 2 * 2 * this.maxCtx * c.kvHeadsAttn * hd; }
 
   // The Q6_K table into planes (Gemma's uploadDense); this model has no rope_freqs.
   async uploadDense(onProgress) { await super.uploadDense(onProgress); this.ropeFreqs = null; }
 
   initBuffers() {
     const c = this.cfg, H = c.hidden, K = c.topK, E = c.experts, F = c.expertFf, DF = c.denseFf, ML = c.modelLayers;
-    const hd = H / c.heads, QN = H, KVN = c.kvHeadsAttn * hd;
+    const hd = c.attnHeadDim || H / c.heads, QN = c.heads * hd, KVN = c.kvHeadsAttn * hd, SF = c.shexpFf || 0;
     if (2 * K * 4 > 256) throw new Error(`top-k ${K} > 32`);
     if (E > 256) throw new Error(`${E} experts: the router top-k kernel handles at most 256`);
     if ((DF * 4) % 256) throw new Error(`dense FFN ${DF}: gate/up halves must sit on 256-byte offsets`);
@@ -37677,16 +37975,18 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
     const u = {
       embed: this.uniform([H, H / 256, f(1)]), rmsH: this.uniform([H, eps]), nH: this.uniform([H]),
       inProj: this.uniform([3 * H, H]), mmH: this.uniform([H, H]), conv: this.uniform([H]),
-      mmQ: this.uniform([QN, H]), mmKV: this.uniform([KVN, H]), qk: this.uniform([hd, eps]), kvn: this.uniform([KVN]),
+      mmQ: this.uniform([QN, H]), mmO: this.uniform([H, QN]), mmKV: this.uniform([KVN, H]), qk: this.uniform([hd, eps]), kvn: this.uniform([KVN]),
       att: this.uniform([c.heads, c.kvHeadsAttn, hd, f(Math.fround(1 / Math.sqrt(hd)))]), attOut: this.uniform([c.heads, c.kvHeadsAttn, hd, 0]),
       mmG: this.uniform([DF, H]), mmD: this.uniform([H, DF]), siluD: this.uniform([DF, 1]),
-      router: this.uniform([E, H]), topk: this.uniform([E, K]),
+      router: this.uniform([E, H]), topk: this.uniform([E, K, f(c.expScale ?? 1)]),
+      ...(SF ? { mmSG: this.uniform([SF, H]), mmSD: this.uniform([H, SF]), siluS: this.uniform([SF, 1]) } : {}),
       gu: this.uniform([2 * F, H, 2 * F, 0]), dn: this.uniform([H, F, H, 1]), siluE: this.uniform([F, K]), acc: this.uniform([H, K]),
       lm: this.uniform([c.vocab, H]), am: this.uniform([c.vocab]),
     };
     const a = this.a, W = this.w, gateBytes = DF * 4;
-    const q6 = [this.q6.ql, this.q6.qh, this.q6.sc, this.q6.dd];
-    this.g = { embed: this.bind('embedQ6K', [...q6, a.x, this.tok, u.embed]) };
+    // The Q6_K token table (LFM2.5); an engine with another table type binds embed and lm itself (this.q6 unset).
+    const q6 = this.q6 ? [this.q6.ql, this.q6.qh, this.q6.sc, this.q6.dd] : null;
+    this.g = { embed: q6 ? this.bind('embedQ6K', [...q6, a.x, this.tok, u.embed]) : null };
     // Per model layer: the operator (conv or attention) and, for the dense layers, the whole FFN.
     this.mlayers = [];
     for (let L = 0; L < ML; L++) {
@@ -37694,32 +37994,32 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
       const ly = { attn: c.attn[L], rmsA: this.bind('rmsnorm', [a.x, p('attn_norm.weight').raw, a.xn, u.rmsH]) };
       if (ly.attn) {
         Object.assign(ly, {
-          q: this.bind('matmulQ4', [a.xn, p('attn_q.weight').q, p('attn_q.weight').s, a.q, u.mmQ]),
-          k: this.bind('matmulQ4', [a.xn, p('attn_k.weight').q, p('attn_k.weight').s, a.k, u.mmKV]),
-          v: this.bind('matmulQ4', [a.xn, p('attn_v.weight').q, p('attn_v.weight').s, a.v, u.mmKV]),
+          q: this.bind(this.kq.mm, [a.xn, p('attn_q.weight').q, p('attn_q.weight').s, a.q, u.mmQ]),
+          k: this.bind(this.kq.mm, [a.xn, p('attn_k.weight').q, p('attn_k.weight').s, a.k, u.mmKV]),
+          v: this.bind(this.kq.mm, [a.xn, p('attn_v.weight').q, p('attn_v.weight').s, a.v, u.mmKV]),
           ropeQ: this.bind('qkNormRope', [a.q, p('attn_q_norm.weight').raw, a.ropeF, u.qk]),
           ropeK: this.bind('qkNormRope', [a.k, p('attn_k_norm.weight').raw, a.ropeF, u.qk]),
           kv: this.bind('kvStore', [a.k, a.v, this.kc[L], this.vc[L], this.tok, u.kvn]),
           score: this.bind('attnScore', [a.q, this.kc[L], a.sc, this.tok, u.att]),
           soft: this.bind('softmax', [a.sc, this.tok]),
           attOut: this.bind('attnOut', [a.sc, this.vc[L], a.att, this.tok, u.attOut]),
-          o: this.bind('matmulQ4', [a.att, p('attn_output.weight').q, p('attn_output.weight').s, a.o, u.mmH]),
+          o: this.bind(this.kq.mm, [a.att, p('attn_output.weight').q, p('attn_output.weight').s, a.o, u.mmO]),
         });
       } else {
         Object.assign(ly, {
-          inProj: this.bind('matmulQ4', [a.xn, p('shortconv.in_proj.weight').q, p('shortconv.in_proj.weight').s, a.bcx, u.inProj]),
+          inProj: this.bind(this.kq.mm, [a.xn, p('shortconv.in_proj.weight').q, p('shortconv.in_proj.weight').s, a.bcx, u.inProj]),
           conv: this.bind('shortConv', [a.bcx, p('shortconv.conv.weight').raw, this.cs[L], a.y, u.conv]),
-          o: this.bind('matmulQ4', [a.y, p('shortconv.out_proj.weight').q, p('shortconv.out_proj.weight').s, a.o, u.mmH]),
+          o: this.bind(this.kq.mm, [a.y, p('shortconv.out_proj.weight').q, p('shortconv.out_proj.weight').s, a.o, u.mmH]),
         });
       }
       ly.addO = this.bind('addInPlace', [a.x, a.o, u.nH]);
       ly.rmsF = this.bind('rmsnorm', [a.x, p('ffn_norm.weight').raw, a.xn, u.rmsH]);
       if (L < c.lead) {
         Object.assign(ly, {
-          mg: this.bindR('matmulQ4', [a.xn, p('ffn_gate.weight').q, p('ffn_gate.weight').s, { buffer: a.mgu, offset: 0, size: gateBytes }, u.mmG]),
-          mu: this.bindR('matmulQ4', [a.xn, p('ffn_up.weight').q, p('ffn_up.weight').s, { buffer: a.mgu, offset: gateBytes, size: gateBytes }, u.mmG]),
+          mg: this.bindR(this.kq.mm, [a.xn, p('ffn_gate.weight').q, p('ffn_gate.weight').s, { buffer: a.mgu, offset: 0, size: gateBytes }, u.mmG]),
+          mu: this.bindR(this.kq.mm, [a.xn, p('ffn_up.weight').q, p('ffn_up.weight').s, { buffer: a.mgu, offset: gateBytes, size: gateBytes }, u.mmG]),
           mact: this.bind('siluMulMoe', [a.mgu, a.ma, u.siluD]),
-          md: this.bind('matmulQ4', [a.ma, p('ffn_down.weight').q, p('ffn_down.weight').s, a.o, u.mmD]),
+          md: this.bind(this.kq.mm, [a.ma, p('ffn_down.weight').q, p('ffn_down.weight').s, a.o, u.mmD]),
         });
       }
       if (a.cap) ly.cap = this.bind('copyAt', [a.x, a.cap, this.uniform([H, L * H])]);
@@ -37731,24 +38031,32 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
       const L = l + c.lead, p = (n) => W[`blk.${L}.${n}`];
       this.layers.push({
         router: this.bind('matmulF32', [a.xn, p('ffn_gate_inp.weight').raw, a.rl, u.router]),
-        topk: this.bind('topkSig', [a.rl, p('exp_probs_b.bias').raw, a.sel, u.topk]),
+        topk: this.bind('topkSig', [a.rl, (p('exp_probs_b.bias') || p('exp_probs_b')).raw, a.sel, u.topk]),
         // Routers of MoE layers l+1..l+lookahead on this layer's post-operator state: the prefetch guesses.
         pf: Array.from({ length: Math.min(this.lookahead, c.layers - 1 - l) }, (_, i) => {
           const at = (n) => W[`blk.${L + 1 + i}.${n}`];
           return {
             rms: this.bind('rmsnorm', [a.x, at('ffn_norm.weight').raw, a.pxn, u.rmsH]),
             router: this.bind('matmulF32', [a.pxn, at('ffn_gate_inp.weight').raw, a.prl, u.router]),
-            topk: this.bindR('topkSig', [a.prl, at('exp_probs_b.bias').raw, { buffer: a.psel, offset: 256 * i, size: 8 * K }, u.topk]),
+            topk: this.bindR('topkSig', [a.prl, (at('exp_probs_b.bias') || at('exp_probs_b')).raw, { buffer: a.psel, offset: 256 * i, size: 8 * K }, u.topk]),
           };
         }),
-        gu: this.bind('expertQ4', [a.xn, this.pool.guQ, this.pool.guS, a.gu, u.gu, a.slots]),
+        gu: this.bind(this.kq.ex, [a.xn, this.pool.guQ, this.pool.guS, a.gu, u.gu, a.slots]),
         act: this.bind('siluMulMoe', [a.gu, a.act, u.siluE]),
-        dn: this.bind('expertQ4', [a.act, this.pool.dQ, this.pool.dS, a.dn, u.dn, a.slots]),
+        dn: this.bind(this.kq.ex, [a.act, this.pool.dQ, this.pool.dS, a.dn, u.dn, a.slots]),
         acc: this.bind('moeAccum', [a.dn, a.sel, a.x, u.acc]),
+        // The shared expert (always on, no gate; hy_v3): x += down(SiLU(gate(xn)) · up(xn)).
+        ...(SF ? { sh: {
+          g: this.bindR(this.kq.mm, [a.xn, p('ffn_gate_shexp.weight').q, p('ffn_gate_shexp.weight').s, { buffer: a.mgu, offset: 0, size: SF * 4 }, u.mmSG]),
+          u: this.bindR(this.kq.mm, [a.xn, p('ffn_up_shexp.weight').q, p('ffn_up_shexp.weight').s, { buffer: a.mgu, offset: SF * 4, size: SF * 4 }, u.mmSG]),
+          act: this.bind('siluMulMoe', [a.mgu, a.ma, u.siluS]),
+          d: this.bind(this.kq.mm, [a.ma, p('ffn_down_shexp.weight').q, p('ffn_down_shexp.weight').s, a.o, u.mmSD]),
+          add: this.bind('addInPlace', [a.x, a.o, u.nH]),
+        } } : {}),
       });
     }
-    this.g.rmsOut = this.bind('rmsnorm', [a.x, W['token_embd_norm.weight'].raw, a.xn, u.rmsH]);
-    this.g.lm = this.bind('matmulQ6K', [...q6, a.xn, a.logits, u.lm]);
+    this.g.rmsOut = this.bind('rmsnorm', [a.x, (W['token_embd_norm.weight'] || W['output_norm.weight']).raw, a.xn, u.rmsH]);
+    this.g.lm = q6 ? this.bind('matmulQ6K', [...q6, a.xn, a.logits, u.lm]) : null;
     this.g.am = this.bind('argmax', [a.logits, a.am, u.am]);
     if (Math.min(c.experts, this.chunkTokens * c.topK) > this.poolSlots / 2) this.chunkTokens = Math.max(2, Math.floor(this.poolSlots / 2 / c.topK));
     if (this.batchPrefill) this.initBatch();
@@ -37756,7 +38064,7 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
 
   initBatch() {
     const c = this.cfg, B = this.chunkTokens, W = this.w, H = c.hidden, K = c.topK, E = c.experts, F = c.expertFf, DF = c.denseFf;
-    const hd = H / c.heads, QN = H, KVN = c.kvHeadsAttn * hd;
+    const hd = c.attnHeadDim || H / c.heads, QN = c.heads * hd, KVN = c.kvHeadsAttn * hd, SF = c.shexpFf || 0;
     const A = (n) => this.buffer(n * 4, STORAGE | COPY_SRC | COPY_DST, 'batch');
     const b = this.b = {
       ids: A(B), x: A(B * H), xn: A(B * H), bcx: A(B * 3 * H), y: A(B * H), q: A(B * QN), k: A(B * KVN), v: A(B * KVN),
@@ -37768,14 +38076,15 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
     this.rbSelB = this.buffer(B * 2 * K * 4, MAP_READ | COPY_DST, 'batch');
     const U = (w) => this.uniform(w), eps = { f: c.eps }, qb = this.qb;
     const u = {
-      embed: U([H, H / 256, { f: 1 }]), rmsH: U([H, eps]), nH: U([H]), inProj: U([3 * H, H]), mmH: U([H, H]), conv: U([H]),
+      embed: U([H, H / 256, { f: 1 }]), rmsH: U([H, eps]), nH: U([H]), inProj: U([3 * H, H]), mmH: U([H, H]), mmO: U([H, QN]), conv: U([H]),
       q: U([QN, H]), kv: U([KVN, H]), ropeQ: U([hd, QN, eps]), ropeK: U([hd, KVN, eps]), kvn: U([KVN]),
       att: U([c.heads, c.kvHeadsAttn, hd, { f: Math.fround(1 / Math.sqrt(hd)) }]), attOut: U([c.heads, c.kvHeadsAttn, hd, 0]),
-      mg: U([DF, H]), md: U([H, DF]), silu: U([DF]), router: U([E, H]), topk: U([E, K]),
+      mg: U([DF, H]), md: U([H, DF]), silu: U([DF]), router: U([E, H]), topk: U([E, K, { f: c.expScale ?? 1 }]),
+      ...(SF ? { sg: U([SF, H]), sd: U([H, SF]), siluS: U([SF]) } : {}),
       gu: U([2 * F, H, 2 * F, 0, K]), dn: U([H, F, H, 1, K]), siluE: U([F, B * K]), acc: U([H, K]),
     };
-    const q4 = (name, x, y, uni) => this.bind('matmulQ4T', [x, W[name].q, W[name].s, y, uni, qb]);
-    this.gB = { embed: this.bind('embedQ6KB', [this.q6.ql, this.q6.qh, this.q6.sc, this.q6.dd, b.ids, b.x, u.embed, qb]) };
+    const q4 = (name, x, y, uni) => this.bind(this.kq.mmT, [x, W[name].q, W[name].s, y, uni, qb]);
+    this.gB = { embed: this.q6 ? this.bind('embedQ6KB', [this.q6.ql, this.q6.qh, this.q6.sc, this.q6.dd, b.ids, b.x, u.embed, qb]) : null };
     for (let L = 0; L < c.modelLayers; L++) {
       const n = (t) => `blk.${L}.${t}`, raw = (t) => W[n(t)].raw, ly = this.mlayers[L];
       const B_ = { rmsA: this.bind('rmsnormB', [b.x, raw('attn_norm.weight'), b.xn, u.rmsH]) };
@@ -37788,7 +38097,7 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
           score: this.bind('attnScoreB', [b.q, this.kc[L], b.sc, u.att, qb]),
           soft: this.bind('softmaxB', [b.sc, qb]),
           attOut: this.bind('attnOutB', [b.sc, this.vc[L], b.att, u.attOut, qb]),
-          o: q4(n('attn_output.weight'), b.att, b.o, u.mmH),
+          o: q4(n('attn_output.weight'), b.att, b.o, u.mmO),
         });
       } else {
         Object.assign(B_, {
@@ -37812,11 +38121,17 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
       const raw = (t) => W[`blk.${l + c.lead}.${t}`].raw;
       this.layers[l].B = {
         router: this.bind('matmulF32T', [b.xn, raw('ffn_gate_inp.weight'), b.rl, u.router]),
-        topk: this.bind('topkSigB', [b.rl, raw('exp_probs_b.bias'), b.sel, u.topk]),
-        gu: this.bind('expertQ4B', [b.xn, this.pool.guQ, this.pool.guS, b.gu, u.gu, b.slots]),
+        topk: this.bind('topkSigB', [b.rl, (W[`blk.${l + c.lead}.exp_probs_b.bias`] || W[`blk.${l + c.lead}.exp_probs_b`]).raw, b.sel, u.topk]),
+        gu: this.bind(this.kq.exB, [b.xn, this.pool.guQ, this.pool.guS, b.gu, u.gu, b.slots]),
         act: this.bind('siluMulMoe', [b.gu, b.act, u.siluE]),
-        dn: this.bind('expertQ4B', [b.act, this.pool.dQ, this.pool.dS, b.dn, u.dn, b.slots]),
+        dn: this.bind(this.kq.exB, [b.act, this.pool.dQ, this.pool.dS, b.dn, u.dn, b.slots]),
         acc: this.bind('moeAccumB', [b.dn, b.sel, b.x, u.acc, qb]),
+        ...(SF ? { sh: {
+          g: q4(`blk.${l + c.lead}.ffn_gate_shexp.weight`, b.xn, b.mg, u.sg), u: q4(`blk.${l + c.lead}.ffn_up_shexp.weight`, b.xn, b.mu, u.sg),
+          act: this.bind('siluSplitB', [b.mg, b.mu, b.ma, u.siluS, qb]),
+          d: q4(`blk.${l + c.lead}.ffn_down_shexp.weight`, b.ma, b.o, u.sd),
+          add: this.bind('addInPlaceB', [b.x, b.o, u.nH, qb]),
+        } } : {}),
       };
     }
   }
@@ -37825,27 +38140,27 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
   // Model layer L's operator and residual add, then its FFN norm; the dense layers also run their FFN.
   encodeModelLayer(pass, L, seqLen) {
     const c = this.cfg, g = this.mlayers[L], d = (n, gr, x, y, z) => this.dispatch(pass, n, gr, x, y, z);
-    const H = c.hidden, hd = H / c.heads, KVN = c.kvHeadsAttn * hd;
+    const H = c.hidden, hd = c.attnHeadDim || H / c.heads, QN = c.heads * hd, KVN = c.kvHeadsAttn * hd;
     d('rmsnorm', g.rmsA, 1);
     if (g.attn) {
-      d('matmulQ4', g.q, Math.ceil(H / 4)); d('matmulQ4', g.k, Math.ceil(KVN / 4)); d('matmulQ4', g.v, Math.ceil(KVN / 4));
+      d(this.kq.mm, g.q, Math.ceil(QN / 4)); d(this.kq.mm, g.k, Math.ceil(KVN / 4)); d(this.kq.mm, g.v, Math.ceil(KVN / 4));
       d('qkNormRope', g.ropeQ, c.heads); d('qkNormRope', g.ropeK, c.kvHeadsAttn);
       d('kvStore', g.kv, Math.ceil(KVN / 256));
       d('attnScore', g.score, Math.ceil(c.heads * seqLen / 256));
       d('softmax', g.soft, c.heads);
-      d('attnOut', g.attOut, Math.ceil(H / 256));
-      d('matmulQ4', g.o, Math.ceil(H / 4));
+      d('attnOut', g.attOut, Math.ceil(QN / 256));
+      d(this.kq.mm, g.o, Math.ceil(H / 4));
     } else {
-      d('matmulQ4', g.inProj, Math.ceil(3 * H / 4));
+      d(this.kq.mm, g.inProj, Math.ceil(3 * H / 4));
       d('shortConv', g.conv, Math.ceil(H / 256));
-      d('matmulQ4', g.o, Math.ceil(H / 4));
+      d(this.kq.mm, g.o, Math.ceil(H / 4));
     }
     d('addInPlace', g.addO, Math.ceil(H / 256));
     d('rmsnorm', g.rmsF, 1);
     if (L < c.lead) {
-      d('matmulQ4', g.mg, Math.ceil(c.denseFf / 4)); d('matmulQ4', g.mu, Math.ceil(c.denseFf / 4));
+      d(this.kq.mm, g.mg, Math.ceil(c.denseFf / 4)); d(this.kq.mm, g.mu, Math.ceil(c.denseFf / 4));
       d('siluMulMoe', g.mact, Math.ceil(c.denseFf / 256));
-      d('matmulQ4', g.md, Math.ceil(H / 4));
+      d(this.kq.mm, g.md, Math.ceil(H / 4));
       d('addInPlace', g.addO, Math.ceil(H / 256));
       if (g.cap) d('copyAt', g.cap, Math.ceil(H / 256));
     }
@@ -37861,44 +38176,51 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
   }
   encodeExperts(pass, l) {
     const c = this.cfg, g = this.layers[l], d = (n, gr, x, y, z) => this.dispatch(pass, n, gr, x, y, z);
-    d('expertQ4', g.gu, Math.ceil(2 * c.expertFf / 4), 1, c.topK);
+    d(this.kq.ex, g.gu, Math.ceil(2 * c.expertFf / 4), 1, c.topK);
     d('siluMulMoe', g.act, Math.ceil(c.topK * c.expertFf / 256));
-    d('expertQ4', g.dn, Math.ceil(c.hidden / 4), 1, c.topK);
+    d(this.kq.ex, g.dn, Math.ceil(c.hidden / 4), 1, c.topK);
     d('moeAccum', g.acc, Math.ceil(c.hidden / 256));
+    if (g.sh) {
+      const s = g.sh;
+      d(this.kq.mm, s.g, Math.ceil(c.shexpFf / 4)); d(this.kq.mm, s.u, Math.ceil(c.shexpFf / 4));
+      d('siluMulMoe', s.act, Math.ceil(c.shexpFf / 256));
+      d(this.kq.mm, s.d, Math.ceil(c.hidden / 4));
+      d('addInPlace', s.add, Math.ceil(c.hidden / 256));
+    }
     const cap = this.mlayers[l + c.lead].cap;
     if (cap) d('copyAt', cap, Math.ceil(c.hidden / 256));
   }
   encodeHead(pass, want) {
     const c = this.cfg;
     this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);
-    this.dispatch(pass, 'matmulQ6K', this.g.lm, Math.ceil(c.vocab / 4));
+    this.dispatch(pass, this.lmKernel || 'matmulQ6K', this.g.lm, Math.ceil(c.vocab / 4));
     if (want === 'argmax') this.dispatch(pass, 'argmax', this.g.am, 1);
   }
 
   // ── forward, a chunk of T tokens ──
   encodeModelLayerB(pass, L, T, S) {
     const c = this.cfg, g = this.mlayers[L].B, d = (nm, gr, x, y, z) => this.dispatch(pass, nm, gr, x, y, z);
-    const H = c.hidden, hd = H / c.heads, KVN = c.kvHeadsAttn * hd, tt = Math.ceil(T / 16), mm = (n) => Math.ceil(n / 16);
+    const H = c.hidden, hd = c.attnHeadDim || H / c.heads, QN = c.heads * hd, KVN = c.kvHeadsAttn * hd, tt = Math.ceil(T / 16), mm = (n) => Math.ceil(n / 16);
     d('rmsnormB', g.rmsA, T);
     if (this.mlayers[L].attn) {
-      d('matmulQ4T', g.q, mm(H), tt); d('matmulQ4T', g.k, mm(KVN), tt); d('matmulQ4T', g.v, mm(KVN), tt);
+      d(this.kq.mmT, g.q, mm(QN), tt); d(this.kq.mmT, g.k, mm(KVN), tt); d(this.kq.mmT, g.v, mm(KVN), tt);
       d('qkNormRopeB', g.ropeQ, c.heads, T); d('qkNormRopeB', g.ropeK, c.kvHeadsAttn, T);
       d('kvStoreB', g.kv, Math.ceil(KVN / 256), T);
       d('attnScoreB', g.score, Math.ceil(c.heads * T * S / 256));
       d('softmaxB', g.soft, c.heads * T);
-      d('attnOutB', g.attOut, Math.ceil(H / 256), T);
-      d('matmulQ4T', g.o, mm(H), tt);
+      d('attnOutB', g.attOut, Math.ceil(QN / 256), T);
+      d(this.kq.mmT, g.o, mm(H), tt);
     } else {
-      d('matmulQ4T', g.inProj, mm(3 * H), tt);
+      d(this.kq.mmT, g.inProj, mm(3 * H), tt);
       d('shortConvB', g.conv, Math.ceil(H / 256));
-      d('matmulQ4T', g.o, mm(H), tt);
+      d(this.kq.mmT, g.o, mm(H), tt);
     }
     d('addInPlaceB', g.addO, Math.ceil(H / 256), T);
     d('rmsnormB', g.rmsF, T);
     if (L < c.lead) {
-      d('matmulQ4T', g.mg, mm(c.denseFf), tt); d('matmulQ4T', g.mu, mm(c.denseFf), tt);
+      d(this.kq.mmT, g.mg, mm(c.denseFf), tt); d(this.kq.mmT, g.mu, mm(c.denseFf), tt);
       d('siluSplitB', g.mact, Math.ceil(c.denseFf / 256), T);
-      d('matmulQ4T', g.md, mm(H), tt);
+      d(this.kq.mmT, g.md, mm(H), tt);
       d('addInPlaceB', g.addO, Math.ceil(H / 256), T);
     }
   }
@@ -37911,10 +38233,17 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
   }
   encodeExpertsB(pass, l, T) {
     const c = this.cfg, g = this.layers[l].B, d = (nm, gr, x, y, z) => this.dispatch(pass, nm, gr, x, y, z);
-    d('expertQ4B', g.gu, Math.ceil(2 * c.expertFf / 4), 1, T * c.topK);
+    d(this.kq.exB, g.gu, Math.ceil(2 * c.expertFf / 4), 1, T * c.topK);
     d('siluMulMoe', g.act, Math.ceil(T * c.topK * c.expertFf / 256));
-    d('expertQ4B', g.dn, Math.ceil(c.hidden / 4), 1, T * c.topK);
+    d(this.kq.exB, g.dn, Math.ceil(c.hidden / 4), 1, T * c.topK);
     d('moeAccumB', g.acc, Math.ceil(c.hidden / 256), T);
+    if (g.sh) {
+      const s = g.sh, tt = Math.ceil(T / 16), mm = (n) => Math.ceil(n / 16);
+      d(this.kq.mmT, s.g, mm(c.shexpFf), tt); d(this.kq.mmT, s.u, mm(c.shexpFf), tt);
+      d('siluSplitB', s.act, Math.ceil(c.shexpFf / 256), T);
+      d(this.kq.mmT, s.d, mm(c.hidden), tt);
+      d('addInPlaceB', s.add, Math.ceil(c.hidden / 256), T);
+    }
   }
 
   // The conv state cannot rewind, so any change before the cached end restarts from token 0.

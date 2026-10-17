@@ -850,7 +850,7 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
     tables(ls, null, this.b.ropeS); tables(lf, this.ropeFreqs, this.b.ropeF);
     const selBytes = T * 2 * K * 4;
     let enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
-    this.dispatch(pass, 'embedQ6KB', this.gB.embed, Math.ceil(H / 256), T);
+    this.dispatch(pass, this.embedKernelB || 'embedQ6KB', this.gB.embed, Math.ceil(H / 256), T);   // embedKernelB: an engine with another table type (hy_v3 Q8_0)
     this.encodeTrunkB(pass, 0, T, S);
     pass.end();
     enc.copyBufferToBuffer(this.b.sel, 0, this.rbSelB, 0, selBytes);
@@ -923,7 +923,7 @@ export class Gemma4MoeSsd extends Qwen3MoeSsd {
     return r;
   }
 
-  encodeEmbed(pass) { this.dispatch(pass, 'embedQ6K', this.g.embed, Math.ceil(this.cfg.hidden / 256)); }
+  encodeEmbed(pass) { this.dispatch(pass, this.embedKernel || 'embedQ6K', this.g.embed, Math.ceil(this.cfg.hidden / 256)); }
   encodeHead(pass, want) {
     const c = this.cfg;
     this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);
