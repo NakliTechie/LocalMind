@@ -528,7 +528,7 @@
       display: flex; align-items: center; justify-content: center;
     }
     .tts-modal {
-      background: var(--surface, #fff); color: var(--gray-800);
+      background: var(--white); color: var(--gray-800);   /* the panel token; --surface was never defined, so dark mode got white */
       max-width: 380px; width: calc(100% - 40px);
       border-radius: 12px; padding: 20px 22px;
       box-shadow: 0 12px 40px rgba(0,0,0,0.25);
@@ -3034,8 +3034,8 @@
         <div class="image-controls">
           <label>Model
             <select id="imageModelSelect">
-              <option value="prism-ml/bonsai-image-ternary-4B-mlx-2bit">Bonsai 4B &middot; ternary (~3.3&nbsp;GB)</option>
-              <option value="prism-ml/bonsai-image-binary-4B-mlx-1bit">Bonsai 4B &middot; 1-bit (~2.9&nbsp;GB)</option>
+              <option value="prism-ml/bonsai-image-ternary-4B-mlx-2bit" data-bytes="3300000000">Bonsai 4B &middot; ternary (~3.3&nbsp;GB)</option>
+              <option value="prism-ml/bonsai-image-binary-4B-mlx-1bit" data-bytes="2900000000">Bonsai 4B &middot; 1-bit (~2.9&nbsp;GB)</option>
               <option value="local-server">Local server &middot; sd.cpp (Qwen-Image 2.1, FLUX, &hellip;)</option>
             </select>
           </label>
@@ -3060,7 +3060,7 @@
           <div class="progress-bar">
             <div class="progress-fill" id="imageProgressFill" style="background:linear-gradient(90deg,#08184a,#3a5bd9)"></div>
           </div>
-          <div class="progress-text" id="imageProgressText">Type a prompt below and Send. First run downloads the model (~3&nbsp;GB, cached after). Best on Chrome/Edge.</div>
+          <div class="progress-text" id="imageProgressText">Type a prompt below and Send. The first Send asks before downloading the model (~3&nbsp;GB, kept in this browser). Best on Chrome/Edge.</div>
         </div>
         <div class="image-gallery" id="imageGallery"></div>
         <!-- Image screen (Chunk L layer 6): on wide screens Image mode turns the card into a
@@ -11823,6 +11823,7 @@ self.addEventListener('message', async (e) => {
     //   wllama (GGUF)              → OPFS 'cache/' (data file + '__metadata__' twin holding originalURL)
     //   resumable ONNX downloads   → IndexedDB 'localmind-downloads' (meta keyed by URL, chunks 'url|n')
     //   Bonsai 2 prefix snapshot   → IndexedDB 'webgpu-prefix-snapshots' (one slot, listed under the Bonsai 2 repo)
+    //   Image mode (Bonsai image)  → IndexedDB 'bonsai-image-v1' (same meta + chunks layout) + Cache Storage 'bonsai-image-v1'
     // Retired engines left more behind: the Gemma 4 kernels engine used IndexedDB
     // 'safetensors-cache-v1' + Cache Storage 'bonsai-pipeline-v1'. inventoryModelCaches() walks all of it and groups by
     // Hugging Face repo (or URL origin for custom GGUF URLs), so Settings shows one row
@@ -11845,6 +11846,8 @@ self.addEventListener('message', async (e) => {
       'naklitechie/Qwen3.8-27B-DFlash2-ternary-bonsai2': 'DFlash 2 drafter \u00b7 Ternary Bonsai 2',
       'CaryPalmer/Ternary-Bonsai-2-27B-262k-GGUF': 'MTP draft head \u00b7 Ternary Bonsai 2',
       'ML-Intern-lab/Qwen-Image-2.1-PE-T2I-Pocket-0.8B': 'Image prompt rewriter \u00b7 Qwen-Image 2.1 Pocket 0.8B',
+      'prism-ml/bonsai-image-ternary-4B-mlx-2bit': 'Image mode \u00b7 Bonsai 4B ternary',
+      'prism-ml/bonsai-image-binary-4B-mlx-1bit': 'Image mode \u00b7 Bonsai 4B 1-bit',
     };
     // A MODELS entry reads `repo` when its id is that HF repo, or a file URL inside it.
     const modelUsesRepo = (m, repo) => { const id = String(m.id || ''); return id === repo || (id.startsWith('http') && repoOfUrl(id) === repo); };
@@ -11899,8 +11902,9 @@ self.addEventListener('message', async (e) => {
       // The kernel engines' byte-range cache library: a 'meta' store keyed by URL
       // ({size, dataStart, header}) and a 'chunks' store keyed [url, start, end].
       // 'gguf-cache-v1' is Bonsai 2's; 'safetensors-cache-v1' was the retired Gemma
-      // 4 kernels engine's (2.4 GB of orphaned weights on the dev origin, 2026-09-18).
-      for (const dbName of ['gguf-cache-v1', 'safetensors-cache-v1']) {
+      // 4 kernels engine's (2.4 GB of orphaned weights on the dev origin, 2026-09-18);
+      // 'bonsai-image-v1' is Image mode's diffusion engine (issue #7: it was missing here).
+      for (const dbName of ['gguf-cache-v1', 'safetensors-cache-v1', 'bonsai-image-v1']) {
         if (!dbNames.includes(dbName)) continue;
         try {
           const db = await idbOpenExisting(dbName);
@@ -22095,6 +22099,88 @@ self.addEventListener('message', async (e) => {
     // one WebGPU-heavy worker should be resident at a time, the chat model is
     // unloaded first (freeing its VRAM) and remembered so it can be restored
     // when the user leaves Image mode.
+    // IMAGE-CONSENT — ask before the first download of an in-tab image model (issue #7). Pure decision logic here;
+    // scripts/test-image-consent.mjs runs it in Node.
+    // ready: { [modelId]: bytes held when it last loaded } (localStorage lm_image_ready). held: bytes in the cache now.
+    // A model counts as downloaded only while the cache still holds what it held at that load, so a Delete in
+    // Settings brings the question back.
+    function imageDownloadPlan({ modelId, ready, held, expected, free, persisted }) {
+      const was = ready && ready[modelId];
+      if (was && held >= 0.99 * was) return { ask: false };
+      const remaining = Math.max(0, expected - held);
+      const notes = [];
+      if (held > 0) notes.push('resume');
+      if (Number.isFinite(free) && free < remaining) notes.push('space');
+      if (!persisted) notes.push('not-persistent');
+      return { ask: true, held, remaining, notes };
+    }
+    function imageDownloadMessage(label, plan, free, fmt) {
+      const parts = [`<b>${label}</b> runs on your device. The first image needs a one-time download of about <b>${fmt(plan.remaining)}</b>, stored in this browser for offline use. Nothing you type is sent anywhere.`];
+      if (plan.notes.includes('resume')) parts.push(`${fmt(plan.held)} is already in this browser from an earlier visit; the download continues from there.`);
+      else parts.push('If you close the tab before it finishes, the next download continues from where it stopped.');
+      if (plan.notes.includes('space')) parts.push(`This browser has about ${fmt(free)} of storage free, which may not be enough.`);
+      if (plan.notes.includes('not-persistent')) parts.push('Your browser has not granted persistent storage, so it may delete the model if your disk runs low. A private window deletes it when you close it.');
+      return parts.map((p) => `<p style="margin:0 0 8px">${p}</p>`).join('');
+    }
+    // END IMAGE-CONSENT
+
+    // Bytes the image engine holds for modelId: chunk ranges in its IndexedDB cache ('bonsai-image-v1', chunks keyed
+    // [url, start, end]). Read from the chunk keys, not the meta rows, so a download stopped part-way counts.
+    async function imageModelHeldBytes(modelId) {
+      let names = [];
+      try { names = (await indexedDB.databases()).map((d) => d.name); } catch {}
+      if (!names.includes('bonsai-image-v1')) return 0;
+      let db = null, held = 0;
+      try {
+        db = await idbOpenExisting('bonsai-image-v1');
+        if (!db.objectStoreNames.contains('chunks')) return 0;
+        for (const k of await idbReq(db.transaction('chunks', 'readonly').objectStore('chunks').getAllKeys())) {
+          if (Array.isArray(k) && typeof k[0] === 'string' && repoOfUrl(k[0]) === modelId) held += Math.max(0, k[2] - k[1]);
+        }
+      } catch (e) { console.warn('image cache size:', e); } finally { try { db && db.close(); } catch {} }
+      return held;
+    }
+    const readImageReady = () => { try { return JSON.parse(localStorage.getItem('lm_image_ready') || '{}') || {}; } catch { return {}; } };
+
+    // Resolves true when the model may load: already downloaded, or the user chose Download.
+    async function confirmImageDownload(modelId) {
+      const opt = [...imageModelSelect.options].find((o) => o.value === modelId);
+      const expected = Number(opt && opt.dataset.bytes) || 3e9;
+      const label = opt ? opt.textContent.replace(/\s*\(.*\)\s*$/, '').trim() : modelId;
+      const held = await imageModelHeldBytes(modelId);
+      let free = NaN, persisted = false;
+      try { const e = await navigator.storage.estimate(); free = e.quota - e.usage; } catch {}
+      try { persisted = !!(navigator.storage && navigator.storage.persisted && await navigator.storage.persisted()); } catch {}
+      const plan = imageDownloadPlan({ modelId, ready: readImageReady(), held, expected, free, persisted });
+      if (!plan.ask) return true;
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'tts-modal-overlay';
+        overlay.id = 'imageConsent';
+        overlay.innerHTML =
+          '<div class="tts-modal" role="dialog" aria-modal="true" aria-labelledby="imageConsentTitle">' +
+            '<div class="tts-modal-title" id="imageConsentTitle">Download the image model?</div>' +
+            '<div class="tts-modal-msg">' + imageDownloadMessage(label, plan, free, fmtBytes) + '</div>' +
+            '<div class="tts-modal-actions">' +
+              '<button type="button" class="tts-modal-cancel">Cancel</button>' +
+              `<button type="button" class="tts-modal-ok">Download ${fmtBytes(plan.remaining)}</button>` +
+            '</div>' +
+          '</div>';
+        document.body.appendChild(overlay);
+        const done = (ok) => { document.removeEventListener('keydown', onKey); overlay.remove(); resolve(ok); };
+        const onKey = (e) => { if (e.key === 'Escape') done(false); };
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
+        overlay.querySelector('.tts-modal-cancel').addEventListener('click', () => done(false));
+        overlay.querySelector('.tts-modal-ok').addEventListener('click', () => {
+          // Asked inside the click, where Chrome is likeliest to grant it.
+          try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
+          done(true);
+        });
+        overlay.querySelector('.tts-modal-ok').focus();
+      });
+    }
+
     async function ensureImageModel() {
       const modelId = imageModelSelect.value;
       if (modelId === 'local-server') return; // nothing to load in-tab; the server holds the weights
@@ -22113,6 +22199,11 @@ self.addEventListener('message', async (e) => {
       });
       imageProgressFill.style.width = '100%';
       imageProgressText.textContent = 'Model ready.';
+      // Remember that it downloaded, with what the cache held, so the next visit does not ask again.
+      imageModelHeldBytes(modelId).then((held) => {
+        if (!held) return;
+        try { localStorage.setItem('lm_image_ready', JSON.stringify({ ...readImageReady(), [modelId]: held })); } catch {}
+      });
     }
 
     const imagePreview = document.getElementById('imagePreview');
@@ -22172,8 +22263,16 @@ self.addEventListener('message', async (e) => {
       return box;
     }
 
+    let imageConsentOpen = false;
     async function runImageGen(prompt, { reuseRewrite = false } = {}) {
-      if (generating) return;
+      if (generating || imageConsentOpen) return;
+      const modelId = imageModelSelect.value;
+      if (modelId !== 'local-server' && !(LocalMind.runtime._imageWorker && LocalMind.runtime._imageActiveModel === modelId)) {
+        imageConsentOpen = true;
+        let ok = false;
+        try { ok = await confirmImageDownload(modelId); } finally { imageConsentOpen = false; }
+        if (!ok) { imageProgressText.textContent = 'Download cancelled. Nothing was downloaded; your prompt is still in the box.'; return; }
+      }
       lastImagePrompt = prompt;
       generating = true; imageBusy = true;
       sendBtn.innerHTML = '&#9632;'; sendBtn.classList.add('stop');
@@ -22259,7 +22358,7 @@ self.addEventListener('message', async (e) => {
     }
 
     function imageIdleText() {
-      return 'Type a prompt below and Send. First run downloads the model (~3\u00a0GB, cached after). Best on Chrome/Edge.';
+      return 'Type a prompt below and Send. The first Send asks before downloading the model (~3\u00a0GB, kept in this browser). Best on Chrome/Edge.';
     }
     function onLeaveImageMode() {
       try { LocalMind.runtime.unloadImage(); } catch {}
