@@ -2771,6 +2771,16 @@
         </div>
         <div class="settings-divider" data-tab="models">
           <label class="toggle-row">
+            <input type="checkbox" id="downloadAskToggle" checked>
+            Ask before every model download
+          </label>
+          <div style="font-size:0.7rem;color:var(--gray-500);margin-top:4px;line-height:1.5">
+            On: every model over 100 MB asks before it downloads. Off: models under 5 GB download when a feature needs
+            them, and larger ones still ask. The small default chat model loads on a first visit either way.
+          </div>
+        </div>
+        <div class="settings-divider" data-tab="models">
+          <label class="toggle-row">
             <input type="checkbox" id="dflashToggle">
             Speculative decoding for Ternary Bonsai 2 27B
           </label>
@@ -10945,6 +10955,7 @@ self.addEventListener('message', async (e) => {
     // 2026-10-14: bge-reranker-v2-m3 picked the right memory in 4 of 4 test sets, against 2 of 4 for
     // ms-marco-MiniLM and 3 of 4 for vector order alone (night run 2026-10-06).
     const RERANK_MODEL = 'onnx-community/bge-reranker-v2-m3-ONNX';
+    const RERANK_DOWNLOAD = { key: RERANK_MODEL, label: 'the bge-reranker-v2-m3 memory reranker', bytes: 571e6, purpose: 'rerank your memories', quietAfterNo: true };
     // Orders vector-search candidates by reranker score (index-aligned), highest first, and keeps topK.
     // A missing or non-numeric score sorts last; equal scores keep their vector order.
     function orderByRerank(candidates, scores, topK) {
@@ -10963,9 +10974,16 @@ self.addEventListener('message', async (e) => {
       if (localStorage.getItem('lm_rag_rerank') !== '1') return searchByVector(vec, topK, threshold);
       const candidates = await searchByVector(vec, pool, rerankThreshold);
       if (candidates.length <= 1) return candidates.slice(0, topK);
-      if (!_rerankLoadNoticed) { _rerankLoadNoticed = true; showToast('Memory reranker: loading bge-reranker-v2-m3 (~570 MB the first time)…'); }
+      // Switched on before the download question existed: ask now; a no turns it off and keeps vector order.
+      if (!(await askDownload(RERANK_DOWNLOAD))) {
+        try { localStorage.setItem('lm_rag_rerank', '0'); } catch {}
+        const t = document.getElementById('ragRerankToggle'); if (t) t.checked = false;
+        return candidates.slice(0, topK);
+      }
+      if (!_rerankLoadNoticed) { _rerankLoadNoticed = true; showToast('Memory reranker: loading bge-reranker-v2-m3…'); }
       try {
         const scores = await LocalMind.runtime.rerank(query, candidates.map(c => c.text), RERANK_MODEL);
+        markDownloaded(RERANK_DOWNLOAD.key);
         return orderByRerank(candidates, scores, topK);
       } catch (err) {
         console.error('Rerank failed, using vector order:', err);
@@ -11998,6 +12016,123 @@ self.addEventListener('message', async (e) => {
       return groups;
     }
 
+    // ── Ask before a model download (issue #7) ──────────────────
+    // Nothing over DOWNLOAD_ASK_BYTES downloads until the user clicks Download. The one exception is the first-visit
+    // default chat model (Gemini Nano when Chrome has it, else LFM2.5 230M, ~140 MB), which loads on its own so the
+    // first answer comes in seconds (Chirag, 2026-10-18). The window.localmind API does not ask: its caller chose.
+    // One consent (Chirag, 2026-10-18): the dialog's box, ticked by default, lets that yes cover every later download
+    // under DOWNLOAD_TRUST_BYTES (localStorage lm_download_ask = 'large'); larger ones always ask. Settings → Models →
+    // "Ask before every model download" turns the questions back on.
+    // DOWNLOAD-CONSENT — pure decision logic; scripts/test-download-consent.mjs runs it in Node.
+    const DOWNLOAD_ASK_BYTES = 100e6;
+    const DOWNLOAD_TRUST_BYTES = 5e9;
+    // ready: { [key]: bytes held when it last finished loading } (localStorage lm_downloaded). held: bytes cached now.
+    // No question when the download is small, when the user trusted downloads of this size, when it finished before
+    // and the cache still holds that much (a Delete in Settings brings the question back), or, unless `exact`, when the
+    // cache already holds ~all of it. expected = Infinity: the size is unknown (Chrome's Gemini Nano).
+    function downloadPlan({ key, ready, held, expected, free, persisted, exact = false, trusted = false }) {
+      if (expected < DOWNLOAD_ASK_BYTES) return { ask: false };
+      if (trusted && expected < DOWNLOAD_TRUST_BYTES) return { ask: false };
+      if (!Number.isFinite(expected)) return { ask: true, held: 0, remaining: null, notes: persisted ? [] : ['not-persistent'] };
+      const was = ready && ready[key];
+      if (was && held >= 0.99 * was) return { ask: false };
+      if (!exact && held >= 0.95 * expected) return { ask: false };
+      const remaining = Math.max(0, expected - (exact ? 0 : held));
+      const notes = [];
+      if (held > 0 && !exact) notes.push('resume');
+      if (Number.isFinite(free) && free < remaining) notes.push('space');
+      if (!persisted) notes.push('not-persistent');
+      return { ask: true, held, remaining, notes };
+    }
+    function downloadMessage({ label, purpose }, plan, free, fmt) {
+      const parts = [plan.remaining === null
+        ? `To ${purpose}, Chrome needs to download <b>${label}</b> once. Chrome manages that download and decides its size. It runs on your device; nothing you type is sent anywhere.`
+        : `To ${purpose}, LocalMind needs <b>${label}</b>: a one-time download of about <b>${fmt(plan.remaining)}</b>, stored in this browser. It runs on your device; nothing you type is sent anywhere.`];
+      if (plan.notes.includes('resume')) parts.push(`${fmt(plan.held)} is already in this browser from an earlier visit; the download continues from there.`);
+      else parts.push('If you close the tab before it finishes, the next download continues from where it stopped.');
+      if (plan.notes.includes('space')) parts.push(`This browser has about ${fmt(free)} of storage free, which may not be enough.`);
+      if (plan.notes.includes('not-persistent')) parts.push('Your browser has not granted persistent storage, so it may delete the model if your disk runs low. A private window deletes it when you close it.');
+      return parts.map((p) => `<p style="margin:0 0 8px">${p}</p>`).join('');
+    }
+    // END DOWNLOAD-CONSENT
+
+    const EMBED_DOWNLOAD = { key: 'Xenova/multilingual-e5-small', label: 'the multilingual-e5-small memory model', bytes: 118e6, purpose: 'remember things and search your documents', quietAfterNo: true };
+    const WHISPER_DOWNLOAD = { key: 'onnx-community/whisper-base', label: 'Whisper base (speech to text)', bytes: 206e6, purpose: 'turn your speech into text' };
+    const MOONSHINE_DOWNLOAD = { key: 'onnx-community/moonshine-base-ONNX', label: 'Moonshine base (speech to text)', bytes: 247e6, purpose: 'turn your speech into text', exact: true };
+    const readDownloaded = () => { try { return JSON.parse(localStorage.getItem('lm_downloaded') || '{}') || {}; } catch { return {}; } };
+    const repoHeldBytes = async (repo) => { try { const g = (await inventoryModelCaches()).get(repo); return g ? g.bytes : 0; } catch { return 0; } };
+    // After a load finishes: remember what the cache holds for it, so later visits do not ask again.
+    async function markDownloaded(key, repo = key) {
+      const held = await repoHeldBytes(repo);
+      if (held > 0) try { localStorage.setItem('lm_downloaded', JSON.stringify({ ...readDownloaded(), [key]: held })); } catch {}
+    }
+    const downloadAccepted = new Set();   // accepted in this page session: one question per model per visit
+    const downloadAsking = new Map();     // key → the open question's promise, so two triggers share one dialog
+    const downloadDeclined = new Set();   // declined in this page session
+    // spec: { key, repo?, label, bytes, purpose, exact?, quietAfterNo? }. Resolves true when the download may start.
+    // quietAfterNo: for downloads the app triggers itself (memory tools, the reranker): after a no, do not ask again
+    // this visit. A user's own retry (Send, Record, a toggle) always asks again.
+    function askDownload(spec) {
+      const { key } = spec;
+      if (downloadAccepted.has(key)) return Promise.resolve(true);
+      if (spec.quietAfterNo && downloadDeclined.has(key)) return Promise.resolve(false);
+      if (downloadAsking.has(key)) return downloadAsking.get(key);
+      const p = (async () => {
+        if (spec.bytes < DOWNLOAD_ASK_BYTES) return true;
+        const held = await repoHeldBytes(spec.repo || key);
+        let free = NaN, persisted = false;
+        try { const e = await navigator.storage.estimate(); free = e.quota - e.usage; } catch {}
+        try { persisted = !!(navigator.storage && navigator.storage.persisted && await navigator.storage.persisted()); } catch {}
+        let trusted = false; try { trusted = localStorage.getItem('lm_download_ask') === 'large'; } catch {}
+        const plan = downloadPlan({ key, ready: readDownloaded(), held, expected: spec.bytes, free, persisted, exact: !!spec.exact, trusted });
+        if (!plan.ask) return true;
+        return showDownloadDialog(spec, plan, free);
+      })().then((ok) => { downloadAsking.delete(key); if (ok) downloadAccepted.add(key); else downloadDeclined.add(key); return ok; },
+                (e) => { downloadAsking.delete(key); console.warn('download question failed:', e); return false; });
+      downloadAsking.set(key, p);
+      return p;
+    }
+    // Settings → Models → "Ask before every model download": checked unless the user let downloads under 5 GB through.
+    function syncDownloadAskToggle() {
+      const t = document.getElementById('downloadAskToggle');
+      if (t) { let v = null; try { v = localStorage.getItem('lm_download_ask'); } catch {} t.checked = v !== 'large'; }
+    }
+    { const t = document.getElementById('downloadAskToggle');
+      if (t) { syncDownloadAskToggle(); t.addEventListener('change', () => { try { localStorage.setItem('lm_download_ask', t.checked ? 'all' : 'large'); } catch {} }); } }
+    function showDownloadDialog(spec, plan, free) {
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'tts-modal-overlay download-consent';
+        overlay.innerHTML =
+          '<div class="tts-modal" role="dialog" aria-modal="true" aria-labelledby="downloadConsentTitle">' +
+            `<div class="tts-modal-title" id="downloadConsentTitle">Download ${spec.label}?</div>` +
+            '<div class="tts-modal-msg">' + downloadMessage(spec, plan, free, fmtBytes) + '</div>' +
+            (spec.bytes < DOWNLOAD_TRUST_BYTES
+              ? '<label class="download-consent-trust" style="display:flex;gap:8px;align-items:flex-start;font-size:0.8rem;line-height:1.4;color:var(--gray-600);margin:-4px 0 14px">' +
+                  '<input type="checkbox" checked style="margin-top:2px"> <span>Download other models under 5 GB without asking. Larger ones still ask. You can change this in Settings → Models.</span></label>'
+              : '') +
+            '<div class="tts-modal-actions">' +
+              '<button type="button" class="tts-modal-cancel">Cancel</button>' +
+              `<button type="button" class="tts-modal-ok">${plan.remaining === null ? 'Download' : 'Download ' + fmtBytes(plan.remaining)}</button>` +
+            '</div>' +
+          '</div>';
+        document.body.appendChild(overlay);
+        const done = (ok) => { document.removeEventListener('keydown', onKey); overlay.remove(); resolve(ok); };
+        const onKey = (e) => { if (e.key === 'Escape') done(false); };
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
+        overlay.querySelector('.tts-modal-cancel').addEventListener('click', () => done(false));
+        overlay.querySelector('.tts-modal-ok').addEventListener('click', () => {
+          // Asked inside the click, where Chrome is likeliest to grant it.
+          try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
+          const trust = overlay.querySelector('.download-consent-trust input');
+          if (trust && trust.checked) { try { localStorage.setItem('lm_download_ask', 'large'); } catch {} syncDownloadAskToggle(); }
+          done(true);
+        });
+        overlay.querySelector('.tts-modal-ok').focus();
+      });
+    }
+
     async function refreshCacheInfo() {
       try {
         const groups = await inventoryModelCaches();
@@ -12122,7 +12257,8 @@ self.addEventListener('message', async (e) => {
     const ragRerankToggle = document.getElementById('ragRerankToggle');
     if (ragRerankToggle) {
       ragRerankToggle.checked = localStorage.getItem('lm_rag_rerank') === '1';
-      ragRerankToggle.addEventListener('change', () => {
+      ragRerankToggle.addEventListener('change', async () => {
+        if (ragRerankToggle.checked && !(await askDownload(RERANK_DOWNLOAD))) ragRerankToggle.checked = false;
         try { localStorage.setItem('lm_rag_rerank', ragRerankToggle.checked ? '1' : '0'); } catch {}
       });
     }
@@ -13646,7 +13782,10 @@ self.addEventListener('message', async (e) => {
     const dflashToggle = document.getElementById('dflashToggle');
     if (dflashToggle) {
       dflashToggle.checked = dflashEnabled();
-      dflashToggle.addEventListener('change', () => { try { localStorage.setItem('lm_dflash', dflashToggle.checked ? '1' : '0'); } catch {} });
+      dflashToggle.addEventListener('change', async () => {
+        if (dflashToggle.checked && !(await askDownload({ key: 'naklitechie/Qwen3.8-27B-DFlash2-ternary-bonsai2', label: 'the DFlash 2 drafter', bytes: 1.14e9, purpose: 'draft tokens for Ternary Bonsai 2 27B' }))) dflashToggle.checked = false;
+        try { localStorage.setItem('lm_dflash', dflashToggle.checked ? '1' : '0'); } catch {}
+      });
     }
     // MTP speculative decoding for Ternary Bonsai 2 (default OFF; when on it replaces DFlash; read at load time).
     function mtpEnabled() { try { return localStorage.getItem('lm_mtp') === '1'; } catch { return false; } }
@@ -13657,7 +13796,10 @@ self.addEventListener('message', async (e) => {
     const mtpDepthSelect = document.getElementById('mtpDepthSelect');
     if (mtpToggle) {
       mtpToggle.checked = mtpEnabled();
-      mtpToggle.addEventListener('change', () => { try { localStorage.setItem('lm_mtp', mtpToggle.checked ? '1' : '0'); } catch {} });
+      mtpToggle.addEventListener('change', async () => {
+        if (mtpToggle.checked && !(await askDownload({ key: 'CaryPalmer/Ternary-Bonsai-2-27B-262k-GGUF', label: 'the MTP draft head', bytes: 451e6, purpose: 'draft tokens for Ternary Bonsai 2 27B' }))) mtpToggle.checked = false;
+        try { localStorage.setItem('lm_mtp', mtpToggle.checked ? '1' : '0'); } catch {}
+      });
     }
     if (mtpDepthSelect) {
       mtpDepthSelect.value = String(mtpDepth());
@@ -13925,6 +14067,7 @@ self.addEventListener('message', async (e) => {
       'hy-memory-30b-a3b': { label: 'Hy-Memory 30B-A3B', backend: 'hyv3-ssd', id: 'rapatsky/Hy-Memory-30B-A3B-GGUF', contextSize: 8192 },
     };
     const WRITER_IDLE_MS = 5 * 60 * 1000;
+    const writerDownload = (key) => ({ key: WRITER_MODELS[key].id, label: WRITER_MODELS[key].label, bytes: 32e9, purpose: 'write memories with it', quietAfterNo: true });
     let writerWorker = null, writerLoading = null, writerIdle = null;
     function memoryWriterModel() {
       try { const k = localStorage.getItem('lm_memory_writer_model'); return WRITER_MODELS[k] ? k : 'chat'; } catch { return 'chat'; }
@@ -13942,7 +14085,7 @@ self.addEventListener('message', async (e) => {
         const onMsg = (e) => {
           const d = e.data;
           if (d.type === 'progress') { if (onProgress) try { onProgress(d.data); } catch {} }
-          else if (d.type === 'ready') { w.removeEventListener('message', onMsg); resolve(w); }
+          else if (d.type === 'ready') { w.removeEventListener('message', onMsg); markDownloaded(m.id); resolve(w); }
           else if (d.type === 'error') { w.removeEventListener('message', onMsg); writerUnload(); reject(new Error(d.message || `${m.label} failed to load`)); }
         };
         w.addEventListener('message', onMsg);
@@ -13979,7 +14122,13 @@ self.addEventListener('message', async (e) => {
     }
 
     async function memoryWriterGenerate(chatMessages, maxTokens, signal) {
-      const writerKey = memoryWriterModel();
+      let writerKey = memoryWriterModel();
+      // Picked before the download question existed: ask now; a no goes back to the chat model writing.
+      if (writerKey !== 'chat' && !writerWorker && !(await askDownload(writerDownload(writerKey)))) {
+        try { localStorage.setItem('lm_memory_writer_model', 'chat'); } catch {}
+        if (typeof memoryWriterModelSelect !== 'undefined' && memoryWriterModelSelect) memoryWriterModelSelect.value = 'chat';
+        writerKey = 'chat';
+      }
       if (writerKey !== 'chat') {
         const text = await writerGenerate(writerKey, chatMessages, maxTokens, signal, writerProgress);
         if (memoryWriterJob && !signal.aborted) memoryWriteBtn.textContent = 'Writing memories…';
@@ -14151,7 +14300,9 @@ self.addEventListener('message', async (e) => {
     const memoryWriterModelSelect = document.getElementById('memoryWriterModelSelect');
     if (memoryWriterModelSelect) {
       memoryWriterModelSelect.value = memoryWriterModel();
-      memoryWriterModelSelect.addEventListener('change', () => {
+      memoryWriterModelSelect.addEventListener('change', async () => {
+        const v = memoryWriterModelSelect.value;
+        if (WRITER_MODELS[v] && !(await askDownload(writerDownload(v)))) memoryWriterModelSelect.value = 'chat';
         try { localStorage.setItem('lm_memory_writer_model', memoryWriterModelSelect.value); } catch {}
         if (memoryWriterModelSelect.value === 'chat') writerUnload();
         scheduleSync();
@@ -15218,7 +15369,9 @@ self.addEventListener('message', async (e) => {
     let voiceReady = false;
     let voiceReadyPromise = null;
 
-    function ensureVoiceWorker() {
+    async function ensureVoiceWorker() {
+      if (voiceReadyPromise) return voiceReadyPromise;
+      if (!(await askDownload(WHISPER_DOWNLOAD))) throw new Error('speech to text needs Whisper (206 MB); the download was cancelled');
       if (voiceReadyPromise) return voiceReadyPromise;
       voiceWorker = createTranscriptionWorker();
       voiceReadyPromise = new Promise((resolve, reject) => {
@@ -15233,6 +15386,7 @@ self.addEventListener('message', async (e) => {
           } else if (e.data.type === 'ready') {
             voiceReady = true;
             voiceWorker.removeEventListener('message', onMsg);
+            markDownloaded(WHISPER_DOWNLOAD.key);
             resolve();
           } else if (e.data.type === 'error') {
             voiceWorker.removeEventListener('message', onMsg);
@@ -17088,21 +17242,28 @@ ${JSON.stringify({ name, result })}
             self._embWorker.addEventListener('message', handler);
           });
         }
-        this._embWorker = createEmbeddingWorker();
-        return new Promise((resolve, reject) => {
-          const handler = (e) => {
-            if (e.data.type === 'ready') {
-              self._embReady = true;
-              self._embWorker.removeEventListener('message', handler);
-              resolve();
-              maybeMigrateEmbeddings();
-            } else if (e.data.type === 'error') {
-              self._embWorker.removeEventListener('message', handler);
-              reject(new Error(e.data.message));
-            }
-          };
-          self._embWorker.addEventListener('message', handler);
-          self._embWorker.postMessage({ type: 'load' });
+        // Memory and documents need the embedding model: ask before its first download (issue #7).
+        return askDownload(EMBED_DOWNLOAD).then((ok) => {
+          if (!ok) throw new Error('memory needs the multilingual-e5-small model (118 MB), and its download was declined. Reload the page to be asked again.');
+          if (self._embReady) return;
+          if (self._embWorker) return self._ensureEmbWorker();   // another caller started it while the dialog was open
+          self._embWorker = createEmbeddingWorker();
+          return new Promise((resolve, reject) => {
+            const handler = (e) => {
+              if (e.data.type === 'ready') {
+                self._embReady = true;
+                self._embWorker.removeEventListener('message', handler);
+                resolve();
+                markDownloaded(EMBED_DOWNLOAD.key);
+                maybeMigrateEmbeddings();
+              } else if (e.data.type === 'error') {
+                self._embWorker.removeEventListener('message', handler);
+                reject(new Error(e.data.message));
+              }
+            };
+            self._embWorker.addEventListener('message', handler);
+            self._embWorker.postMessage({ type: 'load' });
+          });
         });
       },
 
@@ -19099,10 +19260,25 @@ self.addEventListener('message', async (e) => {
         showToast('Large model (' + m.size + ') — may not fit in phone memory. A smaller model or a local endpoint (Settings → Models) is more reliable on mobile.');
       }
     }
-    modelSelect.addEventListener('change', () => {
+    // A chat model picked in the picker asks before it downloads (issue #7); one already on this device loads at once.
+    async function askChatModelDownload(key) {
+      const m = MODELS[key];
+      if (!m || m.backend === 'endpoint' || m.backend === 'chrome-ai' || m.localFile) return true;
+      if (modelCacheState(m, await inventoryModelCaches()) === 'device') return true;
+      const o = [...modelSelect.options].find((x) => x.value === key);
+      return askDownload({ key, repo: repoForModel(m), label: o ? optionName(o) : (m.label || key),
+        bytes: parseSizeBytes(m.size) || 0, purpose: 'chat with it' });
+    }
+    modelSelect.addEventListener('change', async () => {
       if (generating) return;
       const key = modelSelect.value;
       if (key === activeModelKey && modelReady) return;
+      if (!(await askChatModelDownload(key))) {
+        modelSelect.value = activeModelKey || '';
+        refreshModelPickerLabel();
+        showToast('Download cancelled. Nothing was downloaded.');
+        return;
+      }
       maybeWarnMobileModel(key);
       loadModel(key);
     });
@@ -19431,6 +19607,11 @@ self.addEventListener('message', async (e) => {
       // If the model must download, do it now with progress; then discard the
       // warm session — generate() creates its own per-turn sessions.
       if (avail === 'downloadable' || avail === 'downloading') {
+        // Chrome downloads Nano and decides its size, so the question names no size.
+        if (avail === 'downloadable' && !(await askDownload({ key: 'gemini-nano', label: 'Gemini Nano', bytes: Infinity, sizeUnknown: true, purpose: 'chat with it' }))) {
+          fail('Download cancelled. Nothing was downloaded. Pick another model, or pick Gemini Nano again to download it.');
+          return;
+        }
         try {
           progressText.textContent = 'Downloading Gemini Nano (one-time, via Chrome)…';
           const warm = await LanguageModel.create({
@@ -20975,6 +21156,11 @@ self.addEventListener('message', async (e) => {
       if (STT.ready) return Promise.resolve();
       if (STT.loading) return STT.loading;
       STT.loading = (async () => {
+        // On WebGPU Moonshine is fp32 (~247 MB) and asks first; the WASM q4 build (~98 MB) is under the line.
+        if (sttCanUseWebGPU() && !(await askDownload(MOONSHINE_DOWNLOAD))) {
+          STT.loading = null;
+          throw new Error('speech to text needs Moonshine (247 MB); the download was cancelled');
+        }
         STT.worker = createSTTWorker();
         STT.worker.addEventListener('message', sttOnMessage);
         await new Promise((resolve, reject) => {
@@ -20984,6 +21170,7 @@ self.addEventListener('message', async (e) => {
           STT.worker.postMessage({ type: 'load', device, dtype, model: 'onnx-community/moonshine-base-ONNX' });
         });
         STT.ready = true; STT.loading = null;
+        if (sttCanUseWebGPU()) markDownloaded(MOONSHINE_DOWNLOAD.key);
       })();
       return STT.loading;
     }
@@ -21618,7 +21805,7 @@ self.addEventListener('message', async (e) => {
         const onMsg = (e) => {
           const d = e.data || {};
           if (d.type === 'progress' && d.data && d.data.total) onProgress && onProgress(d.data.loaded, d.data.total);
-          else if (d.type === 'ready') { w.removeEventListener('message', onMsg); resolve(d.backend); }
+          else if (d.type === 'ready') { w.removeEventListener('message', onMsg); markDownloaded(REWRITER_DOWNLOAD.key); resolve(d.backend); }
           else if (d.type === 'error') { w.removeEventListener('message', onMsg); reject(new Error(d.message)); }
         };
         w.addEventListener('message', onMsg);
@@ -21648,7 +21835,9 @@ self.addEventListener('message', async (e) => {
       });
     }
     try { imageEnhanceInput.checked = localStorage.getItem('lm_image_enhance') === '1'; } catch {}
-    imageEnhanceInput.addEventListener('change', () => {
+    const REWRITER_DOWNLOAD = { key: 'ML-Intern-lab/Qwen-Image-2.1-PE-T2I-Pocket-0.8B', label: 'the Qwen-Image prompt rewriter (0.8B)', bytes: 812e6, purpose: 'enhance image prompts' };
+    imageEnhanceInput.addEventListener('change', async () => {
+      if (imageEnhanceInput.checked && !(await askDownload(REWRITER_DOWNLOAD))) imageEnhanceInput.checked = false;
       try { localStorage.setItem('lm_image_enhance', imageEnhanceInput.checked ? '1' : '0'); } catch {}
       if (!imageEnhanceInput.checked) unloadPromptRewriter();
     });
@@ -22099,88 +22288,6 @@ self.addEventListener('message', async (e) => {
     // one WebGPU-heavy worker should be resident at a time, the chat model is
     // unloaded first (freeing its VRAM) and remembered so it can be restored
     // when the user leaves Image mode.
-    // IMAGE-CONSENT — ask before the first download of an in-tab image model (issue #7). Pure decision logic here;
-    // scripts/test-image-consent.mjs runs it in Node.
-    // ready: { [modelId]: bytes held when it last loaded } (localStorage lm_image_ready). held: bytes in the cache now.
-    // A model counts as downloaded only while the cache still holds what it held at that load, so a Delete in
-    // Settings brings the question back.
-    function imageDownloadPlan({ modelId, ready, held, expected, free, persisted }) {
-      const was = ready && ready[modelId];
-      if (was && held >= 0.99 * was) return { ask: false };
-      const remaining = Math.max(0, expected - held);
-      const notes = [];
-      if (held > 0) notes.push('resume');
-      if (Number.isFinite(free) && free < remaining) notes.push('space');
-      if (!persisted) notes.push('not-persistent');
-      return { ask: true, held, remaining, notes };
-    }
-    function imageDownloadMessage(label, plan, free, fmt) {
-      const parts = [`<b>${label}</b> runs on your device. The first image needs a one-time download of about <b>${fmt(plan.remaining)}</b>, stored in this browser for offline use. Nothing you type is sent anywhere.`];
-      if (plan.notes.includes('resume')) parts.push(`${fmt(plan.held)} is already in this browser from an earlier visit; the download continues from there.`);
-      else parts.push('If you close the tab before it finishes, the next download continues from where it stopped.');
-      if (plan.notes.includes('space')) parts.push(`This browser has about ${fmt(free)} of storage free, which may not be enough.`);
-      if (plan.notes.includes('not-persistent')) parts.push('Your browser has not granted persistent storage, so it may delete the model if your disk runs low. A private window deletes it when you close it.');
-      return parts.map((p) => `<p style="margin:0 0 8px">${p}</p>`).join('');
-    }
-    // END IMAGE-CONSENT
-
-    // Bytes the image engine holds for modelId: chunk ranges in its IndexedDB cache ('bonsai-image-v1', chunks keyed
-    // [url, start, end]). Read from the chunk keys, not the meta rows, so a download stopped part-way counts.
-    async function imageModelHeldBytes(modelId) {
-      let names = [];
-      try { names = (await indexedDB.databases()).map((d) => d.name); } catch {}
-      if (!names.includes('bonsai-image-v1')) return 0;
-      let db = null, held = 0;
-      try {
-        db = await idbOpenExisting('bonsai-image-v1');
-        if (!db.objectStoreNames.contains('chunks')) return 0;
-        for (const k of await idbReq(db.transaction('chunks', 'readonly').objectStore('chunks').getAllKeys())) {
-          if (Array.isArray(k) && typeof k[0] === 'string' && repoOfUrl(k[0]) === modelId) held += Math.max(0, k[2] - k[1]);
-        }
-      } catch (e) { console.warn('image cache size:', e); } finally { try { db && db.close(); } catch {} }
-      return held;
-    }
-    const readImageReady = () => { try { return JSON.parse(localStorage.getItem('lm_image_ready') || '{}') || {}; } catch { return {}; } };
-
-    // Resolves true when the model may load: already downloaded, or the user chose Download.
-    async function confirmImageDownload(modelId) {
-      const opt = [...imageModelSelect.options].find((o) => o.value === modelId);
-      const expected = Number(opt && opt.dataset.bytes) || 3e9;
-      const label = opt ? opt.textContent.replace(/\s*\(.*\)\s*$/, '').trim() : modelId;
-      const held = await imageModelHeldBytes(modelId);
-      let free = NaN, persisted = false;
-      try { const e = await navigator.storage.estimate(); free = e.quota - e.usage; } catch {}
-      try { persisted = !!(navigator.storage && navigator.storage.persisted && await navigator.storage.persisted()); } catch {}
-      const plan = imageDownloadPlan({ modelId, ready: readImageReady(), held, expected, free, persisted });
-      if (!plan.ask) return true;
-      return new Promise((resolve) => {
-        const overlay = document.createElement('div');
-        overlay.className = 'tts-modal-overlay';
-        overlay.id = 'imageConsent';
-        overlay.innerHTML =
-          '<div class="tts-modal" role="dialog" aria-modal="true" aria-labelledby="imageConsentTitle">' +
-            '<div class="tts-modal-title" id="imageConsentTitle">Download the image model?</div>' +
-            '<div class="tts-modal-msg">' + imageDownloadMessage(label, plan, free, fmtBytes) + '</div>' +
-            '<div class="tts-modal-actions">' +
-              '<button type="button" class="tts-modal-cancel">Cancel</button>' +
-              `<button type="button" class="tts-modal-ok">Download ${fmtBytes(plan.remaining)}</button>` +
-            '</div>' +
-          '</div>';
-        document.body.appendChild(overlay);
-        const done = (ok) => { document.removeEventListener('keydown', onKey); overlay.remove(); resolve(ok); };
-        const onKey = (e) => { if (e.key === 'Escape') done(false); };
-        document.addEventListener('keydown', onKey);
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
-        overlay.querySelector('.tts-modal-cancel').addEventListener('click', () => done(false));
-        overlay.querySelector('.tts-modal-ok').addEventListener('click', () => {
-          // Asked inside the click, where Chrome is likeliest to grant it.
-          try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
-          done(true);
-        });
-        overlay.querySelector('.tts-modal-ok').focus();
-      });
-    }
-
     async function ensureImageModel() {
       const modelId = imageModelSelect.value;
       if (modelId === 'local-server') return; // nothing to load in-tab; the server holds the weights
@@ -22199,11 +22306,12 @@ self.addEventListener('message', async (e) => {
       });
       imageProgressFill.style.width = '100%';
       imageProgressText.textContent = 'Model ready.';
-      // Remember that it downloaded, with what the cache held, so the next visit does not ask again.
-      imageModelHeldBytes(modelId).then((held) => {
-        if (!held) return;
-        try { localStorage.setItem('lm_image_ready', JSON.stringify({ ...readImageReady(), [modelId]: held })); } catch {}
-      });
+      markDownloaded(modelId);
+    }
+    function imageDownloadSpec(modelId) {
+      const opt = [...imageModelSelect.options].find((o) => o.value === modelId);
+      return { key: modelId, label: opt ? opt.textContent.replace(/\s*\(.*\)\s*$/, '').trim() : modelId,
+        bytes: Number(opt && opt.dataset.bytes) || 3e9, purpose: 'generate images' };
     }
 
     const imagePreview = document.getElementById('imagePreview');
@@ -22230,6 +22338,11 @@ self.addEventListener('message', async (e) => {
       const t0 = Date.now();
       let r;
       try {
+        if (!rewriterReady && !(await askDownload(REWRITER_DOWNLOAD))) {
+          imageEnhanceInput.checked = false;
+          try { localStorage.setItem('lm_image_enhance', '0'); } catch {}
+          throw new Error('the rewriter download was declined, so Enhance prompt is now off');
+        }
         onStatus('Loading the prompt rewriter…', 2);
         await ensurePromptRewriter((loaded, total) => onStatus(`Downloading the prompt rewriter (first use) — ${Math.round(loaded / 1048576)} / ${Math.round(total / 1048576)} MB`, Math.round(10 * loaded / total)));
         onStatus('Enhancing the prompt…', 10);
@@ -22270,7 +22383,7 @@ self.addEventListener('message', async (e) => {
       if (modelId !== 'local-server' && !(LocalMind.runtime._imageWorker && LocalMind.runtime._imageActiveModel === modelId)) {
         imageConsentOpen = true;
         let ok = false;
-        try { ok = await confirmImageDownload(modelId); } finally { imageConsentOpen = false; }
+        try { ok = await askDownload(imageDownloadSpec(modelId)); } finally { imageConsentOpen = false; }
         if (!ok) { imageProgressText.textContent = 'Download cancelled. Nothing was downloaded; your prompt is still in the box.'; return; }
       }
       lastImagePrompt = prompt;
@@ -22385,10 +22498,17 @@ self.addEventListener('message', async (e) => {
       await LocalMind.runtime.loadDiffusionModel(DIFFUSION_MODEL);
       diffuseProgressFill.style.width = '100%';
       diffuseProgressText.textContent = 'Model ready.';
+      markDownloaded(DIFFUSION_DOWNLOAD.key);
     }
 
+    const DIFFUSION_DOWNLOAD = { key: DIFFUSION_MODEL.tokenizer, label: 'the Qwen3 0.6B diffusion model', bytes: 1.4e9, purpose: 'write with Diffuse' };
     async function runDiffuseGen(prompt) {
-      if (generating) return;
+      if (generating || downloadAsking.size) return;
+      if (!(LocalMind.runtime._diffusionWorker && LocalMind.runtime._diffusionActiveModel === DIFFUSION_MODEL.model)
+          && !(await askDownload(DIFFUSION_DOWNLOAD))) {
+        diffuseProgressText.textContent = 'Download cancelled. Nothing was downloaded; your prompt is still in the box.';
+        return;
+      }
       generating = true; diffuseBusy = true;
       sendBtn.innerHTML = '&#9632;'; sendBtn.classList.add('stop');
       addUserMessage(prompt, false);
@@ -22523,6 +22643,7 @@ self.addEventListener('message', async (e) => {
           if (p.status === 'progress') { visionProgressFill.style.width = Math.round(p.progress || 0) + '%'; visionProgressText.textContent = 'Downloading SmolVLM — ' + (p.file || '') + ' ' + Math.round(p.progress || 0) + '%'; }
         } else if (d.type === 'ready') {
           VS.ready = true; VS.loading = false; visionProgressFill.style.width = '100%';
+          { const v = visionDownload(); markDownloaded(v.key, v.repo); }
           visionProgressText.textContent = 'SmolVLM ready — Describe the camera or an image.';
           visionDescribeBtn.disabled = false; visionLiveBtn.disabled = false;
           if (VS.live || VS.still || VS.stream) runVisionCaption();
@@ -22540,9 +22661,19 @@ self.addEventListener('message', async (e) => {
       VS.worker = w;
       return w;
     }
-    function loadVisionModel() {
+    // Both sizes share one repo, so the question is per size and counts the cache only through lm_downloaded.
+    const visionDownload = () => ({ key: VISION_MODEL_ID + '#' + visionModelSelect.value, repo: VISION_MODEL_ID,
+      label: `SmolVLM 500M (${visionModelSelect.value === 'light' ? 'light' : 'full'})`,
+      bytes: visionModelSelect.value === 'light' ? 0.36e9 : 1.0e9, purpose: 'describe images', exact: true });
+    async function loadVisionModel() {
       if (VS.ready || VS.loading) return;
       VS.loading = true;
+      if (!(await askDownload(visionDownload()))) {
+        VS.loading = false; VS.live = false;
+        visionLiveBtn.setAttribute('aria-pressed', 'false'); visionLiveBtn.classList.remove('active');
+        visionProgressText.textContent = 'Download cancelled. Nothing was downloaded.';
+        return;
+      }
       // Free the chat model's VRAM first (one heavy WebGPU worker at a time).
       suspendChatModel();
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
@@ -22738,6 +22869,7 @@ self.addEventListener('message', async (e) => {
           if (p.status === 'progress') { cloneSetCloning(false); cloneProgressFill.style.width = Math.round(p.progress || 0) + '%'; cloneSetProgress('Downloading Chatterbox — ' + (p.file || '') + ' ' + Math.round(p.progress || 0) + '%'); }
         } else if (d.type === 'ready') {
           CB.ready = true; CB.loading = false; cloneProgressFill.style.width = '100%';
+          markDownloaded(CLONE_DOWNLOAD.key);
           cloneSetProgress(CB.hasVoice ? 'Ready — type text and Speak.' : (CB.refPcm ? 'Chatterbox ready — Speak to clone your saved voice.' : 'Chatterbox ready — record or upload a voice sample.'));
           if (CB._pendingClonePcm) { const pcm = CB._pendingClonePcm; CB._pendingClonePcm = null; cloneSendClone(pcm); }
           cloneUpdateButtons();
@@ -22772,8 +22904,17 @@ self.addEventListener('message', async (e) => {
       return w;
     }
 
-    function loadCloneModel() {
-      if (CB.ready || CB.loading) return;
+    const CLONE_DOWNLOAD = { key: 'onnx-community/chatterbox-ONNX', label: 'Chatterbox (voice cloning)', bytes: 1.5e9, purpose: 'clone a voice' };
+    // Resolves false when the user declined the download (nothing loads).
+    async function loadCloneModel() {
+      if (CB.ready || CB.loading) return true;
+      if (!(await askDownload(CLONE_DOWNLOAD))) {
+        CB._pendingClonePcm = null; CB._pendingSpeak = null;
+        cloneSetProgress('Download cancelled. Nothing was downloaded; voice cloning needs the model.');
+        cloneUpdateButtons();
+        return false;
+      }
+      if (CB.ready || CB.loading) return true;
       CB.loading = true;
       // Free the chat model's VRAM first (one heavy WebGPU worker at a time).
       suspendChatModel();
@@ -22782,10 +22923,11 @@ self.addEventListener('message', async (e) => {
       cloneSetProgress('Loading Chatterbox (first use downloads ~1.5 GB once, then offline)…');
       const device = navigator.gpu ? 'webgpu' : 'wasm';
       ensureCloneWorker().postMessage({ type: 'load', device });
+      return true;
     }
 
     function cloneSendClone(pcm) {
-      if (!CB.ready) { CB._pendingClonePcm = pcm; loadCloneModel(); return; }
+      if (!CB.ready) { CB._pendingClonePcm = pcm; loadCloneModel(); return; }   // a declined download clears the pending clip
       CB.busy = true; cloneUpdateButtons();
       cloneSetProgress('Cloning your voice… (a few seconds)');
       cloneSetCloning(true);
@@ -22805,6 +22947,8 @@ self.addEventListener('message', async (e) => {
     }
 
     async function cloneStartRecording() {
+      // Ask before recording: the model downloads while the user speaks, so the question comes first.
+      if (!(await loadCloneModel())) return;
       try {
         CB.recStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         CB.recChunks = [];
@@ -22821,10 +22965,7 @@ self.addEventListener('message', async (e) => {
         mr.start();
         cloneRecordBtn.textContent = '⏹ Stop';
         cloneSetProgress('Recording… speak naturally for 5–10 seconds, then Stop.');
-        // Prefetch the model while the user records — it downloads (~1.4 GB, first use)
-        // in parallel, so it's ready to encode by the time they hit Stop. Idempotent:
-        // no-op if already loaded/loading.
-        loadCloneModel();
+        // The model (loaded above, after the user said yes) downloads while they record.
       } catch (e) { cloneSetProgress('Mic blocked or unavailable (' + ((e && e.name) || e) + '). You can upload a clip instead.'); }
     }
     function cloneStopRecording() { try { if (CB.rec && CB.rec.state !== 'inactive') CB.rec.stop(); } catch {} }
