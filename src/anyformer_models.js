@@ -13,7 +13,7 @@
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.2.2/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.2.3/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts: a download as 'weights', planning as 'init'.
 function toEngineProgress(e) {
@@ -68,4 +68,14 @@ export class AnyformerModel {
 export class Glm47Flash extends AnyformerModel {
   static repo = 'unsloth/GLM-4.7-Flash-GGUF';
   static file = 'GLM-4.7-Flash-Q4_K_M.gguf';
+}
+
+// inclusionAI's Ling 3.0 Flash (bailingmoe3, 124B-A5B): the two-part Q4_K_M; anyformer (v0.2.3+) sends it to diskformer's
+// LingMoeSsd hand engine (built in LocalMind 2026-10-22, now diskformer's; gate plan/2026-10-22-ling-harness), which
+// needs a GPU budget of 6.8 GB. anyformer's diskformer back end runs hand engines with reasoning off, so this model
+// never opens a thought.
+export class Ling3Flash extends AnyformerModel {
+  static repo = 'inclusionAI/Ling-3.0-flash-GGUF';
+  static budget = 7e9;
+  get thinkInPrompt() { return false; }
 }
