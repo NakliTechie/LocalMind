@@ -24,6 +24,7 @@
  */
 
 import { STORAGE, COPY_SRC, COPY_DST, MAP_READ, UNIFORM } from './qwen3_moe_ssd.js';
+import { OpfsWriter, OpfsReaderPool, opfsFileSize, readOpfsText, writeOpfsText } from './opfs-reader.js';
 import { MM_TILE, MM_SG_TOKENS, MVT_ROWS, gpuRowBytes } from './iq_quants.js';
 
 export const FLASHMAP_QWEN3_4B = {
@@ -303,6 +304,45 @@ async function readSafetensors(url, fetchFn) {
   for (const t of Object.values(header)) if (t.dtype !== 'BF16') throw new Error(`drafter: ${t.dtype} tensor, expected BF16`);
   return { header, dataStart: 8 + n };
 }
+// The drafter file in OPFS (localmind-ssd/flashmap-<repo>/model.safetensors): streamed in once (a partial copy resumes
+// from its size), then read from there. A marker file (<file>.ok, the pinned revision) is written only after a full,
+// size-checked copy; without it the copy is fetched again from byte 0. Returns a fetch-like function serving Range
+// requests from the copy.
+async function opfsCopy(url, fetchFn, src, onProgress) {
+  const path = `localmind-ssd/flashmap-${src.repo.split('/').pop().toLowerCase()}/${src.file}`, ok = `${path}.ok`;
+  let have = (await opfsFileSize(path)) || 0;
+  const done = have === src.size && (await readOpfsText(ok).catch(() => null)) === src.revision;
+  if (have >= src.size && !done) have = 0;
+  if (!done) {
+    if (have > src.size) have = 0;
+    const w = await OpfsWriter.open(path, { truncate: have === 0 });
+    const r = await fetchFn(url, have ? { headers: { Range: `bytes=${have}-` } } : {});
+    if (!r.ok && r.status !== 206) throw new Error(`drafter download: HTTP ${r.status}`);
+    if (have && r.status !== 206) have = 0;   // the server ignored the range: start over
+    const reader = r.body.getReader();
+    let at = have;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const n = value.byteLength;   // write() transfers the buffer, so take the length first
+      await w.write(value, at); at += n;
+      onProgress({ status: 'drafter-download', loaded: at, total: src.size });
+    }
+    await w.close();
+    if (at !== src.size) throw new Error(`drafter download stopped at ${at} of ${src.size} bytes; it resumes on the next load`);
+    await writeOpfsText(ok, src.revision);
+  }
+  const pool = await OpfsReaderPool.open(path, { workers: 2 });
+  const read = async (u, init = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((init.headers && init.headers.Range) || '');
+    const start = m ? Number(m[1]) : 0, end = m ? Number(m[2]) : src.size - 1;
+    const got = await pool.read(start, end - start + 1);
+    if (got.got !== end - start + 1) throw new Error(`drafter: short OPFS read at ${start}`);
+    return { ok: true, status: 206, arrayBuffer: async () => got.buf.slice(0, got.got) };
+  };
+  read.close = () => pool.close();
+  return read;
+}
 const bf16ToF32 = (u16) => { const out = new Float32Array(u16.length), u = new Uint32Array(out.buffer); for (let i = 0; i < u16.length; i++) u[i] = u16[i] << 16; return out; };
 
 // The time conditioning of the jump s → t (FlashMapDraftModel.time_conditioning) in f32: per DiT layer (self, cross,
@@ -341,15 +381,19 @@ function ropeRows(pos0, n) {
 export class FlashMapDrafter {
   // target: a loaded Qwen3Dense with opts.captureLayers = FLASHMAP_QWEN3_4B_LAYERS (it shares the device, the token
   // table, the lm_head GEMM and the feature rows). opts.url: the safetensors file (default: Hugging Face, pinned).
+  // The file is copied into OPFS once (opts.cache === false reads `url` directly, for a local serve).
   static async load(target, opts = {}) {
-    const src = opts.source || FLASHMAP_QWEN3_4B;
+    const src = opts.source || FLASHMAP_QWEN3_4B, onProgress = opts.onProgress || (() => {});
     const url = opts.url || `https://huggingface.co/${src.repo}/resolve/${src.revision}/${src.file}`;
-    const fetchFn = opts.fetch || ((u, i) => fetch(u, i));
-    const { header, dataStart } = await readSafetensors(url, fetchFn);
-    const d = new FlashMapDrafter(target, opts);
-    await d.upload(url, fetchFn, header, dataStart, opts.onProgress || (() => {}));
-    d.init();
-    return d;
+    const net = opts.fetch || ((u, i) => fetch(u, i));
+    const fetchFn = opts.cache === false ? net : await opfsCopy(url, net, src, onProgress);
+    try {
+      const { header, dataStart } = await readSafetensors(url, fetchFn);
+      const d = new FlashMapDrafter(target, opts);
+      await d.upload(url, fetchFn, header, dataStart, onProgress);
+      d.init();
+      return d;
+    } finally { if (fetchFn.close) await fetchFn.close(); }
   }
 
   constructor(target, opts) {
@@ -600,6 +644,15 @@ export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, 
   yield { tokens: [next], accepted: 0, drafted: 0, prefill: true };
   if (stops.has(next)) return;
   while (produced < maxNewTokens) {
+    // Near the drafter's context limit: plain steps to the end (no more drafting).
+    if (target.position + 2 * CFG.block + 2 > drafter.maxCtx) {
+      if (target.position >= target.maxCtx) return;
+      const tok = await target.step(next, 'argmax');
+      produced++; next = tok;
+      yield { tokens: [tok], plain: true };
+      if (stops.has(tok)) return;
+      continue;
+    }
     if (plainLeft > 0) {
       // A plain step on `next`, its features into the next free feature row.
       if (featRows === 0) featStart = target.position;

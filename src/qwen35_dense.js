@@ -20,6 +20,7 @@
 
 import { Qwen3MoeSsd, STORAGE, COPY_SRC, COPY_DST, MAP_READ, UNIFORM } from './qwen3_moe_ssd.js';
 import { QWEN35_KERNELS, QWEN35_BATCH_KERNELS } from './qwen35_moe_ssd.js';
+import { FlashMapDrafter, FLASHMAP_QWEN3_4B_LAYERS, specGenerate } from './flashmap_drafter.js';
 import { QTYPE_BY_ID, rowBytes, gpuRowBytes, PADDED, MV_ROWS, MM_TILE, MM_SG_TOKENS, MVT_TOKENS, MVT_ROWS, gridData, repackKernel, mvKernel, mmKernel, mmSgKernel, mvTKernel, embedKernel, embedBKernel } from './iq_quants.js';
 
 export const UNDERDOG_SALUKI_27B = {
@@ -802,11 +803,33 @@ export const QWEN3_4B_Q8 = {
   sha256: '8c2f07f26af9747e41988551106f149b03eb9b5cb6df636027b6bf6278473300',
   size: 4280404704,
 };
+// With FlashMap (default; opts.flashmap === false loads the target alone): the drafter j-shen/FlashMap-Qwen3-4B
+// (0.95 GB, copied into OPFS once) and speculative greedy decoding in generateTurn (flashmap_drafter.js specGenerate:
+// the same tokens as plain greedy, faster on code and maths, plain steps where drafting does not pay).
 export class Qwen3Dense extends Qwen35Dense {
   static async load(modelId = null, opts = {}) {
     const source = opts.source || (opts.url ? { repo: null, file: opts.url.split('/').pop(), revision: null } : QWEN3_4B_Q8);
-    return super.load(modelId, { ...opts, source });
+    const flashmap = opts.flashmap !== false;
+    const m = await super.load(modelId, { ...opts, source, ...(flashmap ? { captureLayers: FLASHMAP_QWEN3_4B_LAYERS } : {}) });
+    if (flashmap && !opts.captureLayers) m.drafter = await FlashMapDrafter.load(m, { fetch: opts.fetch, onProgress: opts.onProgress || (() => {}), url: opts.drafterUrl, cache: opts.drafterCache });
+    return m;
   }
+  async *generateTurn(messages, opts = {}) {
+    if (!this.drafter) { yield* super.generateTurn(messages, opts); return; }
+    const { maxNewTokens = 512, signal, enableThinking = true } = opts;
+    const ids = this.tokenizer.encode(this.chatPrompt(messages, { enableThinking }));
+    const stops = new Set(this.stopTokenIds), out = [];
+    for await (const r of specGenerate(this, this.drafter, ids, { maxNewTokens })) {
+      for (const tok of r.tokens) {
+        if (stops.has(tok)) return;
+        out.push(tok);
+        yield { text: this.tokenizer.decode(out), token: tok, tokens: out.length };
+        if (out.length >= maxNewTokens) return;
+      }
+      if (signal && signal.aborted) return;
+    }
+  }
+  async dispose() { if (this.drafter) this.drafter.destroy(); await super.dispose(); }
 }
 
 // For kernel tests (scripts/test-qwen35-dense-kernels.mjs).
