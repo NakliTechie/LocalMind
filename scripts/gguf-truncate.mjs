@@ -7,6 +7,9 @@
 //
 //   node scripts/gguf-truncate.mjs <in.gguf> <out.gguf> <layers>
 //
+// A split GGUF's first part works when the kept tensors are all in it: the split.* keys are dropped, and an MTP head
+// (`<arch>.nextn_predict_layers`) is set to 0 layers, since the cut ends before it (Ling 3.0 Flash).
+//
 // Used to test the SSD-streaming engine against llama.cpp on a small model with the same
 // tensors and kernels (the logits are meaningless as language, but both sides must agree).
 import { openSync, readSync, writeSync, closeSync, fstatSync } from 'node:fs';
@@ -59,9 +62,11 @@ if (p > got) throw new Error('header larger than the 32 MB read');
 const keep = tensors.filter((t) => { const m = /^blk\.(\d+)\./.exec(t.name); return !m || Number(m[1]) < N; });
 const byteSize = (t) => {
   const n = t.dims.reduce((a, b) => a * b, 1);
-  // ggml block sizes: F32, F16, Q4_0 (32 values in 18 bytes), Q8_0 (32 in 34), Q6_K (256 in 210)
+  // ggml block sizes: F32, F16, Q4_0 (32 values in 18 bytes), Q4_1 (32 in 20), Q5_0 (32 in 22), Q8_0 (32 in 34),
+  // Q4_K (256 in 144), Q6_K (256 in 210)
   if (t.type === 0) return n * 4; if (t.type === 1) return n * 2;
-  if (t.type === 2) return n / 32 * 18; if (t.type === 3) return n / 32 * 20; if (t.type === 8) return n / 32 * 34; if (t.type === 14) return n / 256 * 210;
+  if (t.type === 2) return n / 32 * 18; if (t.type === 3) return n / 32 * 20; if (t.type === 6) return n / 32 * 22; if (t.type === 8) return n / 32 * 34;
+  if (t.type === 12) return n / 256 * 144; if (t.type === 14) return n / 256 * 210;
   throw new Error(`type ${t.type}`);
 };
 let dataEnd = Math.max(...keep.map((t) => t.offset + byteSize(t)));
@@ -82,7 +87,12 @@ if (need > st.size) throw new Error(`input has ${st.size} bytes; need ${need}`);
 // element per layer, e.g. Gemma 4's head_count_kv and sliding_window_pattern — trimmed to N) + filtered tensors.
 const L0 = head.readUInt32LE(blockCountAt);
 const kvParts = [];
+let nKvOut = nKv;
 for (const e of entries) {
+  if (e.k.startsWith('split.')) { nKvOut--; continue; }
+  if (arch && e.k === `${arch}.nextn_predict_layers`) {
+    const b = Buffer.from(head.subarray(e.s0, e.end)); b.fill(0, e.vStart - e.s0); kvParts.push(b); continue;
+  }
   if (arch && e.k.startsWith(arch + '.') && e.arr && e.arr.n === L0 && SZ[e.arr.at]) {
     const h = Buffer.alloc(12); h.writeUInt32LE(e.arr.at, 0); h.writeBigUInt64LE(BigInt(N), 4);
     kvParts.push(head.subarray(e.s0, e.vStart), h, head.subarray(e.vStart + 12, e.vStart + 12 + N * SZ[e.arr.at]));
@@ -94,7 +104,7 @@ const kv = Buffer.concat(kvParts);
 const parts = [];
 const fixed = Buffer.alloc(24);
 fixed.write('GGUF', 0, 'latin1'); fixed.writeUInt32LE(version, 4);
-fixed.writeBigUInt64LE(BigInt(keep.length), 8); fixed.writeBigUInt64LE(BigInt(nKv), 16);
+fixed.writeBigUInt64LE(BigInt(keep.length), 8); fixed.writeBigUInt64LE(BigInt(nKvOut), 16);
 parts.push(fixed, kv);
 for (const t of keep) {
   const nb = Buffer.from(t.name, 'utf8');

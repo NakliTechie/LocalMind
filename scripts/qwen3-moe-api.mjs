@@ -8,9 +8,10 @@ import { Qwen35Dense, Qwen3Dense } from '../src/qwen35_dense.js';
 import { Lfm2MoeSsd } from '../src/lfm2_moe_ssd.js';
 import { HyV3MoeSsd } from '../src/hy_v3_moe_ssd.js';
 import { FlintMoeSsd } from '../src/flint_moe_ssd.js';
+import { LingMoeSsd } from '../src/ling_moe_ssd.js';
 import { FlashMapDrafter, specGenerate, FLASHMAP_QWEN3_4B_LAYERS } from '../src/flashmap_drafter.js';
 
-const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd, qwen35dense: Qwen35Dense, qwen3dense: Qwen3Dense, lfm2moe: Lfm2MoeSsd, hyv3: HyV3MoeSsd, flint: FlintMoeSsd, minicpmv: MiniCpmV47Ssd };
+const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd, qwen35dense: Qwen35Dense, qwen3dense: Qwen3Dense, lfm2moe: Lfm2MoeSsd, hyv3: HyV3MoeSsd, flint: FlintMoeSsd, ling: LingMoeSsd, minicpmv: MiniCpmV47Ssd };
 
 export function makeApi(log = () => {}) {
   let m = null, fm = null;
@@ -18,13 +19,13 @@ export function makeApi(log = () => {}) {
     // engine: 'qwen3' (rung 2a, qwen3moe GGUFs), 'qwen35' (rung 2b, qwen35moe), 'gemma4' (rung 2c, Gemma 4 MoE), 'lfm2moe' (rung 2d, LFM2.5-24B-A2B) or
     // 'qwen35dense' (dense qwen35 from an IQ-mix GGUF, qwen35_dense.js; no expert pool, so bench with clearPool: false).
     // capture (gemma4): keep each layer's states of the last step for states().
-    async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, gpuBudgetGB, root, flashmap } = {}) {
+    async load({ url, urls, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, gpuBudgetGB, root, flashmap } = {}) {
       if (m) { await m.dispose(); m = null; }
       const t0 = performance.now();
       let last = 0;
       if (!ENGINES[engine]) throw new Error(`unknown engine ${engine}`);
       m = await ENGINES[engine].load(null, {
-        url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, root,
+        url, urls, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, root,
         ...(flashmap ? { captureLayers: FLASHMAP_QWEN3_4B_LAYERS } : {}),
         gpuBudgetBytes: gpuBudgetGB ? gpuBudgetGB * 1e9 : undefined,
         onProgress: (e) => {

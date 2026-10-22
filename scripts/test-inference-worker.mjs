@@ -113,7 +113,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'));
   const keys = [...registry.slice(0, registry.indexOf('\n    };')).matchAll(/^      '([^']+)': \{/gm)].map((m) => m[1]);
   assert.deepEqual([...options].sort(), [...keys].sort(), 'picker options and MODELS registry keys must match');
-  assert.equal(options.length, 20);   // 2026-10-22: Flint 40B-A2.5B and Qwen3 4B + FlashMap in (2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out)
+  assert.equal(options.length, 21);   // 2026-10-22: Ling 3.0 Flash in; earlier the same day Flint 40B-A2.5B and Qwen3 4B + FlashMap in (2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out)
 }
 // window.localmind.load() sets the select before loading, so the composer's picker names the loaded model.
 assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ modelSelect\.value = key; \} catch \{\}\s*loadModel\(key\);/);
@@ -135,6 +135,9 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   // Flint 40B-A2.5B (rung 2g) on the same worker, from Recursive's Q4_1 GGUF; tools off until a battery decides.
   assert.match(indexSource, /'flint-40b-a2b-ssd': \{\s*id: 'RecursiveSI\/flint-int4-gguf',[^]*?backend: 'flint-ssd'/);
   assert.match(indexSource, /'flint-ssd': \{ engine: 'flint_moe_ssd\.js', exportName: 'FlintMoeSsd'/);
+  // Ling 3.0 Flash (rung 2h) on the same worker, from inclusionAI's two-part Q4_K_M GGUF; tools off until a battery decides.
+  assert.match(indexSource, /'ling-3-flash-ssd': \{\s*id: 'inclusionAI\/Ling-3\.0-flash-GGUF',[^]*?backend: 'ling-ssd'/);
+  assert.match(indexSource, /'ling-ssd': \{ engine: 'ling_moe_ssd\.js', exportName: 'LingMoeSsd'/);
   // Qwen3 4B + FlashMap speculative decoding (Qwen3Dense in qwen35_dense.js) on the same worker.
   assert.match(indexSource, /'qwen3-4b-flashmap': \{\s*id: 'Qwen\/Qwen3-4B-GGUF',[^]*?backend: 'qwen3dense'/);
   assert.match(indexSource, /'qwen3dense': \{ engine: 'qwen35_dense\.js', exportName: 'Qwen3Dense'/);
