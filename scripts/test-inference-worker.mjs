@@ -113,7 +113,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'));
   const keys = [...registry.slice(0, registry.indexOf('\n    };')).matchAll(/^      '([^']+)': \{/gm)].map((m) => m[1]);
   assert.deepEqual([...options].sort(), [...keys].sort(), 'picker options and MODELS registry keys must match');
-  assert.equal(options.length, 21);   // 2026-10-22: GLM-4.7-Flash via anyformer in; earlier the same day Flint 40B-A2.5B and Qwen3 4B + FlashMap in (2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out)
+  assert.equal(options.length, 22);   // 2026-10-23: Ling 3.0 Flash via anyformer in; 2026-10-22: GLM-4.7-Flash via anyformer in; earlier the same day Flint 40B-A2.5B and Qwen3 4B + FlashMap in (2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out)
 }
 // window.localmind.load() sets the select before loading, so the composer's picker names the loaded model.
 assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ modelSelect\.value = key; \} catch \{\}\s*loadModel\(key\);/);
@@ -138,6 +138,8 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   // GLM-4.7-Flash through anyformer (anyformer_models.js, pinned tag) on the same worker: no LocalMind engine.
   assert.match(indexSource, /'glm-4\.7-flash-anyformer': \{\s*id: 'unsloth\/GLM-4\.7-Flash-GGUF',[^]*?backend: 'anyformer-glm47flash'/);
   assert.match(indexSource, /'anyformer-glm47flash': \{ engine: 'anyformer_models\.js', exportName: 'Glm47Flash'/);
+  assert.match(indexSource, /'ling-3-flash-anyformer': \{\s*id: 'inclusionAI\/Ling-3\.0-flash-GGUF',[^]*?backend: 'anyformer-ling3flash'/);
+  assert.match(indexSource, /'anyformer-ling3flash': \{ engine: 'anyformer_models\.js', exportName: 'Ling3Flash'/);
   assert.match(indexSource, /export const ANYFORMER_URL = 'https:\/\/cdn\.jsdelivr\.net\/gh\/NakliTechie\/anyformer\.js@v\d+\.\d+\.\d+\/index\.js';/);
   // Qwen3 4B + FlashMap speculative decoding (Qwen3Dense in qwen35_dense.js) on the same worker.
   assert.match(indexSource, /'qwen3-4b-flashmap': \{\s*id: 'Qwen\/Qwen3-4B-GGUF',[^]*?backend: 'qwen3dense'/);
