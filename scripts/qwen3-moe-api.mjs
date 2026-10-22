@@ -4,12 +4,12 @@
 import { Qwen3MoeSsd, removeIngest } from '../src/qwen3_moe_ssd.js';
 import { Qwen35MoeSsd, MiniCpmV47Ssd } from '../src/qwen35_moe_ssd.js';
 import { Gemma4MoeSsd } from '../src/gemma4_moe_ssd.js';
-import { Qwen35Dense } from '../src/qwen35_dense.js';
+import { Qwen35Dense, Qwen3Dense } from '../src/qwen35_dense.js';
 import { Lfm2MoeSsd } from '../src/lfm2_moe_ssd.js';
 import { HyV3MoeSsd } from '../src/hy_v3_moe_ssd.js';
 import { FlintMoeSsd } from '../src/flint_moe_ssd.js';
 
-const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd, qwen35dense: Qwen35Dense, lfm2moe: Lfm2MoeSsd, hyv3: HyV3MoeSsd, flint: FlintMoeSsd, minicpmv: MiniCpmV47Ssd };
+const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd, qwen35dense: Qwen35Dense, qwen3dense: Qwen3Dense, lfm2moe: Lfm2MoeSsd, hyv3: HyV3MoeSsd, flint: FlintMoeSsd, minicpmv: MiniCpmV47Ssd };
 
 export function makeApi(log = () => {}) {
   let m = null;
@@ -53,6 +53,10 @@ export function makeApi(log = () => {}) {
         let div = -1;
         for (let i = 0; i < n; i++) if (g.ids[i] !== r.gen[i]) { div = i; break; }
         if (div < 0 && n < r.gen.length && !endedAtBan) div = n;
+        // ignore_eos also drops the end-of-turn tokens from the reference's top-5, so its top-1 can be a token it would
+        // never have picked; when we end the turn there (a stop token the reference list lacks), the answer is over.
+        const stops = new Set(m.stopTokenIds || []);
+        if (div >= 0 && stops.has(g.ids[div]) && !r.top[div].some(([id]) => id === g.ids[div])) { n = div; endedAtBan = true; div = -1; }
         const row = { name: r.name, promptTokens: r.ids.length, n, endedAtBan, match: div < 0, firstDivergence: div, secs: (performance.now() - t0) / 1000 };
         // max |Δ logprob| over positions before divergence, for tokens in both top-5 lists
         // Max |Δ logprob| over shared top-5 tokens, and over the reference's top-1 token alone (tail

@@ -1,6 +1,9 @@
 /* qwen35_dense.js — dense Qwen3.5-family models (GGUF arch `qwen35`, e.g. Qwen3.8-27B) from an imatrix
  * IQ-mix GGUF, in a browser tab. First user: Underdog Saluki 27B 1.0 (ConwayResearch, Apache-2.0), one 7.9 GB
  * GGUF mixing eleven llama.cpp block types.
+ * Also plain dense Qwen3 (GGUF arch `qwen3`, Qwen3Dense below; first user Qwen3-4B Q8_0, the FlashMap target): every
+ * layer full attention with an ungated Q, q/k RMSNorm and NeoX RoPE over the whole head, `ffn_norm` before the MLP,
+ * and the output head tied to the token table (llama.cpp src/models/qwen3.cpp).
  *
  * The trunk is the one qwen35_moe_ssd.js runs (llama.cpp's qwen35 graph): 3 of every 4 layers are Gated DeltaNet,
  * every 4th is gated full attention with q/k RMSNorm and partial NeoX RoPE; this module reuses those kernels and
@@ -27,18 +30,21 @@ export const UNDERDOG_SALUKI_27B = {
   size: 7898369152,
 };
 const F32 = 0;
+const NO_SSM = { dConv: 0, dInner: 0, dState: 0, vHeads: 0, kHeads: 0 };   // qwen3: no DeltaNet layers
 
 export function configFromGguf(kv) {
   const a = kv['general.architecture'];
-  if (a !== 'qwen35') throw new Error(`Qwen35Dense needs a qwen35 GGUF, got ${a}`);
-  const g = (k) => kv[`${a}.${k}`];
+  if (a !== 'qwen35' && a !== 'qwen3') throw new Error(`Qwen35Dense needs a qwen35 or qwen3 GGUF, got ${a}`);
+  const g = (k) => kv[`${a}.${k}`], plain = a === 'qwen3';
   return {
     arch: a,
     layers: g('block_count') - (g('nextn_predict_layers') || 0), hidden: g('embedding_length'), ff: g('feed_forward_length'),
     heads: g('attention.head_count'), kvHeads: g('attention.head_count_kv'), headDim: g('attention.key_length'),
-    ropeDims: g('rope.dimension_count'), ropeTheta: g('rope.freq_base'), eps: g('attention.layer_norm_rms_epsilon'),
-    attnInterval: g('full_attention_interval') || 4, contextLength: g('context_length'),
-    ssm: { dConv: g('ssm.conv_kernel'), dInner: g('ssm.inner_size'), dState: g('ssm.state_size'), vHeads: g('ssm.time_step_rank'), kHeads: g('ssm.group_count') },
+    ropeDims: g('rope.dimension_count') || g('attention.key_length'), ropeTheta: g('rope.freq_base'), eps: g('attention.layer_norm_rms_epsilon'),
+    attnInterval: plain ? 1 : g('full_attention_interval') || 4, contextLength: g('context_length'),
+    // qwen35 attention has a sigmoid gate in the Q projection; qwen3's does not. The MLP's norm is named differently.
+    gatedQ: !plain, ffnNorm: plain ? 'ffn_norm.weight' : 'post_attention_norm.weight',
+    ssm: plain ? null : { dConv: g('ssm.conv_kernel'), dInner: g('ssm.inner_size'), dState: g('ssm.state_size'), vHeads: g('ssm.time_step_rank'), kHeads: g('ssm.group_count') },
     vocab: kv['tokenizer.ggml.tokens'].length,
     bos: kv['tokenizer.ggml.bos_token_id'], eos: kv['tokenizer.ggml.eos_token_id'],
   };
@@ -224,11 +230,12 @@ export class Qwen35Dense extends Qwen3MoeSsd {
   constructor(device, manifest, gguf, opts) {
     super(device, manifest, gguf, opts);
     const c = this.cfg;
-    if (c.ssm.dConv !== 4) throw new Error(`gdnConv assumes a 4-tap conv, got ${c.ssm.dConv}`);
-    if (c.ssm.dState !== 128 || c.ssm.dInner !== c.ssm.vHeads * c.ssm.dState) throw new Error('gdnStep assumes 128-wide heads');
+    if (c.ssm && c.ssm.dConv !== 4) throw new Error(`gdnConv assumes a 4-tap conv, got ${c.ssm.dConv}`);
+    if (c.ssm && (c.ssm.dState !== 128 || c.ssm.dInner !== c.ssm.vHeads * c.ssm.dState)) throw new Error('gdnStep assumes 128-wide heads');
     this.recurrent = Array.from({ length: c.layers }, (_, l) => (l + 1) % c.attnInterval !== 0);
     this.types = {};
     for (const [name, d] of Object.entries(manifest.dense.tensors)) this.types[name] = d.ggml === F32 ? null : QTYPE_BY_ID[d.ggml];
+    if (!this.types['output.weight']) this.types['output.weight'] = this.types['token_embd.weight'];   // tied head (qwen3)
     this.prefetch = false;
     // Prompt chunks of up to 256 tokens. Without flash attention the batched scores take heads × chunk × maxCtx
     // floats; then the chunk shrinks to keep them near 96 MB.
@@ -304,7 +311,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     let pending = [];
     const flush = async () => { await dev.queue.onSubmittedWorkDone(); for (const b of pending) { this.gpuBytes.dense -= b.size; b.destroy(); } pending = []; };
     for (const [name, t] of Object.entries(this.types)) {
-      if (!t || !PADDED.has(t)) continue;
+      if (!t || !PADDED.has(t) || !this.manifest.dense.tensors[name]) continue;   // the tied head's alias has no tensor
       const dims = this.manifest.dense.tensors[name].dims, rows = dims.reduce((a, b) => a * b, 1) / dims[0];
       const words = gpuRowBytes(t, dims[0]) * rows / 4, src = this.w[name].raw;
       const dst = this.buffer(words * 4, STORAGE | COPY_DST, 'dense');
@@ -327,7 +334,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
   }
 
   kvBytes() {
-    const c = this.cfg, s = c.ssm, convDim = 2 * s.kHeads * s.dState + s.dInner;
+    const c = this.cfg, s = c.ssm || NO_SSM, convDim = 2 * s.kHeads * s.dState + s.dInner;
     return this.recurrent.reduce((sum, r) => sum + (r ? 3 * convDim * 4 + s.vHeads * s.dState * s.dState * 4 : 2 * 2 * this.maxCtx * c.kvHeads * c.headDim), 0);
   }
 
@@ -345,7 +352,8 @@ export class Qwen35Dense extends Qwen3MoeSsd {
   }
 
   initBuffers() {
-    const c = this.cfg, s = c.ssm;
+    const c = this.cfg, s = c.ssm || NO_SSM;
+    if (!this.w['output.weight']) this.w['output.weight'] = this.w['token_embd.weight'];   // tied head (qwen3)
     const H = c.hidden, hd = c.headDim, QN = c.heads * hd, kvn = c.kvHeads * hd, F = c.ff;
     const keyDim = s.kHeads * s.dState, convDim = 2 * keyDim + s.dInner;
     if ((F * 4) % 256) throw new Error('gate/up halves must be 256-byte aligned');
@@ -373,7 +381,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     const U = (w) => this.uniform(w), eps = { f: c.eps };
     const u = {
       nH: U([H]), rmsH: U([H, eps]),
-      ropeQ: U([hd, 2 * hd, c.ropeDims, 1, eps]), ropeK: U([hd, hd, c.ropeDims, 0, eps]), kvn: U([kvn]),
+      ropeQ: U([hd, c.gatedQ ? 2 * hd : hd, c.ropeDims, c.gatedQ ? 1 : 0, eps]), ropeK: U([hd, hd, c.ropeDims, 0, eps]), kvn: U([kvn]),
       att: U([c.heads, c.kvHeads, hd, { f: 1 / Math.sqrt(hd) }]), attOut: U([c.heads, c.kvHeads, hd, 0]), gate: U([QN]),
       conv: U([convDim]), step: U([s.kHeads, s.dState, keyDim, 0, eps, { f: 1 / Math.sqrt(s.dState) }]), ng: U([s.dState, eps]),
       silu: U([F]), am: U([c.vocab]),
@@ -404,7 +412,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
         });
       } else {
         Object.assign(g, {
-          q: this.mv(n('attn_q.weight'), a.xn, a.qg, 2 * QN, H),
+          q: this.mv(n('attn_q.weight'), a.xn, a.qg, c.gatedQ ? 2 * QN : QN, H),
           k: this.mv(n('attn_k.weight'), a.xn, a.k, kvn, H),
           v: this.mv(n('attn_v.weight'), a.xn, a.v, kvn, H),
           ropeQ: this.bind('qkNormRopeP', [a.qg, raw(n('attn_q_norm.weight')), a.rope, a.q, a.gate, u.ropeQ]),
@@ -413,13 +421,13 @@ export class Qwen35Dense extends Qwen3MoeSsd {
           score: this.bind('attnScore', [a.q, this.kc[l], a.sc, this.tok, u.att]),
           soft: this.bind('softmax', [a.sc, this.tok]),
           attOut: this.bind('attnOut', [a.sc, this.vc[l], a.att, this.tok, u.attOut]),
-          gate: this.bind('sigmoidMul', [a.att, a.gate, u.gate]),
+          gate: c.gatedQ ? this.bind('sigmoidMul', [a.att, a.gate, u.gate]) : null,
           o: this.mv(n('attn_output.weight'), a.att, a.o, H, QN),
         });
       }
       Object.assign(g, {
         addO: this.bind('addInPlace', [a.x, a.o, u.nH]),
-        rmsF: this.bind('rmsnorm', [a.x, raw(n('post_attention_norm.weight')), a.xn, u.rmsH]),
+        rmsF: this.bind('rmsnorm', [a.x, raw(n(c.ffnNorm)), a.xn, u.rmsH]),
         up: this.mv(n('ffn_up.weight'), a.xn, half(1), F, H),
         gt: this.mv(n('ffn_gate.weight'), a.xn, half(0), F, H),
         silu: this.bind('siluMul', [a.gu, a.act, u.silu]),
@@ -434,7 +442,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
   // ── one token ─────────────────────────────────────────────────────────────
   run(pass, op) { this.dispatch(pass, op.k, op.g, op.wg); }
   encodeLayer(pass, l, seqLen) {
-    const c = this.cfg, s = c.ssm, g = this.layers[l], d = (nm, gr, x) => this.dispatch(pass, nm, gr, x);
+    const c = this.cfg, s = c.ssm || NO_SSM, g = this.layers[l], d = (nm, gr, x) => this.dispatch(pass, nm, gr, x);
     const H = c.hidden, QN = c.heads * c.headDim, kvn = c.kvHeads * c.headDim, convDim = 2 * s.kHeads * s.dState + s.dInner;
     d('rmsnorm', g.rmsA, 1);
     if (g.recur) {
@@ -450,7 +458,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
       d('attnScore', g.score, Math.ceil(c.heads * seqLen / 256));
       d('softmax', g.soft, c.heads);
       d('attnOut', g.attOut, Math.ceil(QN / 256));
-      d('sigmoidMul', g.gate, Math.ceil(QN / 256));
+      if (g.gate) d('sigmoidMul', g.gate, Math.ceil(QN / 256));
       this.run(pass, g.o);
     }
     d('addInPlace', g.addO, Math.ceil(H / 256));
@@ -508,7 +516,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
 
   // ── batched prefill: chunks of T prompt tokens, token-major ───────────────
   initBatch() {
-    const c = this.cfg, s = c.ssm, B = this.chunkTokens, a = this.a;
+    const c = this.cfg, s = c.ssm || NO_SSM, B = this.chunkTokens, a = this.a;
     const H = c.hidden, hd = c.headDim, QN = c.heads * hd, kvn = c.kvHeads * hd, F = c.ff;
     const keyDim = s.kHeads * s.dState, convDim = 2 * keyDim + s.dInner;
     const A = (n) => this.buffer(n * 4, STORAGE | COPY_SRC | COPY_DST, 'batch');
@@ -521,7 +529,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     const U = (w) => this.uniform(w), eps = { f: c.eps }, qb = this.qb, W = this.w;
     const u = {
       nH: U([H]), rmsH: U([H, eps]),
-      ropeQ: U([hd, 2 * hd, 2 * QN, QN, c.ropeDims, 1, eps]), ropeK: U([hd, hd, kvn, kvn, c.ropeDims, 0, eps]), kvn: U([kvn]),
+      ropeQ: U(c.gatedQ ? [hd, 2 * hd, 2 * QN, QN, c.ropeDims, 1, eps] : [hd, hd, QN, QN, c.ropeDims, 0, eps]), ropeK: U([hd, hd, kvn, kvn, c.ropeDims, 0, eps]), kvn: U([kvn]),
       att: U([c.heads, c.kvHeads, hd, { f: 1 / Math.sqrt(hd) }]), attOut: U([c.heads, c.kvHeads, hd, 0]), gate: U([QN]),
       conv: U([convDim]), step: U([s.kHeads, s.dState, keyDim, convDim, s.vHeads, 0, eps, { f: 1 / Math.sqrt(s.dState) }]),
       ng: U([s.dState, s.dInner, eps]), ff: U([F]),
@@ -541,7 +549,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
         });
       } else {
         Object.assign(g, {
-          q: this.mm(n('attn_q.weight'), b.xn, b.qg, 2 * QN, H), k: this.mm(n('attn_k.weight'), b.xn, b.k, kvn, H), v: this.mm(n('attn_v.weight'), b.xn, b.v, kvn, H),
+          q: this.mm(n('attn_q.weight'), b.xn, b.qg, c.gatedQ ? 2 * QN : QN, H), k: this.mm(n('attn_k.weight'), b.xn, b.k, kvn, H), v: this.mm(n('attn_v.weight'), b.xn, b.v, kvn, H),
           ropeQ: this.bind('qkNormRopePB', [b.qg, raw(n('attn_q_norm.weight')), b.rope, b.q, b.gate, u.ropeQ]),
           ropeK: this.bind('qkNormRopePB', [b.k, raw(n('attn_k_norm.weight')), b.rope, b.kr, b.dummy, u.ropeK]),
           kv: this.bind('kvStoreB', [b.kr, b.v, this.kc[l], this.vc[l], u.kvn, qb]),
@@ -550,13 +558,13 @@ export class Qwen35Dense extends Qwen3MoeSsd {
             soft: this.bind('softmaxB', [b.sc, qb]),
             attOut: this.bind('attnOutB', [b.sc, this.vc[l], b.att, u.attOut, qb]),
           }),
-          gate: this.bind('sigmoidMulB', [b.att, b.gate, u.gate, qb]),
+          gate: c.gatedQ ? this.bind('sigmoidMulB', [b.att, b.gate, u.gate, qb]) : null,
           o: this.mm(n('attn_output.weight'), b.att, b.o, H, QN),
         });
       }
       Object.assign(g, {
         addO: this.bind('addInPlaceB', [b.x, b.o, u.nH, qb]),
-        rmsF: this.bind('rmsnormB', [b.x, raw(n('post_attention_norm.weight')), b.xn, u.rmsH]),
+        rmsF: this.bind('rmsnormB', [b.x, raw(n(c.ffnNorm)), b.xn, u.rmsH]),
         gt: this.mm(n('ffn_gate.weight'), b.xn, b.g, F, H), up: this.mm(n('ffn_up.weight'), b.xn, b.u, F, H),
         silu: this.bind('siluMul2B', [b.g, b.u, b.act, u.ff, qb]),
         down: this.mm(n('ffn_down.weight'), b.act, b.o, H, F),
@@ -567,7 +575,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
   }
 
   encodeLayerB(pass, l, T, S) {
-    const c = this.cfg, s = c.ssm, g = this.layers[l].B, d = (nm, gr, x, y) => this.dispatch(pass, nm, gr, x, y);
+    const c = this.cfg, s = c.ssm || NO_SSM, g = this.layers[l].B, d = (nm, gr, x, y) => this.dispatch(pass, nm, gr, x, y);
     const H = c.hidden, QN = c.heads * c.headDim, kvn = c.kvHeads * c.headDim, convDim = 2 * s.kHeads * s.dState + s.dInner;
     const tt = Math.ceil(T / (this.matrixKernels ? MM_SG_TOKENS : MM_TILE)), mm = (op) => this.dispatch(pass, op.k, op.g, op.wg, tt);
     d('rmsnormB', g.rmsA, T);
@@ -583,7 +591,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
       d('kvStoreB', g.kv, Math.ceil(kvn / 256), T);
       if (g.flash) d('flashAttnB', g.flash, c.kvHeads, Math.ceil(T / 4));
       else { d('attnScoreB', g.score, Math.ceil(c.heads * T * S / 256)); d('softmaxB', g.soft, c.heads * T); d('attnOutB', g.attOut, Math.ceil(QN / 256), T); }
-      d('sigmoidMulB', g.gate, Math.ceil(QN / 256), T);
+      if (g.gate) d('sigmoidMulB', g.gate, Math.ceil(QN / 256), T);
       mm(g.o);
     }
     d('addInPlaceB', g.addO, Math.ceil(H / 256), T);
@@ -679,6 +687,23 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     return { tokens: c.tokens, tokPerSec: c.tokens / (c.wallMs / 1000), msPerToken: c.wallMs / n, gpuWaitMsPerToken: c.gpuWaitMs / n, gpuBytes: { ...this.gpuBytes } };
   }
   async dispose() { await this.retire(); try { this.device.destroy(); } catch (_) {} }
+}
+
+// Plain dense Qwen3 (arch qwen3) on the same engine. Without a url it loads Qwen's own Q8_0 GGUF of Qwen3-4B, the
+// target of the FlashMap drafter j-shen/FlashMap-Qwen3-4B (Q8_0 chosen by Chirag 2026-10-22 as closest to the bf16
+// model the drafter was trained on).
+export const QWEN3_4B_Q8 = {
+  repo: 'Qwen/Qwen3-4B-GGUF',
+  file: 'Qwen3-4B-Q8_0.gguf',
+  revision: 'bc640142c66e1fdd12af0bd68f40445458f3869b',
+  sha256: '8c2f07f26af9747e41988551106f149b03eb9b5cb6df636027b6bf6278473300',
+  size: 4280404704,
+};
+export class Qwen3Dense extends Qwen35Dense {
+  static async load(modelId = null, opts = {}) {
+    const source = opts.source || (opts.url ? { repo: null, file: opts.url.split('/').pop(), revision: null } : QWEN3_4B_Q8);
+    return super.load(modelId, { ...opts, source });
+  }
 }
 
 // For kernel tests (scripts/test-qwen35-dense-kernels.mjs).
