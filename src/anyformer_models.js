@@ -7,13 +7,13 @@
  * { text }, reset(), dispose(), and the think markers. One subclass per model names its repo.
  *
  * anyformer loads from jsDelivr by GitHub tag until it is on npm. Through diskformer's llama.cpp path reasoning is off
- * unless generate() passes { thinking: true } (anyformer v0.2.1), and the reply is text only (no token ids). With
+ * unless generate() passes { thinking: true } (anyformer v0.2.1+), and the reply is text only (no token ids). With
  * reasoning on, the reply opens inside the thought; the class drops the literal <think> and </think> from the text
  * and marks the boundary with a chunk whose token is THINK_CLOSE (the worker's close event).
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.2.1/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.2.2/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts: a download as 'weights', planning as 'init'.
 function toEngineProgress(e) {
@@ -25,12 +25,13 @@ function toEngineProgress(e) {
 
 export class AnyformerModel {
   static repo = null;
+  static file = undefined;   // a GGUF in the repo; undefined lets anyformer pick (the file diskformer checked)
   static budget = 4e9;   // GPU bytes; the llama.cpp path plans its expert slots from it
 
   static async load(_id, opts = {}) {
     const { load } = await import(ANYFORMER_URL);
     const session = await load(this.repo, {
-      budget: opts.budget || this.budget, maxCtx: opts.maxCtx, signal: opts.signal,
+      budget: opts.budget || this.budget, maxCtx: opts.maxCtx, signal: opts.signal, ...(this.file ? { file: this.file } : {}),
       onProgress: (e) => { const ev = toEngineProgress(e); if (ev && opts.onProgress) opts.onProgress(ev); },
     });
     return new this(session);
@@ -61,8 +62,10 @@ export class AnyformerModel {
   async dispose() { await this.session.dispose(); }
 }
 
-// Z.ai's GLM-4.7-Flash (deepseek2 architecture, 30B-A3B): unsloth's GGUF; anyformer's diskformer-llama back end
-// picks the Q4_K_M file (18.3 GB). diskformer checked the architecture on this model (docs/coverage.md, Q3_K_M).
+// Z.ai's GLM-4.7-Flash (deepseek2 architecture, 30B-A3B): unsloth's Q4_K_M GGUF (18.3 GB), live-checked in LocalMind
+// 2026-10-23 (plan/2026-10-23-glm-anyformer). diskformer gated the architecture on this model's Q3_K_M (14.6 GB, 8/9),
+// which anyformer would pick by default; Q4_K_M keeps the higher-precision file.
 export class Glm47Flash extends AnyformerModel {
   static repo = 'unsloth/GLM-4.7-Flash-GGUF';
+  static file = 'GLM-4.7-Flash-Q4_K_M.gguf';
 }
