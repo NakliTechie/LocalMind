@@ -15,11 +15,15 @@ const THINK_CLOSE = -2;
 
 export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.2.4/index.js';
 
-// anyformer's progress events → the engine events the SSD worker posts: a download as 'weights', planning as 'init'.
+// anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
+// into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
+// bytes while it ingests and with kind 'tensors' while it uploads, and 'init'. Every byte event must reach the worker:
+// the page's load watchdog ends a load that reports no progress for 3 minutes (the Ling production check, 2026-10-23).
 function toEngineProgress(e) {
   if (!e) return null;
   if (e.status === 'download') return { status: 'weights', loaded: e.loaded, total: e.total };
-  if (e.status === 'load' || e.status === 'plan') return { status: 'init' };
+  if (e.status === 'weights') return { status: 'weights', kind: e.kind, loaded: e.loaded, total: e.total };
+  if (e.status === 'load' || e.status === 'plan' || e.status === 'init') return { status: 'init' };
   return null;
 }
 
