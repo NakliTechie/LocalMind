@@ -9351,10 +9351,12 @@ self.addEventListener('message', async (e) => {
       // MLP, routers and KV stay on the GPU (~1.6 GB + a 4 GB expert pool); the 3,840 routed experts (3.3 MB
       // each) stream from OPFS. Experimental: rung 2c of the SSD-streaming ladder, ~23 tok/s decode and ~55 tok/s
       // chunked prefill on an M4 Pro. Greedy output matches llama.cpp Metal 8/8 on the full model.
+      // Since 2026-10-23 loaded through anyformer (backend 'anyformer-gemma26b': Gemma4_26B in anyformer_models.js),
+      // which runs diskformer's copy of the same engine; the store under localmind-ssd/ is reused.
       'gemma4-26b-a4b-ssd': {
         id: 'google/gemma-4-26B-A4B-it-qat-q4_0-gguf',
         label: 'Gemma 4 26B-A4B · SSD-streamed (experimental)',
-        backend: 'gemma4moe-ssd',
+        backend: 'anyformer-gemma26b',
         size: '~14 GB',
         gguf: { file: 'gemma-4-26B_q4_0-it.gguf', size: 14439363584 },   // GEMMA4_26B_A4B in gemma4_moe_ssd.js
         type: 'causal',
@@ -17779,6 +17781,7 @@ self.addEventListener('message', async (e) => {
         'gemma4moe-ssd': { engine: 'gemma4_moe_ssd.js', exportName: 'Gemma4MoeSsd', label: 'Gemma 4 26B-A4B (Q4_0)' },
         'lfm2moe-ssd': { engine: 'lfm2_moe_ssd.js', exportName: 'Lfm2MoeSsd', label: 'LFM2.5 24B-A2B (Q4_0)' },
         'flint-ssd': { engine: 'flint_moe_ssd.js', exportName: 'FlintMoeSsd', label: 'Flint 40B-A2.5B (Q4_1)' },
+        'anyformer-gemma26b': { engine: 'anyformer_models.js', exportName: 'Gemma4_26B', label: 'Gemma 4 26B-A4B (Q4_0, via anyformer)' },
         'anyformer-qwen36': { engine: 'anyformer_models.js', exportName: 'Qwen36', label: 'Qwen3.6 35B-A3B (Q8_0, via anyformer)' },
         'anyformer-ling3flash': { engine: 'anyformer_models.js', exportName: 'Ling3Flash', label: 'Ling 3.0 Flash (Q4_K_M, via anyformer)' },
         'anyformer-glm47flash': { engine: 'anyformer_models.js', exportName: 'Glm47Flash', label: 'GLM-4.7-Flash (Q4_K_M, via anyformer)' },
@@ -19398,7 +19401,7 @@ self.addEventListener('message', async (e) => {
     const ENGINE_STORES = {
       'transformers': ['transformers-cache'], 'wllama': ['wllama'], 'lfm2-webgpu': ['gguf-v1'],
       'bonsai2-webgpu': ['gguf-cache-v1'], 'gemma4-webgpu': ['safetensors-cache-v1', 'bonsai-pipeline-v1'],
-      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
+      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'anyformer-gemma26b': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
     };
     function parseSizeBytes(size) {
       const m = /([\d.]+)\s*(GB|MB)/i.exec(String(size || ''));
@@ -24122,6 +24125,15 @@ export class Ling3Flash extends AnyformerModel {
 export class Qwen36 extends AnyformerModel {
   static repo = 'unsloth/Qwen3.6-35B-A3B-GGUF';
   static budget = 9e9;
+  static poolBytes = 4 * 2 ** 30;
+}
+
+// Gemma 4 26B-A4B: Google's QAT Q4_0 GGUF (14.4 GB) on diskformer's Gemma4MoeSsd hand engine, which LocalMind ran
+// itself until 2026-10-23; the stored copy is reused. Its thought channel (<|channel>thought … <channel|>) comes
+// through session.think (preamble 'thought\n'). A 4 GiB expert cache as before.
+export class Gemma4_26B extends AnyformerModel {
+  static repo = 'google/gemma-4-26B-A4B-it-qat-q4_0-gguf';
+  static budget = 7.5e9;
   static poolBytes = 4 * 2 ** 30;
 }
 </script>
