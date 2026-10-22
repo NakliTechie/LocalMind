@@ -106,3 +106,12 @@ export class Qwen36 extends AnyformerModel {
   static budget = 9e9;
   static poolBytes = 4 * 2 ** 30;
 }
+
+// Gemma 4 26B-A4B: Google's QAT Q4_0 GGUF (14.4 GB) on diskformer's Gemma4MoeSsd hand engine, which LocalMind ran
+// itself until 2026-10-23; the stored copy is reused. Its thought channel (<|channel>thought … <channel|>) comes
+// through session.think (preamble 'thought\n'). A 4 GiB expert cache as before.
+export class Gemma4_26B extends AnyformerModel {
+  static repo = 'google/gemma-4-26B-A4B-it-qat-q4_0-gguf';
+  static budget = 7.5e9;
+  static poolBytes = 4 * 2 ** 30;
+}

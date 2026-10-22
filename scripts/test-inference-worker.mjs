@@ -120,7 +120,9 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
 // SSD-streamed MoE engines (rungs 2b, 2c): one worker source (#moeSsdWorkerSrc) serves both; the factory
 // injects the engine file, its export and its display name. The source must parse once filled in.
 {
-  assert.match(indexSource, /'gemma4-26b-a4b-ssd': \{\s*id: 'google\/gemma-4-26B-A4B-it-qat-q4_0-gguf',[^]*?backend: 'gemma4moe-ssd'/);
+  // Since 2026-10-23 through anyformer (diskformer's copy of the same engine).
+  assert.match(indexSource, /'gemma4-26b-a4b-ssd': \{\s*id: 'google\/gemma-4-26B-A4B-it-qat-q4_0-gguf',[^]*?backend: 'anyformer-gemma26b'/);
+  assert.match(indexSource, /'anyformer-gemma26b': \{ engine: 'anyformer_models\.js', exportName: 'Gemma4_26B'/);
   // Since 2026-10-23 through anyformer (diskformer's copy of the same engine).
   assert.match(indexSource, /'qwen36-35b-a3b-ssd': \{\s*id: 'unsloth\/Qwen3\.6-35B-A3B-GGUF',[^]*?backend: 'anyformer-qwen36'/);
   assert.match(indexSource, /'anyformer-qwen36': \{ engine: 'anyformer_models\.js', exportName: 'Qwen36'/);
