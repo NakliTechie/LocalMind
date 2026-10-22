@@ -44,6 +44,17 @@ export function makeApi(log = () => {}) {
     // The drafter against drafter_ref.py's float32 reference: its features and anchor in, the 16 slots' DiT output and
     // their tokens out.
     async flashmapPeek(names) { return fm.peek(names); },
+    // The app's own path (generateTurn) on `messages`, with the drafter (Qwen3Dense speculative) and without (plain).
+    async flashmapTurn(messages, maxNewTokens = 256) {
+      const run = async (drafter) => {
+        m.drafter = drafter; const t0 = performance.now(); let last = null;
+        for await (const o of m.generateTurn(messages, { maxNewTokens, enableThinking: false })) last = o;
+        m.drafter = null;
+        return { text: last ? last.text : '', tokens: last ? last.tokens : 0, secs: +((performance.now() - t0) / 1000).toFixed(2) };
+      };
+      const plain = await run(null), spec = await run(fm);
+      return { same: plain.text === spec.text, plain, spec };
+    },
     async flashmapCheck(refBase) {
       const ref = await (await fetch(`${refBase}.json`, { cache: 'no-store' })).json();
       const feats = new Float32Array(await (await fetch(`${refBase}-features.f32`, { cache: 'no-store' })).arrayBuffer());
