@@ -121,7 +121,9 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
 // injects the engine file, its export and its display name. The source must parse once filled in.
 {
   assert.match(indexSource, /'gemma4-26b-a4b-ssd': \{\s*id: 'google\/gemma-4-26B-A4B-it-qat-q4_0-gguf',[^]*?backend: 'gemma4moe-ssd'/);
-  assert.match(indexSource, /'qwen36-35b-a3b-ssd': \{\s*id: 'unsloth\/Qwen3\.6-35B-A3B-GGUF',[^]*?backend: 'qwen35moe-ssd'/);
+  // Since 2026-10-23 through anyformer (diskformer's copy of the same engine).
+  assert.match(indexSource, /'qwen36-35b-a3b-ssd': \{\s*id: 'unsloth\/Qwen3\.6-35B-A3B-GGUF',[^]*?backend: 'anyformer-qwen36'/);
+  assert.match(indexSource, /'anyformer-qwen36': \{ engine: 'anyformer_models\.js', exportName: 'Qwen36'/);
   assert.match(indexSource, /'gemma4moe-ssd': \{ engine: 'gemma4_moe_ssd\.js', exportName: 'Gemma4MoeSsd'/);
   assert.match(indexSource, /'qwen35moe-ssd': \{ engine: 'qwen35_moe_ssd\.js', exportName: 'Qwen35MoeSsd'/);
   assert.match(indexSource, /'minicpm-v47-35b-a3b-ssd': \{\s*id: 'openbmb\/MiniCPM-V-4\.7-35B-A3B-gguf',[^]*?backend: 'minicpmv-ssd'/);
