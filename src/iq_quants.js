@@ -287,6 +287,51 @@ var<workgroup> red: array<f32, ${MV_ROWS * 64}>;
 }`;
 }
 
+// A few tokens at once (a speculative verify block): y[t·M + m] = Σ_k x[t·N + k]·W[m][k] for T ≤ MVT_TOKENS, each
+// weight read and dequantized once. One row per lane (64 rows per workgroup) with one sum per token; per 256-wide k
+// block the T activation rows go through shared memory, where every lane reads the same addresses (a broadcast).
+// N must be a multiple of 256. Dispatch (ceil(M / MVT_ROWS)).
+export const MVT_TOKENS = 17, MVT_ROWS = 64;
+export function mvTKernel(type) {
+  return `
+struct P { M: u32, N: u32, rowBytes: u32, pad: u32 }
+struct Q { T: u32, pos0: u32, S: u32, pad: u32 }
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read> wq: array<u32>;
+@group(0) @binding(2) var<storage, read> grid: array<u32>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+@group(0) @binding(5) var<uniform> qd: Q;
+${deqFn(type)}
+const TT = ${MVT_TOKENS}u;
+var<workgroup> xs: array<vec4<f32>, ${MVT_TOKENS * 64}>;   // [token][k / 4] for one 256-wide k block
+@compute @workgroup_size(64) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  _ = grid[0];
+  let t = l.x; let row = (wg.y * ng.x + wg.x) * ${MVT_ROWS}u + t; let rr = min(row, p.M - 1u); let T = min(qd.T, TT);
+  var acc: array<f32, ${MVT_TOKENS}>;
+  for (var kb = 0u; kb < p.N; kb += 256u) {
+    workgroupBarrier();
+    for (var i = t; i < TT * 64u; i += 64u) {
+      let tk = i / 64u; let o = tk * p.N + kb + (i % 64u) * 4u;
+      xs[i] = select(vec4<f32>(0.0), vec4<f32>(x[o], x[o + 1u], x[o + 2u], x[o + 3u]), tk < T);
+    }
+    workgroupBarrier();
+    for (var c = 0u; c < 8u; c++) {
+      let cc = kb / 32u + c;
+      let B = rr * p.rowBytes + (cc / ${CPB(type)}u) * ${gpuBlock(type)}u; let s = cc % ${CPB(type)}u;
+      for (var g = 0u; g < 4u; g++) {
+        let v = deq8(B, s, g);
+        let w0 = vec4<f32>(v[0], v[1], v[2], v[3]); let w1 = vec4<f32>(v[4], v[5], v[6], v[7]);
+        let xi = c * 8u + g * 2u;
+        // A constant trip count, so the sums stay in registers (a runtime bound spilled them: ~15 ms per token).
+        for (var tk = 0u; tk < TT; tk++) { acc[tk] += dot(w0, xs[tk * 64u + xi]) + dot(w1, xs[tk * 64u + xi + 1u]); }
+      }
+    }
+  }
+  if (row < p.M) { for (var tk = 0u; tk < TT; tk++) { if (tk < T) { y[tk * p.M + row] = acc[tk]; } } }
+}`;
+}
+
 // Token-major batch: y[t·M + m] = Σ_k x[t·N + k]·W[m][k]. A 256-thread workgroup computes a 64-row × 64-token tile.
 // Per 32-wide k chunk every thread dequantizes 8 weights (64 rows × 4 groups) and loads 8 activations into shared
 // memory (k-major f32 tiles, 16 KB in all), then accumulates a 4-row × 4-token block: each weight read from

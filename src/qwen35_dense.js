@@ -20,7 +20,7 @@
 
 import { Qwen3MoeSsd, STORAGE, COPY_SRC, COPY_DST, MAP_READ, UNIFORM } from './qwen3_moe_ssd.js';
 import { QWEN35_KERNELS, QWEN35_BATCH_KERNELS } from './qwen35_moe_ssd.js';
-import { QTYPE_BY_ID, rowBytes, gpuRowBytes, PADDED, MV_ROWS, MM_TILE, MM_SG_TOKENS, gridData, repackKernel, mvKernel, mmKernel, mmSgKernel, embedKernel, embedBKernel } from './iq_quants.js';
+import { QTYPE_BY_ID, rowBytes, gpuRowBytes, PADDED, MV_ROWS, MM_TILE, MM_SG_TOKENS, MVT_TOKENS, MVT_ROWS, gridData, repackKernel, mvKernel, mmKernel, mmSgKernel, mvTKernel, embedKernel, embedBKernel } from './iq_quants.js';
 
 export const UNDERDOG_SALUKI_27B = {
   repo: 'ConwayResearch/Underdog-Saluki-27B-1.0',
@@ -95,7 +95,41 @@ struct P { F: u32 }
   let i = gi.x; if (i >= p.F) { return; }
   let g = gu[i]; act[i] = (g / (1.0 + exp(-g))) * gu[p.F + i];
 }`,
+  // Speculative decoding support (opts.captureLayers): a layer's T output rows into columns [off, off + H) of the
+  // feature rows (width W) a drafter reads. Dispatch (ceil(H / 256), T).
+  copyCols: `
+struct P { H: u32, W: u32, off: u32, pad: u32 }
+struct Q { T: u32, pos0: u32, S: u32, pad: u32 }
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read_write> f: array<f32>;
+@group(0) @binding(2) var<uniform> p: P;
+@group(0) @binding(3) var<uniform> qd: Q;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let i = g.x; let t = g.y; if (i >= p.H || t >= qd.T) { return; }
+  f[t * p.W + p.off + i] = x[t * p.H + i];
+}`,
+  // The argmax of each of T rows of n logits (lowest index on ties). One workgroup per row.
+  argmaxRows: `
+struct P { n: u32 }
+@group(0) @binding(0) var<storage, read> l: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<u32>;
+@group(0) @binding(2) var<uniform> p: P;
+var<workgroup> bv: array<f32, 256>;
+var<workgroup> bi: array<u32, 256>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let r = wg.x; let t = lid.x; let base = r * p.n;
+  var v = -3.4e38; var ix = 0u;
+  for (var i = t; i < p.n; i += 256u) { let x = l[base + i]; if (x > v) { v = x; ix = i; } }
+  bv[t] = v; bi[t] = ix; workgroupBarrier();
+  for (var s = 128u; s > 0u; s >>= 1u) {
+    if (t < s) { let o = bv[t + s]; if (o > bv[t] || (o == bv[t] && bi[t + s] < bi[t])) { bv[t] = o; bi[t] = bi[t + s]; } }
+    workgroupBarrier();
+  }
+  if (t == 0u) { out[r] = bi[0]; }
+}`,
 };
+// Rows of logits a verify chunk can return at once (want = 'rows').
+const ROWS_MAX = 32;
 
 // Prefill kernels that replace qwen35_moe_ssd.js's batched DeltaNet step and attention (same bindings, same math):
 //   gdnStepR   — the gated delta rule over T tokens with each head's 128×128 state in registers (256 threads, 64
@@ -261,6 +295,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
       const embedType = this.types['token_embd.weight'];
       for (const t of new Set(Object.values(this.types).filter(Boolean))) {
         k[`mv_${t}`] = mvKernel(t); k[`mm_${t}`] = this.matrixKernels ? mmSgKernel(t) : mmKernel(t);
+        if (this.opts.captureLayers) k[`mvT_${t}`] = mvTKernel(t);   // verify blocks
         if (PADDED.has(t)) k[`repack_${t}`] = repackKernel(t);
       }
       k[`embed_${embedType}`] = embedKernel(embedType);
@@ -348,7 +383,10 @@ export class Qwen35Dense extends Qwen3MoeSsd {
   mm(name, x, y, M, N) {
     const t = this.types[name], w = this.w[name];
     const u = this.uniform([M, N, gpuRowBytes(t, N), 0]);
-    return { k: `mm_${t}`, g: this.bindR(`mm_${t}`, [x, w.raw, this.grid, y, u, this.qb]), wg: Math.ceil(M / MM_TILE) };
+    const op = { k: `mm_${t}`, g: this.bindR(`mm_${t}`, [x, w.raw, this.grid, y, u, this.qb]), wg: Math.ceil(M / MM_TILE) };
+    // Speculative verify blocks (T ≤ MVT_TOKENS) read each weight once instead: the same bindings, the matvec kernel.
+    if (this.kernels[`mvT_${t}`] && N % 256 === 0) op.small = { k: `mvT_${t}`, g: this.bindR(`mvT_${t}`, [x, w.raw, this.grid, y, u, this.qb]), wg: Math.ceil(M / MVT_ROWS) };
+    return op;
   }
 
   initBuffers() {
@@ -536,6 +574,20 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     };
     const raw = (name) => W[name].raw, et = this.types['token_embd.weight'];
     this.gB = { embed: this.bind(`embedB_${et}`, [W['token_embd.weight'].raw, this.grid, b.ids, b.x, U([H, gpuRowBytes(et, H)]), qb]) };
+    // Speculative decoding: the chosen layers' output rows, side by side (B × layers·H), for a drafter; and a head over
+    // up to ROWS_MAX rows with one argmax per row, for verifying a drafted block in one pass.
+    const cap = this.opts.captureLayers || [];
+    if (cap.length) {
+      this.featWidth = cap.length * H;
+      b.feat = A(B * this.featWidth);
+      this.capture = new Map(cap.map((L, j) => [L, this.bind('copyCols', [b.x, b.feat, U([H, this.featWidth, j * H, 0]), qb])]));
+      b.xnR = A(ROWS_MAX * H); b.logitsR = A(ROWS_MAX * c.vocab);
+      b.amR = this.buffer(ROWS_MAX * 4, STORAGE | COPY_SRC, 'batch');
+      this.rbRows = this.buffer(ROWS_MAX * 4, MAP_READ | COPY_DST, 'batch');
+      this.gB.rmsOutR = this.bind('rmsnormB', [b.x, raw('output_norm.weight'), b.xnR, u.rmsH]);
+      this.gB.lmR = this.mm('output.weight', b.xnR, b.logitsR, c.vocab, H);
+      this.gB.amR = this.bind('argmaxRows', [b.logitsR, b.amR, U([c.vocab])]);
+    }
     for (let l = 0; l < c.layers; l++) {
       const n = (t) => `blk.${l}.${t}`, g = { rmsA: this.bind('rmsnormB', [b.x, raw(n('attn_norm.weight')), b.xn, u.rmsH]) };
       if (this.recurrent[l]) {
@@ -577,7 +629,8 @@ export class Qwen35Dense extends Qwen3MoeSsd {
   encodeLayerB(pass, l, T, S) {
     const c = this.cfg, s = c.ssm || NO_SSM, g = this.layers[l].B, d = (nm, gr, x, y) => this.dispatch(pass, nm, gr, x, y);
     const H = c.hidden, QN = c.heads * c.headDim, kvn = c.kvHeads * c.headDim, convDim = 2 * s.kHeads * s.dState + s.dInner;
-    const tt = Math.ceil(T / (this.matrixKernels ? MM_SG_TOKENS : MM_TILE)), mm = (op) => this.dispatch(pass, op.k, op.g, op.wg, tt);
+    const tt = Math.ceil(T / (this.matrixKernels ? MM_SG_TOKENS : MM_TILE));
+    const mm = (op) => (op.small && T <= MVT_TOKENS ? this.dispatch(pass, op.small.k, op.small.g, op.small.wg) : this.dispatch(pass, op.k, op.g, op.wg, tt));
     d('rmsnormB', g.rmsA, T);
     if (this.recurrent[l]) {
       mm(g.qkv); mm(g.z); mm(g.beta); mm(g.alpha);
@@ -600,9 +653,12 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     d('siluMul2B', g.silu, Math.ceil(c.ff / 256), T);
     mm(g.down);
     d('addInPlaceB', g.addD, Math.ceil(H / 256), T);
+    const cap = this.capture && this.capture.get(l);
+    if (cap) d('copyCols', cap, Math.ceil(H / 256), T);
   }
 
-  // T = ids.length tokens at this.position through every layer in one submit; want applies to the last token.
+  // T = ids.length tokens at this.position through every layer in one submit; want applies to the last token, except
+  // 'rows' (opts.captureLayers set, T ≤ ROWS_MAX): the argmax of every row, a Uint32Array of T.
   async prefillChunk(ids, want = 'none') {
     const c = this.cfg, dev = this.device, H = c.hidden, T = ids.length, pos0 = this.position, S = pos0 + T;
     if (T > this.chunkTokens) throw new Error(`chunk of ${T} > ${this.chunkTokens}`);
@@ -620,9 +676,18 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     let pass = enc.beginComputePass();
     this.dispatch(pass, `embedB_${this.types['token_embd.weight']}`, this.gB.embed, Math.ceil(H / 8 / 256), T);
     for (let l = 0; l < c.layers; l++) this.encodeLayerB(pass, l, T, S);
+    if (want === 'rows') {
+      if (!this.capture || T > ROWS_MAX) throw new Error(`rows: needs captureLayers and at most ${ROWS_MAX} tokens`);
+      const tt = Math.ceil(T / (this.matrixKernels ? MM_SG_TOKENS : MM_TILE)), lm = this.gB.lmR;
+      this.dispatch(pass, 'rmsnormB', this.gB.rmsOutR, T);
+      if (lm.small && T <= MVT_TOKENS) this.dispatch(pass, lm.small.k, lm.small.g, lm.small.wg);
+      else this.dispatch(pass, lm.k, lm.g, lm.wg, tt);
+      this.dispatch(pass, 'argmaxRows', this.gB.amR, T);
+    }
     pass.end();
     enc.copyBufferToBuffer(this.b.x, (T - 1) * H * 4, this.a.x, 0, H * 4);
-    if (want !== 'none') {
+    if (want === 'rows') enc.copyBufferToBuffer(this.b.amR, 0, this.rbRows, 0, T * 4);
+    else if (want !== 'none') {
       pass = enc.beginComputePass();
       this.encodeHead(pass, want);
       pass.end();
@@ -632,10 +697,24 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     dev.queue.submit([enc.finish()]);
     this.position += T;
     this.cached.push(...ids);
-    const result = await this.readResult(want);
+    let result;
+    if (want === 'rows') {
+      const tw = performance.now();
+      await this.rbRows.mapAsync(1, 0, T * 4);
+      result = new Uint32Array(this.rbRows.getMappedRange(0, T * 4).slice(0));
+      this.rbRows.unmap();
+      this.counters.gpuWaitMs += performance.now() - tw;
+    } else result = await this.readResult(want);
     this.counters.tokens += T;
     this.counters.wallMs += performance.now() - tStart;
     return result;
+  }
+
+  // Back to `pos` tokens (a verify pass that kept only part of its block). Attention layers only: their KV past pos is
+  // overwritten by the next tokens; DeltaNet state cannot rewind.
+  rewind(pos) {
+    if (this.recurrent.some(Boolean)) throw new Error('rewind: this model has recurrent layers');
+    this.position = pos; this.cached.length = pos;
   }
 
   // The recurrent state cannot rewind, so any change before the cached end restarts from token 0.
