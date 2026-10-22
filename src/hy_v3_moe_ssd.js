@@ -77,7 +77,7 @@ const HY_SPLITS = [
   /[一-龥぀-ゟ゠-ヿ]+/gu,
   /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~][A-Za-z]+|[^\r\n\p{L}\p{P}\p{S}]?[\p{L}\p{M}]+| ?[\p{P}\p{S}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+/gu,
 ];
-function isolate(pieces, re) {
+export function isolate(pieces, re) {
   const out = [];
   for (const s of pieces) {
     let last = 0;

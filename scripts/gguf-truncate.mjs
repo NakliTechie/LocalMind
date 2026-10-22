@@ -1,8 +1,9 @@
 // Cut a valid N-layer GGUF from the front of a larger one (or from a partial download): the
 // KV section is copied verbatim with `<arch>.block_count` patched to N, the tensor table keeps
 // only blk.0..blk.N-1 plus the non-block tensors, and the data section is copied as a prefix.
-// Works only when the kept tensors form a prefix of the data section (true for the official
-// Qwen3-MoE GGUFs: output, output_norm, token_embd, then blk.0, blk.1, …).
+// Kept tensors that are a prefix of the data section are copied as one prefix (the official Qwen3-MoE GGUFs: output,
+// output_norm, token_embd, then blk.0, blk.1, …); otherwise (Flint: the blocks first, the head tables last) each kept
+// tensor is copied to a new, aligned offset.
 //
 //   node scripts/gguf-truncate.mjs <in.gguf> <out.gguf> <layers>
 //
@@ -60,15 +61,22 @@ const byteSize = (t) => {
   const n = t.dims.reduce((a, b) => a * b, 1);
   // ggml block sizes: F32, F16, Q4_0 (32 values in 18 bytes), Q8_0 (32 in 34), Q6_K (256 in 210)
   if (t.type === 0) return n * 4; if (t.type === 1) return n * 2;
-  if (t.type === 2) return n / 32 * 18; if (t.type === 8) return n / 32 * 34; if (t.type === 14) return n / 256 * 210;
+  if (t.type === 2) return n / 32 * 18; if (t.type === 3) return n / 32 * 20; if (t.type === 8) return n / 32 * 34; if (t.type === 14) return n / 256 * 210;
   throw new Error(`type ${t.type}`);
 };
-const dataEnd = Math.max(...keep.map((t) => t.offset + byteSize(t)));
+let dataEnd = Math.max(...keep.map((t) => t.offset + byteSize(t)));
 const dropped = tensors.filter((t) => !keep.includes(t));
-if (dropped.some((t) => t.offset < dataEnd)) throw new Error('kept tensors are not a prefix of the data section');
+const prefix = !dropped.some((t) => t.offset < dataEnd);
+// Not a prefix: each kept tensor moves to the next aligned offset, in file order; `src` remembers where it was.
+if (!prefix) {
+  let o = 0;
+  for (const t of [...keep].sort((a, b) => a.offset - b.offset)) { t.src = t.offset; t.offset = o; o = Math.ceil((o + byteSize(t)) / align) * align; }
+  dataEnd = Math.max(...keep.map((t) => t.offset + byteSize(t)));
+}
 
 const st = fstatSync(fd);
-if (dataStart + dataEnd > st.size) throw new Error(`input has ${st.size} bytes; need ${dataStart + dataEnd}`);
+const need = prefix ? dataStart + dataEnd : Math.max(...keep.map((t) => dataStart + t.src + byteSize(t)));
+if (need > st.size) throw new Error(`input has ${st.size} bytes; need ${need}`);
 
 // New header: fixed part + KV (block_count patched to N, and every per-layer array of the arch — one fixed-size
 // element per layer, e.g. Gemma 4's head_count_kv and sliding_window_pattern — trimmed to N) + filtered tensors.
@@ -105,10 +113,14 @@ header = Buffer.concat([header, Buffer.alloc(newDataStart - header.length)]);
 const out = openSync(outPath, 'w');
 writeSync(out, header, 0, header.length, 0);
 const buf = Buffer.alloc(64 << 20);
-for (let o = 0; o < dataEnd; o += buf.length) {
-  const n = Math.min(buf.length, dataEnd - o);
-  readSync(fd, buf, 0, n, dataStart + o);
-  writeSync(out, buf, 0, n, newDataStart + o);
-}
+const copy = (from, to, len) => {
+  for (let o = 0; o < len; o += buf.length) {
+    const n = Math.min(buf.length, len - o);
+    readSync(fd, buf, 0, n, from + o);
+    writeSync(out, buf, 0, n, to + o);
+  }
+};
+if (prefix) copy(dataStart, newDataStart, dataEnd);
+else for (const t of keep) copy(dataStart + t.src, newDataStart + t.offset, byteSize(t));
 closeSync(out); closeSync(fd);
 console.log(JSON.stringify({ arch, layers: N, tensors: keep.length, dataStart: newDataStart, bytes: newDataStart + dataEnd }));

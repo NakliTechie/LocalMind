@@ -338,6 +338,8 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
   // Kernel names for the matrix and expert weights: Q4_0 here; an engine reading a Q8_0 file (hy_v3_moe_ssd.js) swaps
   // in the Q8_0 kernels, which take the same bindings and dispatch sizes.
   get kq() { return { mm: 'matmulQ4', mmT: 'matmulQ4T', ex: 'expertQ4', exB: 'expertQ4B' }; }
+  // Attention kernel names (decode, then chunk); an engine with sinks or a window (flint_moe_ssd.js) rebinds its own.
+  get attnK() { return { score: 'attnScore', soft: 'softmax', out: 'attnOut', scoreB: 'attnScoreB', softB: 'softmaxB', outB: 'attnOutB' }; }
 
   chatPrompt(messages) { return lfm2ChatPrompt(messages); }
   get stopTokenIds() { return [this.cfg.eos, this.tokenizer.ids.get('<|im_end|>'), this.tokenizer.ids.get('<|endoftext|>')].filter((t) => t !== undefined); }
@@ -559,9 +561,10 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
       d(this.kq.mm, g.q, Math.ceil(QN / 4)); d(this.kq.mm, g.k, Math.ceil(KVN / 4)); d(this.kq.mm, g.v, Math.ceil(KVN / 4));
       d('qkNormRope', g.ropeQ, c.heads); d('qkNormRope', g.ropeK, c.kvHeadsAttn);
       d('kvStore', g.kv, Math.ceil(KVN / 256));
-      d('attnScore', g.score, Math.ceil(c.heads * seqLen / 256));
-      d('softmax', g.soft, c.heads);
-      d('attnOut', g.attOut, Math.ceil(QN / 256));
+      const ak = this.attnK;
+      d(ak.score, g.score, Math.ceil(c.heads * seqLen / 256));
+      d(ak.soft, g.soft, c.heads);
+      d(ak.out, g.attOut, Math.ceil(QN / 256));
       d(this.kq.mm, g.o, Math.ceil(H / 4));
     } else {
       d(this.kq.mm, g.inProj, Math.ceil(3 * H / 4));
@@ -619,9 +622,10 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
       d(this.kq.mmT, g.q, mm(QN), tt); d(this.kq.mmT, g.k, mm(KVN), tt); d(this.kq.mmT, g.v, mm(KVN), tt);
       d('qkNormRopeB', g.ropeQ, c.heads, T); d('qkNormRopeB', g.ropeK, c.kvHeadsAttn, T);
       d('kvStoreB', g.kv, Math.ceil(KVN / 256), T);
-      d('attnScoreB', g.score, Math.ceil(c.heads * T * S / 256));
-      d('softmaxB', g.soft, c.heads * T);
-      d('attnOutB', g.attOut, Math.ceil(QN / 256), T);
+      const ak = this.attnK;
+      d(ak.scoreB, g.score, Math.ceil(c.heads * T * S / 256));
+      d(ak.softB, g.soft, c.heads * T);
+      d(ak.outB, g.attOut, Math.ceil(QN / 256), T);
       d(this.kq.mmT, g.o, mm(H), tt);
     } else {
       d(this.kq.mmT, g.inProj, mm(3 * H), tt);
