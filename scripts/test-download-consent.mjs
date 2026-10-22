@@ -59,7 +59,8 @@ assert.deepEqual(p.notes, []);
 p = downloadPlan({ ...base, ready: {}, held: 0, free: 1 * GB, persisted: false });
 assert.deepEqual(p.notes, ['space', 'not-persistent']);
 m = downloadMessage(spec, p, 1 * GB, fmt);
-assert.match(m, /about 1\.0 GB of storage free/);
+assert.match(m, /about 1\.0 GB free for this site right now/);
+assert.match(m, /keep at least \d+(\.\d)? GB free on it/, 'the limit is the disk, not the first quota (live check 2026-10-22: 10.7 GB reported, 26 GB stored)');
 assert.match(m, /not granted persistent storage/);
 assert.deepEqual(downloadPlan({ ...base, ready: {}, held: 0, free: NaN }).notes, [], 'unknown free space is not low');
 

@@ -12069,7 +12069,7 @@ self.addEventListener('message', async (e) => {
         : `To ${purpose}, LocalMind needs <b>${label}</b>: a one-time download of about <b>${fmt(plan.remaining)}</b>, stored in this browser. It runs on your device; nothing you type is sent anywhere.`];
       if (plan.notes.includes('resume')) parts.push(`${fmt(plan.held)} is already in this browser from an earlier visit; the download continues from there.`);
       else parts.push('If you close the tab before it finishes, the next download continues from where it stopped.');
-      if (plan.notes.includes('space')) parts.push(`This browser has about ${fmt(free)} of storage free, which may not be enough.`);
+      if (plan.notes.includes('space')) parts.push(`Your browser reports about ${fmt(free)} free for this site right now. Chrome raises that limit as the download grows, so what matters is your disk: keep at least ${fmt(plan.remaining)} free on it.`);
       if (plan.notes.includes('not-persistent')) parts.push('Your browser has not granted persistent storage, so it may delete the model if your disk runs low. A private window deletes it when you close it.');
       return parts.map((p) => `<p style="margin:0 0 8px">${p}</p>`).join('');
     }
