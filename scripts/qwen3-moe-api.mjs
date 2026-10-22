@@ -85,7 +85,15 @@ export function makeApi(log = () => {}) {
         }
         const specDecode = (performance.now() - t1) / 1000;
         const n = Math.min(spec.length, plain.length), firstDiff = spec.slice(0, n).findIndex((t, i) => t !== plain[i]);
-        const row = { promptTokens: ids.length, plainTokens: plain.length, specTokens: spec.length, same: firstDiff < 0 && spec.length === plain.length, firstDiff,
+        // At a divergence: the one-token path's top-2 margin there (a near-tie between the two kernels' sums, or not).
+        let diffMargin = null;
+        if (firstDiff >= 0) {
+          m.reset(); let lg = await m.prefill(ids, 'logits');
+          for (let i = 0; i < firstDiff; i++) lg = await m.step(plain[i], 'logits');
+          let a1 = -Infinity, a2 = -Infinity; for (const v of lg) { if (v > a1) { a2 = a1; a1 = v; } else if (v > a2) a2 = v; }
+          diffMargin = +(a1 - a2).toFixed(4);
+        }
+        const row = { promptTokens: ids.length, plainTokens: plain.length, specTokens: spec.length, same: firstDiff < 0 && spec.length >= plain.length, firstDiff, diffMargin,
           plainDecodeTokPerSec: +((plain.length - 1) / plainDecode).toFixed(2), specDecodeTokPerSec: +((spec.length - 1) / specDecode).toFixed(2),
           speedup: +(((spec.length - 1) / specDecode) / ((plain.length - 1) / plainDecode)).toFixed(2),
           tokensPerRound: +((spec.length - 1) / Math.max(1, rounds)).toFixed(2), rounds, meanAccepted: +(accepted / Math.max(1, rounds)).toFixed(2),

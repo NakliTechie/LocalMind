@@ -24,7 +24,7 @@
  */
 
 import { STORAGE, COPY_SRC, COPY_DST, MAP_READ, UNIFORM } from './qwen3_moe_ssd.js';
-import { MM_TILE, MM_SG_TOKENS, gpuRowBytes } from './iq_quants.js';
+import { MM_TILE, MM_SG_TOKENS, MVT_ROWS, gpuRowBytes } from './iq_quants.js';
 
 export const FLASHMAP_QWEN3_4B = {
   repo: 'j-shen/FlashMap-Qwen3-4B',
@@ -75,6 +75,12 @@ var<workgroup> xs: array<f32, 512>;
     y[t * p.M + m] = v;
   }
 }`,
+  // The same product for a few tokens (T ≤ TT: the draft's 16 slots, a verify's accepted rows, the anchor): one row per
+  // lane, 256 rows per workgroup, each weight read once; per 256-wide k block the T activation rows go through shared
+  // memory (broadcast reads). The token loop has a constant trip count so the sums stay in registers. N must be a
+  // multiple of 256. Dispatch (ceil(M / 256)).
+  gemvT17: gemvT(17),
+  gemvT1: gemvT(1),
   // y = x · (w · rsqrt(mean(x²) + eps)) per row of D; one workgroup per row.
   rmsRows: `
 struct P { D: u32, eps: f32 }
@@ -213,6 +219,42 @@ struct P { V: u32, H: u32, rowWords: u32, pad: u32 }
   y[i] = acc / f32(p.V);
 }`,
 };
+function gemvT(TT) {
+  return `
+struct P { M: u32, N: u32, T: u32, bias: u32 }
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read> w: array<u32>;
+@group(0) @binding(2) var<storage, read> b: array<u32>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> p: P;
+${BF}
+const TT = ${TT}u;
+var<workgroup> xs: array<vec4<f32>, ${TT * 64}>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let t = l.x; let row = wg.x * 256u + t; let rr = min(row, p.M - 1u); let T = min(p.T, TT); let rowW = p.N / 2u;
+  var acc: array<f32, ${TT}>;
+  for (var kb = 0u; kb < p.N; kb += 256u) {
+    workgroupBarrier();
+    for (var i = t; i < TT * 64u; i += 256u) {
+      let tk = i / 64u; let o = tk * p.N + kb + (i % 64u) * 4u;
+      xs[i] = select(vec4<f32>(0.0), vec4<f32>(x[o], x[o + 1u], x[o + 2u], x[o + 3u]), tk < T);
+    }
+    workgroupBarrier();
+    let base = rr * rowW + kb / 2u;
+    for (var j = 0u; j < 32u; j++) {
+      let u0 = w[base + 4u * j]; let u1 = w[base + 4u * j + 1u]; let u2 = w[base + 4u * j + 2u]; let u3 = w[base + 4u * j + 3u];
+      let w0 = vec4<f32>(bf(u0, false), bf(u0, true), bf(u1, false), bf(u1, true));
+      let w1 = vec4<f32>(bf(u2, false), bf(u2, true), bf(u3, false), bf(u3, true));
+      for (var tk = 0u; tk < TT; tk++) { acc[tk] += dot(w0, xs[tk * 64u + 2u * j]) + dot(w1, xs[tk * 64u + 2u * j + 1u]); }
+    }
+  }
+  if (row < p.M) {
+    var bv = 0.0;
+    if (p.bias == 1u) { bv = bf(b[row >> 1u], (row & 1u) == 1u); }
+    for (var tk = 0u; tk < TT; tk++) { if (tk < T) { y[tk * p.M + row] = acc[tk] + bv; } }
+  }
+}`;
+}
 function attn(kt, en) {
   return `${en}
 struct P { heads: u32, hd: u32, L: u32, scale: f32 }
@@ -383,7 +425,10 @@ export class FlashMapDrafter {
     dev.queue.writeBuffer(a.qbA, 0, new Uint32Array([1, 0, 0, 0]));
     const W = this.w, lw = (l, n) => W[`layers.${l}.${n}`];
     // GEMM ops: { group, M, T }, the y grid is ceil(T / 16).
-    const gemm = (x, name, y, M, N, T, bias = true) => ({ g: this.bind('gemmBf16', [x, W[`${name}.weight`], bias && W[`${name}.bias`] ? W[`${name}.bias`] : this.zero, y, this.uniform([M, N, T, bias && W[`${name}.bias`] ? 1 : 0])]), M, T });
+    const gemm = (x, name, y, M, N, T, bias = true) => {
+      const res = [x, W[`${name}.weight`], bias && W[`${name}.bias`] ? W[`${name}.bias`] : this.zero, y, this.uniform([M, N, T, bias && W[`${name}.bias`] ? 1 : 0])];
+      return { res, M, N, T };
+    };
     this.gemm = gemm;
     const modOff = (n, part) => n * 3 * D + part * D;   // part 0 scale (lnMod reads scale, shift), 2 gate
     const u = {
@@ -399,7 +444,10 @@ export class FlashMapDrafter {
       anchorP: gemm(a.anchorE, 'anchor_proj', a.anchorC0, D, H, 1),
       anchorN: this.bind('rmsRows', [a.anchorC0, W['anchor_norm.weight'], a.anchorC, u.rmsD]),
       bcast: this.bind('broadcast', [a.h0, a.x, u.bK]),
-      lm: { k: `mm_${et}`, g: t.bindR(`mm_${et}`, [a.out, emb, t.grid, a.logits, t.uniform([t.cfg.vocab, H, rowBytes, 0]), a.qbK]), wg: Math.ceil(t.cfg.vocab / MM_TILE) },
+      // The 16 slots through the target's head on its verify-block matvec (one read of the table), else its GEMM.
+      lm: t.kernels[`mvT_${et}`]
+        ? { k: `mvT_${et}`, g: t.bindR(`mvT_${et}`, [a.out, emb, t.grid, a.logits, t.uniform([t.cfg.vocab, H, rowBytes, 0]), a.qbK]), wg: Math.ceil(t.cfg.vocab / MVT_ROWS), small: true }
+        : { k: `mm_${et}`, g: t.bindR(`mm_${et}`, [a.out, emb, t.grid, a.logits, t.uniform([t.cfg.vocab, H, rowBytes, 0]), a.qbK]), wg: Math.ceil(t.cfg.vocab / MM_TILE) },
       am: t.bind('argmaxRows', [a.logits, a.am, t.uniform([t.cfg.vocab])]),
       final: this.bind('lnMod', [a.x, this.mod, a.h, this.uniform([D, modOff(CFG.layers * 3, 0), { f: CFG.lnEps }, 0])]),
       head: gemm(a.h, 'head', a.out, H, D, K),
@@ -430,8 +478,13 @@ export class FlashMapDrafter {
     pass.end(); dev.queue.submit([enc.finish()]);
     this.length = 0;
   }
-  runGemm(pass, op, T = op.T) {
-    pass.setPipeline(this.pipeline('gemmBf16')); pass.setBindGroup(0, op.g); pass.dispatchWorkgroups(Math.ceil(op.M / 16), Math.ceil(T / 16));
+  // A GEMM op on the kernel its token count suits: gemvT1 / gemvT17 (one read of the weights) for up to 17 tokens, the
+  // tiled GEMM for longer runs (a prompt's context rows). Bind groups are made on first use and kept on the op.
+  runGemm(pass, op) {
+    const T = op.T, k = T <= 1 ? 'gemvT1' : T <= 17 && op.N % 256 === 0 ? 'gemvT17' : 'gemmBf16';
+    const g = (op.groups ||= {})[k] ||= this.bind(k, op.res);
+    pass.setPipeline(this.pipeline(k)); pass.setBindGroup(0, g);
+    if (k === 'gemmBf16') pass.dispatchWorkgroups(Math.ceil(op.M / 16), Math.ceil(T / 16)); else pass.dispatchWorkgroups(Math.ceil(op.M / 256));
   }
   reset() { this.length = 0; }
 
@@ -490,7 +543,8 @@ export class FlashMapDrafter {
     }
     this.run(pass, 'lnMod', g.final, K);
     this.runGemm(pass, g.head);
-    t.dispatch(pass, g.lm.k, g.lm.g, g.lm.wg, Math.ceil(K / (t.matrixKernels ? MM_SG_TOKENS : MM_TILE)));
+    if (g.lm.small) t.dispatch(pass, g.lm.k, g.lm.g, g.lm.wg);
+    else t.dispatch(pass, g.lm.k, g.lm.g, g.lm.wg, Math.ceil(K / (t.matrixKernels ? MM_SG_TOKENS : MM_TILE)));
     t.dispatch(pass, 'argmaxRows', g.am, K);
     pass.end();
     enc.copyBufferToBuffer(a.am, 0, a.rbAm, 0, K * 4);
@@ -525,8 +579,11 @@ export class FlashMapDrafter {
 
 // Lossless speculative greedy decoding: prompt `ids` → yields { tokens, accepted, drafted } per round (tokens: the new
 // ones). The target must be a Qwen3Dense loaded with captureLayers; the drafter one from FlashMapDrafter.load.
-export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, stopTokenIds = target.stopTokenIds, rounds } = {}) {
-  const stops = new Set(stopTokenIds || []), K = CFG.block;
+// verify: how many of the 16 drafts a round checks. 'adaptive' (default) checks 7 (an 8-token verify block, about half
+// the cost of 17) while recent rounds accept fewer than 5, else all 16; a number fixes it.
+export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, stopTokenIds = target.stopTokenIds, rounds, verify = 'adaptive' } = {}) {
+  const stops = new Set(stopTokenIds || []);
+  let ema = 4;
   target.reset(); drafter.reset();
   let next = null;
   for (let i = 0; i < ids.length; i += target.chunkTokens) {
@@ -538,9 +595,9 @@ export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, 
   yield { tokens: [next], accepted: 0, drafted: 0, prefill: true };
   if (stops.has(next)) return;
   while (produced < maxNewTokens) {
-    const pos = target.position, anchor = next;
+    const pos = target.position, anchor = next, K = verify === 'adaptive' ? (ema >= 5 ? CFG.block : 7) : Math.min(CFG.block, verify);
     const t0 = performance.now();
-    const drafts = await drafter.draft(anchor, pos);
+    const drafts = (await drafter.draft(anchor, pos)).slice(0, K);
     const t1 = performance.now();
     const rows = await target.prefillChunk([anchor, ...drafts], 'rows');
     const t2 = performance.now();
@@ -549,6 +606,7 @@ export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, 
     let fresh = [...drafts.slice(0, acc), rows[acc]];
     const hit = fresh.findIndex((x) => stops.has(x));
     if (hit >= 0) fresh = fresh.slice(0, hit + 1);
+    ema = 0.6 * ema + 0.4 * acc;
     drafter.extendContext(acc + 1, pos);
     target.rewind(pos + acc + 1);
     next = fresh[fresh.length - 1];

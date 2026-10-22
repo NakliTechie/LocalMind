@@ -295,7 +295,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
       const embedType = this.types['token_embd.weight'];
       for (const t of new Set(Object.values(this.types).filter(Boolean))) {
         k[`mv_${t}`] = mvKernel(t); k[`mm_${t}`] = this.matrixKernels ? mmSgKernel(t) : mmKernel(t);
-        if (this.opts.captureLayers) k[`mvT_${t}`] = mvTKernel(t);   // verify blocks
+        if (this.opts.captureLayers) { k[`mvT_${t}`] = mvTKernel(t); k[`mvT8_${t}`] = mvTKernel(t, 8); }   // verify blocks
         if (PADDED.has(t)) k[`repack_${t}`] = repackKernel(t);
       }
       k[`embed_${embedType}`] = embedKernel(embedType);
@@ -385,7 +385,10 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     const u = this.uniform([M, N, gpuRowBytes(t, N), 0]);
     const op = { k: `mm_${t}`, g: this.bindR(`mm_${t}`, [x, w.raw, this.grid, y, u, this.qb]), wg: Math.ceil(M / MM_TILE) };
     // Speculative verify blocks (T ≤ MVT_TOKENS) read each weight once instead: the same bindings, the matvec kernel.
-    if (this.kernels[`mvT_${t}`] && N % 256 === 0) op.small = { k: `mvT_${t}`, g: this.bindR(`mvT_${t}`, [x, w.raw, this.grid, y, u, this.qb]), wg: Math.ceil(M / MVT_ROWS) };
+    if (this.kernels[`mvT_${t}`] && N % 256 === 0) {
+      const v = (k) => ({ k, g: this.bindR(k, [x, w.raw, this.grid, y, u, this.qb]), wg: Math.ceil(M / MVT_ROWS) });
+      op.small = v(`mvT_${t}`); op.small8 = v(`mvT8_${t}`);
+    }
     return op;
   }
 
@@ -630,7 +633,10 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     const c = this.cfg, s = c.ssm || NO_SSM, g = this.layers[l].B, d = (nm, gr, x, y) => this.dispatch(pass, nm, gr, x, y);
     const H = c.hidden, QN = c.heads * c.headDim, kvn = c.kvHeads * c.headDim, convDim = 2 * s.kHeads * s.dState + s.dInner;
     const tt = Math.ceil(T / (this.matrixKernels ? MM_SG_TOKENS : MM_TILE));
-    const mm = (op) => (op.small && T <= MVT_TOKENS ? this.dispatch(pass, op.small.k, op.small.g, op.small.wg) : this.dispatch(pass, op.k, op.g, op.wg, tt));
+    const mm = (op) => {
+      const sm = op.small && (T <= 8 ? op.small8 : T <= MVT_TOKENS ? op.small : null);
+      if (sm) this.dispatch(pass, sm.k, sm.g, sm.wg); else this.dispatch(pass, op.k, op.g, op.wg, tt);
+    };
     d('rmsnormB', g.rmsA, T);
     if (this.recurrent[l]) {
       mm(g.qkv); mm(g.z); mm(g.beta); mm(g.alpha);
@@ -680,8 +686,8 @@ export class Qwen35Dense extends Qwen3MoeSsd {
       if (!this.capture || T > ROWS_MAX) throw new Error(`rows: needs captureLayers and at most ${ROWS_MAX} tokens`);
       const tt = Math.ceil(T / (this.matrixKernels ? MM_SG_TOKENS : MM_TILE)), lm = this.gB.lmR;
       this.dispatch(pass, 'rmsnormB', this.gB.rmsOutR, T);
-      if (lm.small && T <= MVT_TOKENS) this.dispatch(pass, lm.small.k, lm.small.g, lm.small.wg);
-      else this.dispatch(pass, lm.k, lm.g, lm.wg, tt);
+      const sm = lm.small && (T <= 8 ? lm.small8 : T <= MVT_TOKENS ? lm.small : null);
+      if (sm) this.dispatch(pass, sm.k, sm.g, sm.wg); else this.dispatch(pass, lm.k, lm.g, lm.wg, tt);
       this.dispatch(pass, 'argmaxRows', this.gB.amR, T);
     }
     pass.end();

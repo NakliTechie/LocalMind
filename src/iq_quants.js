@@ -288,11 +288,15 @@ var<workgroup> red: array<f32, ${MV_ROWS * 64}>;
 }
 
 // A few tokens at once (a speculative verify block): y[t·M + m] = Σ_k x[t·N + k]·W[m][k] for T ≤ MVT_TOKENS, each
-// weight read and dequantized once. One row per lane (64 rows per workgroup) with one sum per token; per 256-wide k
-// block the T activation rows go through shared memory, where every lane reads the same addresses (a broadcast).
-// N must be a multiple of 256. Dispatch (ceil(M / MVT_ROWS)).
-export const MVT_TOKENS = 17, MVT_ROWS = 64;
-export function mvTKernel(type) {
+// weight read and dequantized once. One row per lane (MVT_ROWS rows per workgroup) with one sum per token; per
+// 256-wide k block the T activation rows go through shared memory, where every lane reads the same addresses (a
+// broadcast). The token loop has a constant trip count TT so the sums stay in registers (4 rows per lane spilled them:
+// 520 ms a block); the cost grows with TT, so short blocks take the TT = 8 build. N must be a multiple of 256.
+// Dispatch (ceil(M / MVT_ROWS)). Measured on an M4 Pro, Qwen3-4B Q8_0, 17 tokens: 88 ms of matrix work, against 98 ms
+// for a subgroup-matrix version (64 rows × 32 tokens, 128-wide k steps) and 172 ms with the weights staged through
+// shared memory for coalesced reads (plan/2026-10-22-flashmap/results.md).
+export const MVT_TOKENS = 17, MVT_ROWS = 256;
+export function mvTKernel(type, TTn = MVT_TOKENS) {
   return `
 struct P { M: u32, N: u32, rowBytes: u32, pad: u32 }
 struct Q { T: u32, pos0: u32, S: u32, pad: u32 }
@@ -303,15 +307,15 @@ struct Q { T: u32, pos0: u32, S: u32, pad: u32 }
 @group(0) @binding(4) var<uniform> p: P;
 @group(0) @binding(5) var<uniform> qd: Q;
 ${deqFn(type)}
-const TT = ${MVT_TOKENS}u;
-var<workgroup> xs: array<vec4<f32>, ${MVT_TOKENS * 64}>;   // [token][k / 4] for one 256-wide k block
-@compute @workgroup_size(64) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+const TT = ${TTn}u;
+var<workgroup> xs: array<vec4<f32>, ${TTn * 64}>;   // [token][k / 4] for one 256-wide k block
+@compute @workgroup_size(${MVT_ROWS}) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) ng: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
   _ = grid[0];
   let t = l.x; let row = (wg.y * ng.x + wg.x) * ${MVT_ROWS}u + t; let rr = min(row, p.M - 1u); let T = min(qd.T, TT);
-  var acc: array<f32, ${MVT_TOKENS}>;
+  var acc: array<f32, ${TTn}>;
   for (var kb = 0u; kb < p.N; kb += 256u) {
     workgroupBarrier();
-    for (var i = t; i < TT * 64u; i += 64u) {
+    for (var i = t; i < TT * 64u; i += ${MVT_ROWS}u) {
       let tk = i / 64u; let o = tk * p.N + kb + (i % 64u) * 4u;
       xs[i] = select(vec4<f32>(0.0), vec4<f32>(x[o], x[o + 1u], x[o + 2u], x[o + 3u]), tk < T);
     }
@@ -323,7 +327,6 @@ var<workgroup> xs: array<vec4<f32>, ${MVT_TOKENS * 64}>;   // [token][k / 4] for
         let v = deq8(B, s, g);
         let w0 = vec4<f32>(v[0], v[1], v[2], v[3]); let w1 = vec4<f32>(v[4], v[5], v[6], v[7]);
         let xi = c * 8u + g * 2u;
-        // A constant trip count, so the sums stay in registers (a runtime bound spilled them: ~15 ms per token).
         for (var tk = 0u; tk < TT; tk++) { acc[tk] += dot(w0, xs[tk * 64u + xi]) + dot(w1, xs[tk * 64u + xi + 1u]); }
       }
     }
