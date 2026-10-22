@@ -229,6 +229,13 @@ export function lingChatPrompt(messages, { enableThinking = true } = {}) {
 // ── Kernels ──
 const SIGM = 'fn sigm(x: f32) -> f32 { return 1.0 / (1.0 + exp(-x)); }';
 const LK = {
+  // Debug capture (opts.captureX): dst[off·n + i] = x[i].
+  copyAt: `
+struct P { n: u32, off: u32 }
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(2) var<uniform> p: P;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) { if (g.x < p.n) { dst[p.off * p.n + g.x] = x[g.x]; } }`,
   // x += a (n values); also used for the shared expert's output.
   addInPlace: `
 struct P { n: u32 }
@@ -618,6 +625,10 @@ export class LingMoeSsd extends Qwen3MoeSsd {
     return Qwen3MoeSsd.load.call(Sub, modelId, { ...opts, fetch: fetchFn, url: 'split:' + urls[0], key: opts.key || 'ling-3.0-flash-q4_k_m', source: { repo: src.repo, file: src.file, revision: src.revision, size: src.size } });
   }
 
+  // Prefetch off by default: with 512 experts a guess from the layer before misses too often. Measured 2026-10-23 (M4 Pro,
+  // 4 GB pool, 371-token prompt, 128 tokens): off 5.53 tok/s, lookahead 1 4.49, lookahead 2 3.77.
+  constructor(device, manifest, gguf, opts) { super(device, manifest, gguf, opts); this.prefetch = opts.prefetch ?? false; }
+
   chatPrompt(messages, opts) { return lingChatPrompt(messages, opts); }
   get stopTokenIds() { return [this.cfg.eos, this.tokenizer.ids.get('<|endoftext|>')].filter((t) => t !== undefined); }
   get thinkOpenTokenId() { return this.tokenizer.ids.get('<think>') ?? null; }
@@ -774,6 +785,12 @@ export class LingMoeSsd extends Qwen3MoeSsd {
     this.g.rmsOut = this.bind('rmsnorm', [a.x, raw('output_norm.weight'), a.xn, u.rmsH]);
     this.g.lm = this.mv('output.weight', a.xn, a.logits);
     this.g.am = this.bind('argmax', [a.logits, a.am, u.am]);
+    // Debug: every model layer's output x for the last step (opts.captureX), read by readCapture().
+    if (this.opts.captureX) {
+      this.dbg = this.buffer(c.modelLayers * H * 4, STORAGE | COPY_SRC);
+      this.dbgRead = this.buffer(c.modelLayers * H * 4, MAP_READ | COPY_DST);
+      this.g.cap = Array.from({ length: c.modelLayers }, (_, ml) => this.bind('copyAt', [a.x, this.dbg, this.uniform([H, ml])]));
+    }
     this.clearState();
   }
 
@@ -824,7 +841,7 @@ export class LingMoeSsd extends Qwen3MoeSsd {
     this.run(pass, t.o);
     d('addInPlace', t.addO, Math.ceil(H / 256));
     d('rmsnorm', t.rmsF, 1);
-    if (t.ffn) { this.encodeFfn(pass, t.ffn); d('addInPlace', t.addF, Math.ceil(H / 256)); return; }
+    if (t.ffn) { this.encodeFfn(pass, t.ffn); d('addInPlace', t.addF, Math.ceil(H / 256)); if (this.g.cap) d('copyAt', this.g.cap[ml], Math.ceil(H / 256)); return; }
     if (this.prefetch && pf) for (const p of pf) { d('rmsnorm', p.rms, 1); this.run(pass, p.router); d('routeLing', p.route, 1); }
     this.encodeFfn(pass, t.shexp);
     this.run(pass, t.router);
@@ -841,6 +858,16 @@ export class LingMoeSsd extends Qwen3MoeSsd {
     d('swiglu', g.act, Math.ceil(c.topK * c.expertFf / 256));
     d(g.dk, g.dn, Math.ceil(c.hidden / 16), 1, c.topK);
     d('moeAccum', g.acc, Math.ceil(c.hidden / 256));
+    if (this.g.cap) d('copyAt', this.g.cap[c.lead + l], Math.ceil(c.hidden / 256));
+  }
+  async readCapture() {
+    const enc = this.device.createCommandEncoder();
+    enc.copyBufferToBuffer(this.dbg, 0, this.dbgRead, 0, this.dbg.size);
+    this.device.queue.submit([enc.finish()]);
+    await this.dbgRead.mapAsync(1);
+    const out = new Float32Array(this.dbgRead.getMappedRange().slice(0));
+    this.dbgRead.unmap();
+    return out;
   }
   encodeEmbed(pass) { this.dispatch(pass, 'embed', this.g.embed, Math.ceil(this.cfg.hidden / 8 / 256)); }
   encodeHead(pass, want) {

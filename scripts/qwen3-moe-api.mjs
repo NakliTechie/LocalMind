@@ -19,13 +19,13 @@ export function makeApi(log = () => {}) {
     // engine: 'qwen3' (rung 2a, qwen3moe GGUFs), 'qwen35' (rung 2b, qwen35moe), 'gemma4' (rung 2c, Gemma 4 MoE), 'lfm2moe' (rung 2d, LFM2.5-24B-A2B) or
     // 'qwen35dense' (dense qwen35 from an IQ-mix GGUF, qwen35_dense.js; no expert pool, so bench with clearPool: false).
     // capture (gemma4): keep each layer's states of the last step for states().
-    async load({ url, urls, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, gpuBudgetGB, root, flashmap } = {}) {
+    async load({ url, urls, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, gpuBudgetGB, root, flashmap, captureX } = {}) {
       if (m) { await m.dispose(); m = null; }
       const t0 = performance.now();
       let last = 0;
       if (!ENGINES[engine]) throw new Error(`unknown engine ${engine}`);
       m = await ENGINES[engine].load(null, {
-        url, urls, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, root,
+        url, urls, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, root, captureX,
         ...(flashmap ? { captureLayers: FLASHMAP_QWEN3_4B_LAYERS } : {}),
         gpuBudgetBytes: gpuBudgetGB ? gpuBudgetGB * 1e9 : undefined,
         onProgress: (e) => {
