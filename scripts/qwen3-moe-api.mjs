@@ -4,26 +4,28 @@
 import { Qwen3MoeSsd, removeIngest } from '../src/qwen3_moe_ssd.js';
 import { Qwen35MoeSsd, MiniCpmV47Ssd } from '../src/qwen35_moe_ssd.js';
 import { Gemma4MoeSsd } from '../src/gemma4_moe_ssd.js';
-import { Qwen35Dense } from '../src/qwen35_dense.js';
+import { Qwen35Dense, Qwen3Dense } from '../src/qwen35_dense.js';
 import { Lfm2MoeSsd } from '../src/lfm2_moe_ssd.js';
 import { HyV3MoeSsd } from '../src/hy_v3_moe_ssd.js';
 import { FlintMoeSsd } from '../src/flint_moe_ssd.js';
+import { FlashMapDrafter, specGenerate, FLASHMAP_QWEN3_4B_LAYERS } from '../src/flashmap_drafter.js';
 
-const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd, qwen35dense: Qwen35Dense, lfm2moe: Lfm2MoeSsd, hyv3: HyV3MoeSsd, flint: FlintMoeSsd, minicpmv: MiniCpmV47Ssd };
+const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd, qwen35dense: Qwen35Dense, qwen3dense: Qwen3Dense, lfm2moe: Lfm2MoeSsd, hyv3: HyV3MoeSsd, flint: FlintMoeSsd, minicpmv: MiniCpmV47Ssd };
 
 export function makeApi(log = () => {}) {
-  let m = null;
+  let m = null, fm = null;
   const api = {
     // engine: 'qwen3' (rung 2a, qwen3moe GGUFs), 'qwen35' (rung 2b, qwen35moe), 'gemma4' (rung 2c, Gemma 4 MoE), 'lfm2moe' (rung 2d, LFM2.5-24B-A2B) or
     // 'qwen35dense' (dense qwen35 from an IQ-mix GGUF, qwen35_dense.js; no expert pool, so bench with clearPool: false).
     // capture (gemma4): keep each layer's states of the last step for states().
-    async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, gpuBudgetGB, root } = {}) {
+    async load({ url, key, engine = 'qwen3', poolGB = 4, readers = 4, prefetch, maxCtx = 4096, reingest = false, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, gpuBudgetGB, root, flashmap } = {}) {
       if (m) { await m.dispose(); m = null; }
       const t0 = performance.now();
       let last = 0;
       if (!ENGINES[engine]) throw new Error(`unknown engine ${engine}`);
       m = await ENGINES[engine].load(null, {
         url, key, poolBytes: poolGB * 2 ** 30, readers, prefetch, maxCtx, reingest, uploadRing, evict, hotHalfLife, lookahead, batchPrefill, prefillChunk, subgroups, gpuRouting, routeWindow, capture, root,
+        ...(flashmap ? { captureLayers: FLASHMAP_QWEN3_4B_LAYERS } : {}),
         gpuBudgetBytes: gpuBudgetGB ? gpuBudgetGB * 1e9 : undefined,
         onProgress: (e) => {
           if (e.status === 'weights' && e.kind !== 'tensors' && performance.now() - last > 2000) { last = performance.now(); log({ ingest: e.loaded, total: e.total, secs: e.secs }); }
@@ -32,6 +34,74 @@ export function makeApi(log = () => {}) {
       });
       globalThis.engine = m;
       return log({ gpuBytesTotal: Object.values(m.gpuBytes).reduce((x, y) => x + y, 0), subgroupKernels: !!m.subgroupKernels, gpuRouting: m.gpuRouting, loaded: key, secs: (performance.now() - t0) / 1000, ingestSecs: m.manifest.ingestSecs, denseUploadSecs: m.denseUploadSecs, poolSlots: m.poolSlots, gpuBytes: m.gpuBytes, cfg: m.cfg });
+    },
+    // FlashMap (qwen3dense loaded with flashmap: true): the drafter from `url` (a local safetensors) or Hugging Face.
+    async flashmapLoad({ url } = {}) {
+      const t0 = performance.now();
+      fm = await FlashMapDrafter.load(m, { url });
+      return { secs: (performance.now() - t0) / 1000, gpuBytes: fm.gpuBytes };
+    },
+    // The drafter against drafter_ref.py's float32 reference: its features and anchor in, the 16 slots' DiT output and
+    // their tokens out.
+    async flashmapPeek(names) { return fm.peek(names); },
+    async flashmapCheck(refBase) {
+      const ref = await (await fetch(`${refBase}.json`, { cache: 'no-store' })).json();
+      const feats = new Float32Array(await (await fetch(`${refBase}-features.f32`, { cache: 'no-store' })).arrayBuffer());
+      m.device.queue.writeBuffer(m.b.feat, 0, feats);
+      m.device.pushErrorScope('validation');
+      fm.reset(); fm.extendContext(ref.P, 0);
+      const extendErr = await m.device.popErrorScope();
+      m.device.pushErrorScope('validation');
+      const toks = await fm.draft(ref.anchor, ref.anchorPos);
+      const draftErr = await m.device.popErrorScope();
+      if (extendErr || draftErr) return { extendErr: extendErr && extendErr.message, draftErr: draftErr && draftErr.message };
+      const h = await fm.readOut(), D = 2560;
+      let maxAbs = 0, minCos = 1, num = 0, den = 0;
+      for (let s = 0; s < 16; s++) {
+        let dot = 0, na = 0, nb = 0;
+        for (let i = 0; i < D; i++) { const a = h[s * D + i], b = ref.h[s][i]; maxAbs = Math.max(maxAbs, Math.abs(a - b)); dot += a * b; na += a * a; nb += b * b; num += (a - b) ** 2; den += b * b; }
+        minCos = Math.min(minCos, dot / Math.sqrt(na * nb));
+      }
+      return { tokens: toks, refTokens: ref.draftTokens, tokensSame: toks.filter((t, i) => t === ref.draftTokens[i]).length, maxAbs, relErr: Math.sqrt(num / den), minCos };
+    },
+    // Plain greedy (prefill, then one-token steps) against FlashMap speculative greedy, per prompt: tokens, time, and
+    // whether the outputs are the same. Thinking off; stops at the model's stop tokens or maxNew.
+    async flashmapBench(texts, maxNew = 256, specOpts = {}) {
+      const stops = new Set(m.stopTokenIds), rows = [];
+      for (const text of texts) {
+        const ids = m.tokenizer.encode(m.chatPrompt([{ role: 'user', content: text }], { enableThinking: false }));
+        m.reset();
+        let t0 = performance.now(), next = await m.prefill(ids, 'argmax');
+        const plainPrefill = (performance.now() - t0) / 1000, plain = [next];
+        t0 = performance.now();
+        while (plain.length < maxNew && !stops.has(next)) { next = await m.step(next, 'argmax'); plain.push(next); }
+        const plainDecode = (performance.now() - t0) / 1000;
+        const spec = []; let rounds = 0, plainSteps = 0, specPrefill = 0, accepted = 0, draftMs = 0, verifyMs = 0;
+        t0 = performance.now();
+        let t1 = 0;
+        for await (const r of specGenerate(m, fm, ids, { maxNewTokens: maxNew, ...specOpts })) {
+          if (r.prefill) { specPrefill = (performance.now() - t0) / 1000; t1 = performance.now(); } else if (r.plain) plainSteps++; else { rounds++; accepted += r.accepted; draftMs += r.draftMs; verifyMs += r.verifyMs; }
+          spec.push(...r.tokens);
+        }
+        const specDecode = (performance.now() - t1) / 1000;
+        const n = Math.min(spec.length, plain.length), firstDiff = spec.slice(0, n).findIndex((t, i) => t !== plain[i]);
+        // At a divergence: the one-token path's top-2 margin there (a near-tie between the two kernels' sums, or not).
+        let diffMargin = null;
+        if (firstDiff >= 0) {
+          m.reset(); let lg = await m.prefill(ids, 'logits');
+          for (let i = 0; i < firstDiff; i++) lg = await m.step(plain[i], 'logits');
+          let a1 = -Infinity, a2 = -Infinity; for (const v of lg) { if (v > a1) { a2 = a1; a1 = v; } else if (v > a2) a2 = v; }
+          diffMargin = +(a1 - a2).toFixed(4);
+        }
+        const row = { promptTokens: ids.length, plainTokens: plain.length, specTokens: spec.length, same: firstDiff < 0 && spec.length >= plain.length, firstDiff, diffMargin,
+          plainDecodeTokPerSec: +((plain.length - 1) / plainDecode).toFixed(2), specDecodeTokPerSec: +((spec.length - 1) / specDecode).toFixed(2),
+          speedup: +(((spec.length - 1) / specDecode) / ((plain.length - 1) / plainDecode)).toFixed(2),
+          tokensPerRound: +((spec.length - 1 - plainSteps) / Math.max(1, rounds)).toFixed(2), rounds, plainSteps, meanAccepted: +(accepted / Math.max(1, rounds)).toFixed(2),
+          msPerRound: { draft: +(draftMs / Math.max(1, rounds)).toFixed(1), verify: +(verifyMs / Math.max(1, rounds)).toFixed(1) }, plainMsPerToken: +(1000 * plainDecode / Math.max(1, plain.length - 1)).toFixed(1),
+          prefillSecs: { plain: +plainPrefill.toFixed(3), spec: +specPrefill.toFixed(3) }, text: m.tokenizer.decode(spec).slice(0, 200) };
+        rows.push(row); log(row);
+      }
+      return rows;
     },
     async greedy(ids, n = 16, { top = 5, resetStats = true } = {}) {
       if (resetStats) m.resetCounters();
@@ -53,6 +123,10 @@ export function makeApi(log = () => {}) {
         let div = -1;
         for (let i = 0; i < n; i++) if (g.ids[i] !== r.gen[i]) { div = i; break; }
         if (div < 0 && n < r.gen.length && !endedAtBan) div = n;
+        // ignore_eos also drops the end-of-turn tokens from the reference's top-5, so its top-1 can be a token it would
+        // never have picked; when we end the turn there (a stop token the reference list lacks), the answer is over.
+        const stops = new Set(m.stopTokenIds || []);
+        if (div >= 0 && stops.has(g.ids[div]) && !r.top[div].some(([id]) => id === g.ids[div])) { n = div; endedAtBan = true; div = -1; }
         const row = { name: r.name, promptTokens: r.ids.length, n, endedAtBan, match: div < 0, firstDivergence: div, secs: (performance.now() - t0) / 1000 };
         // max |Δ logprob| over positions before divergence, for tokens in both top-5 lists
         // Max |Δ logprob| over shared top-5 tokens, and over the reference's top-1 token alone (tail

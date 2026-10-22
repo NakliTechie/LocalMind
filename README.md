@@ -56,14 +56,16 @@ with attach and voice stacked beside a taller text box, and everything else move
 The picker groups models as on this device, partly downloaded, or to download, with each size. They range from LFM2.5
 230M on hand-written WebGPU kernels (~1,060 tokens/s on an M4 Pro) to two 27B models, Ternary Bonsai 2 and Underdog
 Saluki (a 7.9 GB IQ2-mix GGUF tuned for tool calls), plus Chrome's built-in Gemini Nano with no download at all. Ternary
-Bonsai 2 also comes as 2B (430 MB) and 4B (950 MB) on the same engine, 24 of 24 on the tool test. Four experimental
-engines stream mixture-of-experts models larger than GPU memory (Qwen3.6 35B-A3B, OpenBMB's MiniCPM-V 4.7 35B-A3B, Gemma
-4 26B-A4B, Liquid AI's LFM2.5 24B-A2B and Recursive's 26 GB coding model Flint 40B-A2.5B) from the browser's private
-storage: MiniCPM-V is a 19.7 GB download that ran in 6.4 GB of GPU memory, uses tools (11 of 11 on the test set) and
-reads images, with tokens identical to llama.cpp on the test images. Twelve engines in all serve 19 models and a memory
-writer. Their disk tier and engines are also a library, [diskformer.js](https://github.com/NakliTechie/diskformer.js),
-with a demo at [diskformer.naklitechie.com](https://diskformer.naklitechie.com). Settings → Models → Load .gguf from
-disk… copies in a GGUF you already have instead of downloading it.
+Bonsai 2 also comes as 2B (430 MB) and 4B (950 MB) on the same engine, 24 of 24 on the tool test. Qwen3 4B runs with
+FlashMap speculative decoding: the same tokens, 2.1–2.2× faster on maths and 1.2–1.5× on code on an M4 Pro. Four
+experimental engines stream mixture-of-experts models larger than GPU memory (Qwen3.6 35B-A3B, OpenBMB's MiniCPM-V 4.7
+35B-A3B, Gemma 4 26B-A4B, Liquid AI's LFM2.5 24B-A2B and Recursive's 26 GB coding model Flint 40B-A2.5B) from the
+browser's private storage: MiniCPM-V is a 19.7 GB download that ran in 6.4 GB of GPU memory, uses tools (11 of 11 on the
+test set) and reads images, with tokens identical to llama.cpp on the test images. Twelve engines in all serve 20 models
+and a memory writer. Their disk tier and engines are also a library,
+[diskformer.js](https://github.com/NakliTechie/diskformer.js), with a demo at
+[diskformer.naklitechie.com](https://diskformer.naklitechie.com). Settings → Models → Load .gguf from disk… copies in a
+GGUF you already have instead of downloading it.
 
 Every path is local. A model runs in the tab on WebGPU, or as a GGUF through llama.cpp compiled to WebAssembly (from a
 URL or a `.gguf` file on your disk, on CPU when there is no GPU), or on your own Ollama, LM Studio or llama.cpp server.

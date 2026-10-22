@@ -21,6 +21,7 @@ Pick a model from the dropdown. It downloads once, caches in the browser, and ru
 | **Ternary Bonsai 2 27B** | ~5.9 GB | Custom WGSL (in-tab) | Text + agent | 27B at ternary 1.75-bit (Qwen3.8 backbone, 98% of full-precision benchmark score) on hand-written WGSL — the biggest in-browser model here. A reasoning model; 16K context. Speculative decoding (DFlash 2, below) on by default |
 | **LFM2.5 230M · GGUF** | ~170 MB | wllama (in-tab) | Text + agent | Same model as the default, as a Q5_K_M GGUF — runs on CPU without WebGPU |
 | **MiniCPM5 2B · GGUF** | ~1.6 GB | wllama (in-tab) | Text + agent | Largest GGUF entry; 16K context for long documents; no ONNX export exists, so wllama is the only in-tab path |
+| **Qwen3 4B · FlashMap speculative** | ~5.2 GB | Custom WGSL (in-tab, experimental) | Text + reasoning | Qwen's Qwen3-4B (Q8_0) with the FlashMap flow-map drafter (Shen et al., arXiv:2610.24365) ported to WGSL: drafts 16 tokens per step, the same output as plain decoding; on an M4 Pro 2.1–2.2× on maths, 1.2–1.5× on code, plain speed on chat (it falls back) |
 | **Flint 40B-A2.5B · SSD-streamed** | ~26 GB | Custom WGSL, experts from disk (in-tab, experimental) | Text + reasoning | Recursive's coding MoE (39.8B, ~2.5B active per token) from its own Q4_1 GGUF; ~8.7 tok/s on a 24 GB M4 Pro, where its card asks for 48 GB under llama.cpp; tools off for now |
 
 Plus any **custom Hugging Face ONNX model** (paste a repo id) or any model served by **your own Ollama / LM Studio** (see Runtimes).
