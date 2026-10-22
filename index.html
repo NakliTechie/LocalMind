@@ -24675,7 +24675,7 @@ export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, 
  * guS / dS parts) are unused here.
  */
 
-import { Qwen3MoeSsd, GGML, TOK, STORAGE } from './qwen3_moe_ssd.js';
+import { Qwen3MoeSsd, GGML, TOK, STORAGE, COPY_SRC, COPY_DST, MAP_READ } from './qwen3_moe_ssd.js';
 import { Gemma4MoeSsd } from './gemma4_moe_ssd.js';
 import { Lfm2MoeSsd } from './lfm2_moe_ssd.js';
 import { HyV3Tokenizer, isolate } from './hy_v3_moe_ssd.js';
@@ -24948,7 +24948,28 @@ var<workgroup> red: array<f32, 256>;
 @compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {${SOFTMAX_SINK('wg.x', 'wg.x', 'tok.seqLen - winStart(tok.seqLen, p.win)')}`,
 };
 
+// Rows a check pass can return at once (prefillChunk want = 'rows': a drafted block, e.g. from prompt_lookup.js).
+const ROWS_MAX = 17;
 const FLB = {
+  // The argmax of each of T rows of n logits (lowest index on ties). One workgroup per row.
+  argmaxRows: `
+struct P { n: u32 }
+@group(0) @binding(0) var<storage, read> l: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<u32>;
+@group(0) @binding(2) var<uniform> p: P;
+var<workgroup> bv: array<f32, 256>;
+var<workgroup> bi: array<u32, 256>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let r = wg.x; let t = lid.x; let base = r * p.n;
+  var v = -3.4e38; var ix = 0u;
+  for (var i = t; i < p.n; i += 256u) { let x = l[base + i]; if (x > v) { v = x; ix = i; } }
+  bv[t] = v; bi[t] = ix; workgroupBarrier();
+  for (var s = 128u; s > 0u; s >>= 1u) {
+    if (t < s) { let o = bv[t + s]; if (o > bv[t] || (o == bv[t] && bi[t + s] < bi[t])) { bv[t] = o; bi[t] = bi[t + s]; } }
+    workgroupBarrier();
+  }
+  if (t == 0u) { out[r] = bi[0]; }
+}`,
   // Tiled Q4_1 GEMM (matmulQ4T's tiling): y[t·M + m] = Σ_k x[t·N + k]·W[m][k], 16 rows × 16 tokens per workgroup.
   matmulQ41T: `
 struct P { M: u32, N: u32 }
@@ -25124,7 +25145,39 @@ export class FlintMoeSsd extends Lfm2MoeSsd {
       B_.soft = this.bind('softmaxSinkB', [b.sc, p('attn_sinks.weight').raw, qb]);
       B_.attOut = this.bind('attnOutB', [b.sc, this.vc[L], b.att, attOut, qb]);
     }
+    // A check pass's head over up to ROWS_MAX rows of the chunk's final states (b.x), one argmax per row.
+    const A = (n) => this.buffer(n * 4, STORAGE | COPY_SRC | COPY_DST, 'batch'), R = Math.min(ROWS_MAX, B);
+    Object.assign(b, { xnR: A(R * H), logitsR: A(R * c.vocab), amR: this.buffer(R * 4, STORAGE | COPY_SRC, 'batch') });
+    this.rbRows = this.buffer(R * 4, MAP_READ | COPY_DST, 'batch');
+    this.gB.rowsNorm = this.bind('rmsnormB', [b.x, W['output_norm.weight'].raw, b.xnR, this.uniform([H, eps])]);
+    this.gB.rowsLm = this.bind('matmulQ41T', [b.xnR, W['output.weight'].q, W['output.weight'].s, b.logitsR, this.uniform([c.vocab, H]), qb]);
+    this.gB.rowsAm = this.bind('argmaxRows', [b.logitsR, b.amR, this.uniform([c.vocab])]);
   }
+
+  // want = 'rows': the chunk as usual, then the head over all T rows (T ≤ ROWS_MAX) → the argmax of each, a
+  // Uint32Array of T, for checking a drafted block in one pass.
+  async prefillChunk(ids, want = 'none') {
+    if (want !== 'rows') return super.prefillChunk(ids, want);
+    const T = ids.length, c = this.cfg, H = c.hidden, dev = this.device;
+    if (T > Math.min(ROWS_MAX, this.chunkTokens)) throw new Error(`rows: at most ${Math.min(ROWS_MAX, this.chunkTokens)} tokens`);
+    await super.prefillChunk(ids, 'none');
+    const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
+    this.dispatch(pass, 'rmsnormB', this.gB.rowsNorm, T);
+    this.dispatch(pass, 'matmulQ41T', this.gB.rowsLm, Math.ceil(c.vocab / 16), Math.ceil(T / 16));
+    this.dispatch(pass, 'argmaxRows', this.gB.rowsAm, T);
+    pass.end();
+    enc.copyBufferToBuffer(this.b.amR, 0, this.rbRows, 0, T * 4);
+    dev.queue.submit([enc.finish()]);
+    await this.rbRows.mapAsync(1, 0, T * 4);
+    const out = new Uint32Array(this.rbRows.getMappedRange(0, T * 4).slice(0));
+    this.rbRows.unmap();
+    return out;
+  }
+  // Back to `pos` tokens after a check pass kept only part of its block: KV past pos is overwritten by the next tokens
+  // (attention only, no recurrent state).
+  rewind(pos) { this.position = pos; this.cached.length = pos; }
+  // KV-only: a turn that shares the cached prefix reuses it (LFM2.5's short-conv state forced a restart).
+  prefill(ids, want = 'argmax') { return Gemma4MoeSsd.prototype.prefill.call(this, ids, want); }
 
   // No recurrent state: thinking follows the model (LFM2.5 forces it on).
   async *generateTurn(messages, opts = {}) { yield* Gemma4MoeSsd.prototype.generateTurn.call(this, messages, opts); }
@@ -40968,6 +41021,74 @@ export function createGemmaPle({ key = null, slots = 32768, warm = GEMMA4_WARM, 
       }
     },
   };
+}
+</script>
+<script type="text/plain" data-module="prompt_lookup.js">/* prompt_lookup.js — prompt-lookup speculative decoding (Saxena 2023, "prompt lookup decoding"; transformers'
+ * prompt_lookup_num_tokens): no drafter model. When the last few tokens of the text so far appeared earlier in it, the
+ * tokens that followed that earlier occurrence are the draft; the model checks the whole draft in one pass and keeps the
+ * part it agrees with, plus its own next token. Output is the model's own greedy decoding. It pays where a reply repeats
+ * its context (editing code it was given, quoting, restating), and costs a check pass when the guess is wrong.
+ *
+ * The engine needs: prefill(ids, 'argmax'), step(token, 'argmax'), prefillChunk(ids, 'rows') → the argmax of every row,
+ * rewind(pos), position, reset(), stopTokenIds. FlintMoeSsd (flint_moe_ssd.js) and Qwen3Dense (qwen35_dense.js) have
+ * them.
+ *
+ *   for await (const r of lookupGenerate(engine, promptIds, { maxNewTokens })) …   // r.tokens: the new tokens
+ */
+
+// The draft for `ctx`: the K tokens after the latest earlier occurrence of its last n tokens, longest n first
+// (maxN … minN); null when the tail never occurred before.
+export function findDraft(ctx, { maxN = 4, minN = 2, K = 8 } = {}) {
+  const L = ctx.length;
+  for (let n = Math.min(maxN, L - 1); n >= minN; n--) {
+    for (let i = L - n - 1; i >= 0; i--) {
+      let j = 0;
+      while (j < n && ctx[i + j] === ctx[L - n + j]) j++;
+      if (j === n) {
+        const d = ctx.slice(i + n, Math.min(i + n + K, L));
+        if (d.length) return d;
+      }
+    }
+  }
+  return null;
+}
+
+// Greedy decoding of `ids` with prompt-lookup drafts. Yields { tokens, prefill } first, then { tokens, plain } per plain
+// step or { tokens, accepted, drafted, checkMs } per check pass. K: the longest draft (adapts: halves after a round that
+// keeps under half, doubles after one that keeps all, within [minK, maxK]).
+export async function* lookupGenerate(engine, ids, { maxNewTokens = 256, stopTokenIds = engine.stopTokenIds, K = 8, minK = 2, maxK = 16, maxN = 4, minN = 2 } = {}) {
+  const stops = new Set(stopTokenIds || []);
+  engine.reset();
+  let next = await engine.prefill(ids, 'argmax'), produced = 1;
+  const ctx = [...ids];
+  yield { tokens: [next], prefill: true };
+  if (stops.has(next)) return;
+  while (produced < maxNewTokens && engine.position < engine.maxCtx - 1) {
+    ctx.push(next);
+    const room = Math.min(K, maxNewTokens - produced, engine.maxCtx - engine.position - 1);
+    const draft = room >= 1 ? findDraft(ctx, { maxN, minN, K: room }) : null;
+    if (!draft) {
+      next = await engine.step(next, 'argmax'); produced++;
+      yield { tokens: [next], plain: true };
+      if (stops.has(next)) return;
+      continue;
+    }
+    const pos = engine.position, t0 = performance.now();
+    const rows = await engine.prefillChunk([next, ...draft], 'rows');
+    const checkMs = performance.now() - t0;
+    let acc = 0;
+    while (acc < draft.length && draft[acc] === rows[acc]) acc++;
+    let fresh = [...draft.slice(0, acc), rows[acc]];
+    const hit = fresh.findIndex((x) => stops.has(x));
+    if (hit >= 0) fresh = fresh.slice(0, hit + 1);
+    engine.rewind(pos + acc + 1);
+    ctx.push(...fresh.slice(0, -1));
+    next = fresh[fresh.length - 1];
+    produced += fresh.length;
+    K = acc === draft.length ? Math.min(maxK, K * 2) : acc < draft.length / 2 ? Math.max(minK, Math.floor(K / 2)) : K;
+    yield { tokens: fresh, accepted: acc, drafted: draft.length, checkMs };
+    if (hit >= 0) return;
+  }
 }
 </script>
 <script type="text/plain" data-module="qwen35_dense.js">/* qwen35_dense.js — dense Qwen3.5-family models (GGUF arch `qwen35`, e.g. Qwen3.8-27B) from an imatrix

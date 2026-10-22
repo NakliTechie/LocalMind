@@ -9,6 +9,7 @@ import { Lfm2MoeSsd } from '../src/lfm2_moe_ssd.js';
 import { HyV3MoeSsd } from '../src/hy_v3_moe_ssd.js';
 import { FlintMoeSsd } from '../src/flint_moe_ssd.js';
 import { FlashMapDrafter, specGenerate, FLASHMAP_QWEN3_4B_LAYERS } from '../src/flashmap_drafter.js';
+import { lookupGenerate } from '../src/prompt_lookup.js';
 
 const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd, qwen35dense: Qwen35Dense, qwen3dense: Qwen3Dense, lfm2moe: Lfm2MoeSsd, hyv3: HyV3MoeSsd, flint: FlintMoeSsd, minicpmv: MiniCpmV47Ssd };
 
@@ -113,6 +114,42 @@ export function makeApi(log = () => {}) {
         rows.push(row); log(row);
       }
       return rows;
+    },
+    // Prompt lookup (prompt_lookup.js) against plain greedy on chat `turns` (each a messages array), thinking off.
+    async lookupBench(turns, maxNew = 256, opts = {}) {
+      const stops = new Set(m.stopTokenIds), rows = [];
+      for (const messages of turns) {
+        const ids = m.tokenizer.encode(m.chatPrompt(messages, { enableThinking: false }));
+        m.reset();
+        let t0 = performance.now(), next = await m.prefill(ids, 'argmax'); const plainPrefill = performance.now() - t0, plain = [next];
+        t0 = performance.now();
+        while (plain.length < maxNew && !stops.has(next)) { next = await m.step(next, 'argmax'); plain.push(next); }
+        const plainSecs = (performance.now() - t0) / 1000;
+        const out = []; let checks = 0, plainSteps = 0, accepted = 0, drafted = 0, checkMs = 0, t1 = 0;
+        t0 = performance.now();
+        for await (const r of lookupGenerate(m, ids, { maxNewTokens: maxNew, ...opts })) {
+          if (r.prefill) t1 = performance.now(); else if (r.plain) plainSteps++; else { checks++; accepted += r.accepted; drafted += r.drafted; checkMs += r.checkMs; }
+          out.push(...r.tokens);
+        }
+        const secs = (performance.now() - t1) / 1000, n = Math.min(out.length, plain.length);
+        const firstDiff = out.slice(0, n).findIndex((t, i) => t !== plain[i]);
+        const row = { promptTokens: ids.length, tokens: out.length, same: firstDiff < 0 && out.length >= plain.length, firstDiff,
+          plainTokPerSec: +((plain.length - 1) / plainSecs).toFixed(2), lookupTokPerSec: +((out.length - 1) / secs).toFixed(2),
+          speedup: +(((out.length - 1) / secs) / ((plain.length - 1) / plainSecs)).toFixed(2),
+          checks, plainSteps, acceptRate: +(accepted / Math.max(1, drafted)).toFixed(2), tokensPerCheck: +((accepted + checks) / Math.max(1, checks)).toFixed(2),
+          msPerCheck: +(checkMs / Math.max(1, checks)).toFixed(1), plainMsPerToken: +(1000 * plainSecs / Math.max(1, plain.length - 1)).toFixed(1), text: m.tokenizer.decode(out).slice(0, 160) };
+        rows.push(row); log(row);
+      }
+      return rows;
+    },
+    // The cost of a check pass of T tokens (prefillChunk 'rows', then rewind) against one plain step, after `ids`.
+    async checkCost(ids, Ts = [2, 5, 9, 17], reps = 3) {
+      m.reset(); let next = await m.prefill(ids, 'argmax');
+      const time = async (f) => { await f(); const t0 = performance.now(); for (let i = 0; i < reps; i++) await f(); return +((performance.now() - t0) / reps).toFixed(1); };
+      const pos = m.position, out = {};
+      out.stepMs = await time(async () => { await m.step(next, 'argmax'); m.rewind(pos); });
+      for (const T of Ts) out[`check${T}Ms`] = await time(async () => { await m.prefillChunk(Array.from({ length: T }, (_, i) => (next + i * 7) % 1000 + 100), 'rows'); m.rewind(pos); });
+      return out;
     },
     async greedy(ids, n = 16, { top = 5, resetStats = true } = {}) {
       if (resetStats) m.resetCounters();
