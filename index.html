@@ -24341,6 +24341,7 @@ export class FlashMapDrafter {
 
   init() {
     const D = CFG.dim, H = CFG.targetDim, K = CFG.block, F = CFG.ff, t = this.t, dev = this.device;
+    for (const k of Object.keys(KS)) this.pipeline(k);   // compile now, not in the first rounds
     const maxRows = Math.max(K, t.chunkTokens), A = (n) => this.buffer(n * 4, STORAGE | COPY_SRC | COPY_DST);
     this.mod = this.buffer((CFG.layers * 3 + 1) * 3 * D * 4, STORAGE | COPY_DST | COPY_SRC);
     dev.queue.writeBuffer(this.mod, 0, timeConditioning(this.cpu, 0, 1));
@@ -24511,12 +24512,16 @@ export class FlashMapDrafter {
 }
 
 // Lossless speculative greedy decoding: prompt `ids` → yields { tokens, accepted, drafted } per round (tokens: the new
-// ones). The target must be a Qwen3Dense loaded with captureLayers; the drafter one from FlashMapDrafter.load.
+// ones), or { tokens, plain: true } per plain step. The target must be a Qwen3Dense loaded with captureLayers; the
+// drafter one from FlashMapDrafter.load.
 // verify: how many of the 16 drafts a round checks. 'adaptive' (default) checks 7 (an 8-token verify block, about half
 // the cost of 17) while recent rounds accept fewer than 5, else all 16; a number fixes it.
-export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, stopTokenIds = target.stopTokenIds, rounds, verify = 'adaptive' } = {}) {
+// fallback (default on): when rounds yield fewer tokens than plain steps would in the same time (a slow average under
+// 85% of round time over plain-step time, both measured as it runs), decode plainly for probeEvery tokens, with the steps still feeding the
+// drafter's context, then try a round again. Chat text drafts poorly; code and maths draft well.
+export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, stopTokenIds = target.stopTokenIds, rounds, verify = 'adaptive', fallback = true, probeEvery = 16 } = {}) {
   const stops = new Set(stopTokenIds || []);
-  let ema = 4;
+  let ema = 4, emaTokens = 5, roundMs = null, stepMs = 30, plainLeft = 0, featRows = 0, featStart = 0, catchUp = false, nRounds = 0;
   target.reset(); drafter.reset();
   let next = null;
   for (let i = 0; i < ids.length; i += target.chunkTokens) {
@@ -24528,6 +24533,20 @@ export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, 
   yield { tokens: [next], accepted: 0, drafted: 0, prefill: true };
   if (stops.has(next)) return;
   while (produced < maxNewTokens) {
+    if (plainLeft > 0) {
+      // A plain step on `next`, its features into the next free feature row.
+      if (featRows === 0) featStart = target.position;
+      const t0 = performance.now();
+      target.stepFeatRow = featRows;
+      const tok = await target.step(next, 'argmax');
+      target.stepFeatRow = null;
+      stepMs = 0.7 * stepMs + 0.3 * (performance.now() - t0);
+      featRows++; plainLeft--; produced++; next = tok;
+      if (plainLeft === 0 || featRows >= target.chunkTokens || stops.has(tok) || produced >= maxNewTokens) { drafter.extendContext(featRows, featStart); featRows = 0; catchUp = true; }
+      yield { tokens: [tok], plain: true };
+      if (stops.has(tok)) return;
+      continue;
+    }
     const pos = target.position, anchor = next, K = verify === 'adaptive' ? (ema >= 5 ? CFG.block : 7) : Math.min(CFG.block, verify);
     const t0 = performance.now();
     const drafts = (await drafter.draft(anchor, pos)).slice(0, K);
@@ -24540,12 +24559,20 @@ export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, 
     const hit = fresh.findIndex((x) => stops.has(x));
     if (hit >= 0) fresh = fresh.slice(0, hit + 1);
     ema = 0.6 * ema + 0.4 * acc;
+    emaTokens = 0.75 * emaTokens + 0.25 * (acc + 1); nRounds++;
+    // A round right after a plain stretch also waits for that stretch's context; keep it out of the round time.
+    if (!catchUp) roundMs = roundMs == null ? t2 - t0 : 0.6 * roundMs + 0.4 * (t2 - t0);
+    catchUp = false;
     drafter.extendContext(acc + 1, pos);
     target.rewind(pos + acc + 1);
     next = fresh[fresh.length - 1];
     produced += fresh.length;
     yield { tokens: fresh, accepted: acc, drafted: K, draftMs: t1 - t0, verifyMs: t2 - t1 };
     if (hit >= 0 || (rounds && --rounds <= 0)) return;
+    // Fall back when rounds lose (tokens per round under 85% of break-even, on a slow average over at least 4 rounds),
+    // so chat text drops to plain steps while code and maths near break-even keep drafting; after each plain stretch one
+    // round probes again on the same average.
+    if (fallback && nRounds >= 4 && roundMs != null && emaTokens * stepMs < 0.85 * roundMs) plainLeft = probeEvery;
   }
 }
 </script>
@@ -40977,6 +41004,18 @@ struct Q { T: u32, pos0: u32, S: u32, pad: u32 }
   let i = g.x; let t = g.y; if (i >= p.H || t >= qd.T) { return; }
   f[t * p.W + p.off + i] = x[t * p.H + i];
 }`,
+  // The one-token step's version: row r.row of the feature rows (r is a uniform the step writes). Dispatch ceil(H / 256).
+  copyRow: `
+struct P { H: u32, W: u32, off: u32, pad: u32 }
+struct R { row: u32, a: u32, b: u32, c: u32 }
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read_write> f: array<f32>;
+@group(0) @binding(2) var<uniform> p: P;
+@group(0) @binding(3) var<uniform> r: R;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let i = g.x; if (i >= p.H) { return; }
+  f[r.row * p.W + p.off + i] = x[i];
+}`,
   // The argmax of each of T rows of n logits (lowest index on ties). One workgroup per row.
   argmaxRows: `
 struct P { n: u32 }
@@ -41377,6 +41416,8 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     d('siluMul', g.silu, Math.ceil(c.ff / 256));
     this.run(pass, g.down);
     d('addInPlace', g.addD, Math.ceil(H / 256));
+    const c1 = this.stepFeatRow != null && this.capture1 && this.capture1.get(l);
+    if (c1) d('copyRow', c1, Math.ceil(H / 256));
   }
   encodeHead(pass, want) {
     this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);
@@ -41390,6 +41431,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     if (this.position >= this.maxCtx) throw this.contextFull();
     const tStart = performance.now(), pos = this.position;
     this.writeTokenUniforms(token, pos);
+    if (this.stepFeatRow != null && this.featRowU) this.device.queue.writeBuffer(this.featRowU, 0, new Uint32Array([this.stepFeatRow, 0, 0, 0]));
     const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
     this.dispatch(pass, `embed_${this.types['token_embd.weight']}`, this.g.embed, Math.ceil(c.hidden / 8 / 256));
     for (let l = 0; l < c.layers; l++) this.encodeLayer(pass, l, pos + 1);
@@ -41453,6 +41495,9 @@ export class Qwen35Dense extends Qwen3MoeSsd {
       this.featWidth = cap.length * H;
       b.feat = A(B * this.featWidth);
       this.capture = new Map(cap.map((L, j) => [L, this.bind('copyCols', [b.x, b.feat, U([H, this.featWidth, j * H, 0]), qb])]));
+      // One-token steps with this.stepFeatRow set write their features to that row (a drafter's plain stretch).
+      this.featRowU = this.buffer(16, UNIFORM | COPY_DST, 'batch');
+      this.capture1 = new Map(cap.map((L, j) => [L, this.bind('copyRow', [a.x, b.feat, U([H, this.featWidth, j * H, 0]), this.featRowU])]));
       b.xnR = A(ROWS_MAX * H); b.logitsR = A(ROWS_MAX * c.vocab);
       b.amR = this.buffer(ROWS_MAX * 4, STORAGE | COPY_SRC, 'batch');
       this.rbRows = this.buffer(ROWS_MAX * 4, MAP_READ | COPY_DST, 'batch');

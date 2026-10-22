@@ -408,6 +408,7 @@ export class FlashMapDrafter {
 
   init() {
     const D = CFG.dim, H = CFG.targetDim, K = CFG.block, F = CFG.ff, t = this.t, dev = this.device;
+    for (const k of Object.keys(KS)) this.pipeline(k);   // compile now, not in the first rounds
     const maxRows = Math.max(K, t.chunkTokens), A = (n) => this.buffer(n * 4, STORAGE | COPY_SRC | COPY_DST);
     this.mod = this.buffer((CFG.layers * 3 + 1) * 3 * D * 4, STORAGE | COPY_DST | COPY_SRC);
     dev.queue.writeBuffer(this.mod, 0, timeConditioning(this.cpu, 0, 1));
@@ -578,12 +579,16 @@ export class FlashMapDrafter {
 }
 
 // Lossless speculative greedy decoding: prompt `ids` → yields { tokens, accepted, drafted } per round (tokens: the new
-// ones). The target must be a Qwen3Dense loaded with captureLayers; the drafter one from FlashMapDrafter.load.
+// ones), or { tokens, plain: true } per plain step. The target must be a Qwen3Dense loaded with captureLayers; the
+// drafter one from FlashMapDrafter.load.
 // verify: how many of the 16 drafts a round checks. 'adaptive' (default) checks 7 (an 8-token verify block, about half
 // the cost of 17) while recent rounds accept fewer than 5, else all 16; a number fixes it.
-export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, stopTokenIds = target.stopTokenIds, rounds, verify = 'adaptive' } = {}) {
+// fallback (default on): when rounds yield fewer tokens than plain steps would in the same time (a slow average under
+// 85% of round time over plain-step time, both measured as it runs), decode plainly for probeEvery tokens, with the steps still feeding the
+// drafter's context, then try a round again. Chat text drafts poorly; code and maths draft well.
+export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, stopTokenIds = target.stopTokenIds, rounds, verify = 'adaptive', fallback = true, probeEvery = 16 } = {}) {
   const stops = new Set(stopTokenIds || []);
-  let ema = 4;
+  let ema = 4, emaTokens = 5, roundMs = null, stepMs = 30, plainLeft = 0, featRows = 0, featStart = 0, catchUp = false, nRounds = 0;
   target.reset(); drafter.reset();
   let next = null;
   for (let i = 0; i < ids.length; i += target.chunkTokens) {
@@ -595,6 +600,20 @@ export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, 
   yield { tokens: [next], accepted: 0, drafted: 0, prefill: true };
   if (stops.has(next)) return;
   while (produced < maxNewTokens) {
+    if (plainLeft > 0) {
+      // A plain step on `next`, its features into the next free feature row.
+      if (featRows === 0) featStart = target.position;
+      const t0 = performance.now();
+      target.stepFeatRow = featRows;
+      const tok = await target.step(next, 'argmax');
+      target.stepFeatRow = null;
+      stepMs = 0.7 * stepMs + 0.3 * (performance.now() - t0);
+      featRows++; plainLeft--; produced++; next = tok;
+      if (plainLeft === 0 || featRows >= target.chunkTokens || stops.has(tok) || produced >= maxNewTokens) { drafter.extendContext(featRows, featStart); featRows = 0; catchUp = true; }
+      yield { tokens: [tok], plain: true };
+      if (stops.has(tok)) return;
+      continue;
+    }
     const pos = target.position, anchor = next, K = verify === 'adaptive' ? (ema >= 5 ? CFG.block : 7) : Math.min(CFG.block, verify);
     const t0 = performance.now();
     const drafts = (await drafter.draft(anchor, pos)).slice(0, K);
@@ -607,11 +626,19 @@ export async function* specGenerate(target, drafter, ids, { maxNewTokens = 256, 
     const hit = fresh.findIndex((x) => stops.has(x));
     if (hit >= 0) fresh = fresh.slice(0, hit + 1);
     ema = 0.6 * ema + 0.4 * acc;
+    emaTokens = 0.75 * emaTokens + 0.25 * (acc + 1); nRounds++;
+    // A round right after a plain stretch also waits for that stretch's context; keep it out of the round time.
+    if (!catchUp) roundMs = roundMs == null ? t2 - t0 : 0.6 * roundMs + 0.4 * (t2 - t0);
+    catchUp = false;
     drafter.extendContext(acc + 1, pos);
     target.rewind(pos + acc + 1);
     next = fresh[fresh.length - 1];
     produced += fresh.length;
     yield { tokens: fresh, accepted: acc, drafted: K, draftMs: t1 - t0, verifyMs: t2 - t1 };
     if (hit >= 0 || (rounds && --rounds <= 0)) return;
+    // Fall back when rounds lose (tokens per round under 85% of break-even, on a slow average over at least 4 rounds),
+    // so chat text drops to plain steps while code and maths near break-even keep drafting; after each plain stretch one
+    // round probes again on the same average.
+    if (fallback && nRounds >= 4 && roundMs != null && emaTokens * stepMs < 0.85 * roundMs) plainLeft = probeEvery;
   }
 }

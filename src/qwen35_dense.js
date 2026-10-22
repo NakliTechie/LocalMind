@@ -108,6 +108,18 @@ struct Q { T: u32, pos0: u32, S: u32, pad: u32 }
   let i = g.x; let t = g.y; if (i >= p.H || t >= qd.T) { return; }
   f[t * p.W + p.off + i] = x[t * p.H + i];
 }`,
+  // The one-token step's version: row r.row of the feature rows (r is a uniform the step writes). Dispatch ceil(H / 256).
+  copyRow: `
+struct P { H: u32, W: u32, off: u32, pad: u32 }
+struct R { row: u32, a: u32, b: u32, c: u32 }
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read_write> f: array<f32>;
+@group(0) @binding(2) var<uniform> p: P;
+@group(0) @binding(3) var<uniform> r: R;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let i = g.x; if (i >= p.H) { return; }
+  f[r.row * p.W + p.off + i] = x[i];
+}`,
   // The argmax of each of T rows of n logits (lowest index on ties). One workgroup per row.
   argmaxRows: `
 struct P { n: u32 }
@@ -508,6 +520,8 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     d('siluMul', g.silu, Math.ceil(c.ff / 256));
     this.run(pass, g.down);
     d('addInPlace', g.addD, Math.ceil(H / 256));
+    const c1 = this.stepFeatRow != null && this.capture1 && this.capture1.get(l);
+    if (c1) d('copyRow', c1, Math.ceil(H / 256));
   }
   encodeHead(pass, want) {
     this.dispatch(pass, 'rmsnorm', this.g.rmsOut, 1);
@@ -521,6 +535,7 @@ export class Qwen35Dense extends Qwen3MoeSsd {
     if (this.position >= this.maxCtx) throw this.contextFull();
     const tStart = performance.now(), pos = this.position;
     this.writeTokenUniforms(token, pos);
+    if (this.stepFeatRow != null && this.featRowU) this.device.queue.writeBuffer(this.featRowU, 0, new Uint32Array([this.stepFeatRow, 0, 0, 0]));
     const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
     this.dispatch(pass, `embed_${this.types['token_embd.weight']}`, this.g.embed, Math.ceil(c.hidden / 8 / 256));
     for (let l = 0; l < c.layers; l++) this.encodeLayer(pass, l, pos + 1);
@@ -584,6 +599,9 @@ export class Qwen35Dense extends Qwen3MoeSsd {
       this.featWidth = cap.length * H;
       b.feat = A(B * this.featWidth);
       this.capture = new Map(cap.map((L, j) => [L, this.bind('copyCols', [b.x, b.feat, U([H, this.featWidth, j * H, 0]), qb])]));
+      // One-token steps with this.stepFeatRow set write their features to that row (a drafter's plain stretch).
+      this.featRowU = this.buffer(16, UNIFORM | COPY_DST, 'batch');
+      this.capture1 = new Map(cap.map((L, j) => [L, this.bind('copyRow', [a.x, b.feat, U([H, this.featWidth, j * H, 0]), this.featRowU])]));
       b.xnR = A(ROWS_MAX * H); b.logitsR = A(ROWS_MAX * c.vocab);
       b.amR = this.buffer(ROWS_MAX * 4, STORAGE | COPY_SRC, 'batch');
       this.rbRows = this.buffer(ROWS_MAX * 4, MAP_READ | COPY_DST, 'batch');

@@ -66,7 +66,7 @@ export function makeApi(log = () => {}) {
     },
     // Plain greedy (prefill, then one-token steps) against FlashMap speculative greedy, per prompt: tokens, time, and
     // whether the outputs are the same. Thinking off; stops at the model's stop tokens or maxNew.
-    async flashmapBench(texts, maxNew = 256) {
+    async flashmapBench(texts, maxNew = 256, specOpts = {}) {
       const stops = new Set(m.stopTokenIds), rows = [];
       for (const text of texts) {
         const ids = m.tokenizer.encode(m.chatPrompt([{ role: 'user', content: text }], { enableThinking: false }));
@@ -76,11 +76,11 @@ export function makeApi(log = () => {}) {
         t0 = performance.now();
         while (plain.length < maxNew && !stops.has(next)) { next = await m.step(next, 'argmax'); plain.push(next); }
         const plainDecode = (performance.now() - t0) / 1000;
-        const spec = []; let rounds = 0, specPrefill = 0, accepted = 0, draftMs = 0, verifyMs = 0;
+        const spec = []; let rounds = 0, plainSteps = 0, specPrefill = 0, accepted = 0, draftMs = 0, verifyMs = 0;
         t0 = performance.now();
         let t1 = 0;
-        for await (const r of specGenerate(m, fm, ids, { maxNewTokens: maxNew })) {
-          if (r.prefill) { specPrefill = (performance.now() - t0) / 1000; t1 = performance.now(); } else { rounds++; accepted += r.accepted; draftMs += r.draftMs; verifyMs += r.verifyMs; }
+        for await (const r of specGenerate(m, fm, ids, { maxNewTokens: maxNew, ...specOpts })) {
+          if (r.prefill) { specPrefill = (performance.now() - t0) / 1000; t1 = performance.now(); } else if (r.plain) plainSteps++; else { rounds++; accepted += r.accepted; draftMs += r.draftMs; verifyMs += r.verifyMs; }
           spec.push(...r.tokens);
         }
         const specDecode = (performance.now() - t1) / 1000;
@@ -96,7 +96,7 @@ export function makeApi(log = () => {}) {
         const row = { promptTokens: ids.length, plainTokens: plain.length, specTokens: spec.length, same: firstDiff < 0 && spec.length >= plain.length, firstDiff, diffMargin,
           plainDecodeTokPerSec: +((plain.length - 1) / plainDecode).toFixed(2), specDecodeTokPerSec: +((spec.length - 1) / specDecode).toFixed(2),
           speedup: +(((spec.length - 1) / specDecode) / ((plain.length - 1) / plainDecode)).toFixed(2),
-          tokensPerRound: +((spec.length - 1) / Math.max(1, rounds)).toFixed(2), rounds, meanAccepted: +(accepted / Math.max(1, rounds)).toFixed(2),
+          tokensPerRound: +((spec.length - 1 - plainSteps) / Math.max(1, rounds)).toFixed(2), rounds, plainSteps, meanAccepted: +(accepted / Math.max(1, rounds)).toFixed(2),
           msPerRound: { draft: +(draftMs / Math.max(1, rounds)).toFixed(1), verify: +(verifyMs / Math.max(1, rounds)).toFixed(1) }, plainMsPerToken: +(1000 * plainDecode / Math.max(1, plain.length - 1)).toFixed(1),
           prefillSecs: { plain: +plainPrefill.toFixed(3), spec: +specPrefill.toFixed(3) }, text: m.tokenizer.decode(spec).slice(0, 200) };
         rows.push(row); log(row);
