@@ -38,6 +38,8 @@ export const QWEN3_30B_A3B = {
 };
 const FORMAT = 'localmind-qwen3moe-ssd/1';
 const OPFS_ROOT = 'localmind-ssd';
+// for engines built on this one that check their store before loading (ling_moe_ssd.js)
+export { FORMAT as STORE_FORMAT, OPFS_ROOT as STORE_ROOT };
 
 // ── GGUF ────────────────────────────────────────────────────────────────────
 // qwen3moe (rung 2a) and qwen35moe (Qwen3.5/3.6 MoE, rung 2b: qwen35_moe_ssd.js) share the

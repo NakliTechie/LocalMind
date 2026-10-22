@@ -1,7 +1,8 @@
 /* iq_quants.js — llama.cpp's block quant formats as WGSL, read straight from the GGUF bytes.
  *
  * Covers the types an imatrix "IQ-mix" GGUF mixes (Underdog Saluki 27B uses all eleven): Q8_0, Q2_K, Q4_K,
- * IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_XS. A tensor stays in (nearly) its GGUF block layout
+ * IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_XS; and Q6_K and Q5_0, which a Q4_K_M GGUF adds (Ling 3.0
+ * Flash). Q6_K and Q5_0 are read unpadded, so their rows can sit at any even byte offset (a raw copy of GGUF bytes). A tensor stays in (nearly) its GGUF block layout
  * on the GPU, one array<u32>: blocks of 4k+2 bytes get two bytes of padding after their f16 scale (repackKernel),
  * so every field is word-aligned. `deq8(B, s, g)` returns weights 8g..8g+7 of 32-value chunk s of the block at
  * byte offset B, transcribed from ggml-quants.c's dequantize_row_* so the values are the ones llama.cpp computes.
@@ -20,6 +21,9 @@ export const QTYPES = {
   Q8_0: { id: 8, block: 34, qk: 32 },
   Q2_K: { id: 10, block: 84, qk: 256 },
   Q4_K: { id: 12, block: 144, qk: 256 },
+  // Q6_K and Q5_0 blocks (210, 22 bytes) are 2 mod 4 and stay unpadded: their deq8 reads bytes and halves only.
+  Q6_K: { id: 14, block: 210, qk: 256 },
+  Q5_0: { id: 6, block: 22, qk: 32 },
   IQ2_XXS: { id: 16, block: 66, qk: 256 },
   IQ2_XS: { id: 17, block: 74, qk: 256 },
   IQ3_XXS: { id: 18, block: 98, qk: 256 },
@@ -152,6 +156,27 @@ const DEQ8 = {
   let qb = B + 16u + 32u * (s >> 1u) + 8u * g; let hi = (s & 1u) * 4u;
   let qa = w(qb) >> hi; let qc = w(qb + 4u) >> hi;
   for (var j = 0u; j < 4u; j++) { v[j] = dl * f32(byt(qa, j) & 15u) - ml; v[j + 4u] = dl * f32(byt(qc, j) & 15u) - ml; }`,
+  // dequantize_row_q6_K: 2 halves × 128 values; value l of quarter k (k = 0..3) of half n takes ql[64n + l + 32(k&1)]
+  // (low nibble for k < 2, high for k ≥ 2), 2 bits of qh[32n + l] at shift 2k, and int8 scale sc[8n + l/16 + 2k]; d last.
+  Q6_K: `
+  let d = f16v(B + 208u);
+  let n = s >> 2u; let k = s & 3u; let l0 = 8u * g;
+  let sc = f32(i32(b8(B + 192u + 8u * n + (l0 >> 4u) + 2u * k) << 24u) >> 24u) * d;
+  let qlB = B + 64u * n + 32u * (k & 1u) + l0; let qhB = B + 128u + 32u * n + l0; let hiNib = (k >> 1u) * 4u;
+  for (var j = 0u; j < 8u; j++) {
+    let q = ((b8(qlB + j) >> hiNib) & 15u) | (((b8(qhB + j) >> (2u * k)) & 3u) << 4u);
+    v[j] = sc * f32(i32(q) - 32);
+  }`,
+  // dequantize_row_q5_0: value i of 32 = (low nibble of qs[i] for i < 16, else high nibble of qs[i-16]) | bit i of qh
+  // as bit 4, minus 16, times d. qh is the u32 at bytes 2..5, read as two halves.
+  Q5_0: `
+  let d = f16v(B);
+  let qh = h16(B + 2u) | (h16(B + 4u) << 16u);
+  for (var j = 0u; j < 8u; j++) {
+    let i = 8u * g + j;
+    let lo = select(b8(B + 6u + i - 16u) >> 4u, b8(B + 6u + i) & 15u, i < 16u);
+    v[j] = d * f32(i32(lo | (((qh >> i) & 1u) << 4u)) - 16);
+  }`,
   // dequantize_row_iq2_xxs: per chunk two u32: 4 grid indices, then 4×7 sign bits + a 4-bit scale.
   IQ2_XXS: `
   let d = f16v(B);
@@ -233,7 +258,7 @@ const DEQ8 = {
   for (var j = 0u; j < 4u; j++) { v[j] = dl * KV4[byt(qa, j) & 15u]; v[j + 4u] = dl * KV4[byt(qc, j) & 15u]; }`,
 };
 
-function deqFn(type) {
+export function deqFn(type) {
   const body = DEQ8[type];
   if (!body) throw new Error(`no deq8 for ${type}`);
   return `${HELPERS}
