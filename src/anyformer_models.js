@@ -6,14 +6,14 @@
  * static load(null, { maxCtx, onProgress, signal }), generate(messages, { maxNewTokens, signal }) streaming
  * { text }, reset(), dispose(), and the think markers. One subclass per model names its repo.
  *
- * anyformer loads from jsDelivr by GitHub tag until it is on npm. Through diskformer's llama.cpp path the reply is
- * text only (no token ids), and reasoning cannot be switched off yet: a model that reasons first opens its reply
- * inside the thought (the template opens <think>), so the class reports alwaysThinks, drops the literal <think> and
- * </think> from the text, and marks the boundary with a chunk whose token is THINK_CLOSE (the worker's close event).
+ * anyformer loads from jsDelivr by GitHub tag until it is on npm. Through diskformer's llama.cpp path reasoning is off
+ * unless generate() passes { thinking: true } (anyformer v0.2.1), and the reply is text only (no token ids). With
+ * reasoning on, the reply opens inside the thought; the class drops the literal <think> and </think> from the text
+ * and marks the boundary with a chunk whose token is THINK_CLOSE (the worker's close event).
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.2.0/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.2.1/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts: a download as 'weights', planning as 'init'.
 function toEngineProgress(e) {
@@ -41,13 +41,13 @@ export class AnyformerModel {
   get thinkOpenTokenId() { return null; }
   get thinkCloseTokenId() { return THINK_CLOSE; }
   get thinkInPrompt() { return true; }
-  get alwaysThinks() { return true; }
+  get alwaysThinks() { return false; }
 
   // The reply text without its <think> / </think> tags. When </think> first appears, the text up to it goes out, then
   // the same text again with token THINK_CLOSE (an empty delta), so the worker closes the thought with no text lost.
-  async *generate(messages, { maxNewTokens = 1024, signal } = {}) {
+  async *generate(messages, { maxNewTokens = 1024, signal, enableThinking = false } = {}) {
     let closed = false;
-    for await (const c of this.session.generate(messages, { maxNewTokens, signal })) {
+    for await (const c of this.session.generate(messages, { maxNewTokens, signal, thinking: enableThinking })) {
       const raw = String(c.text || '').replace(/^\s*<think>\n?/, '');
       const at = raw.indexOf('</think>');
       // The worker posts no text on its close event, so the thought's last text goes out first.
