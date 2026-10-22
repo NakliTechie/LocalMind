@@ -7,8 +7,9 @@ import { Gemma4MoeSsd } from '../src/gemma4_moe_ssd.js';
 import { Qwen35Dense } from '../src/qwen35_dense.js';
 import { Lfm2MoeSsd } from '../src/lfm2_moe_ssd.js';
 import { HyV3MoeSsd } from '../src/hy_v3_moe_ssd.js';
+import { FlintMoeSsd } from '../src/flint_moe_ssd.js';
 
-const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd, qwen35dense: Qwen35Dense, lfm2moe: Lfm2MoeSsd, hyv3: HyV3MoeSsd, minicpmv: MiniCpmV47Ssd };
+const ENGINES = { qwen3: Qwen3MoeSsd, qwen35: Qwen35MoeSsd, gemma4: Gemma4MoeSsd, qwen35dense: Qwen35Dense, lfm2moe: Lfm2MoeSsd, hyv3: HyV3MoeSsd, flint: FlintMoeSsd, minicpmv: MiniCpmV47Ssd };
 
 export function makeApi(log = () => {}) {
   let m = null;
