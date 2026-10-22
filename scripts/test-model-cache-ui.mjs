@@ -57,6 +57,19 @@ assert.match(info, /await deleteModelCaches\(rows\)/);
 assert.match(info, /await deleteModelCaches\(\[g\]\)/);
 assert.doesNotMatch(info, /await g\.remove\(\)/, 'no delete path skips the unload');
 
+// The picker is a combo box: a field over the button narrows the list as you type; every word must match.
+assert.match(html, /<input type="text" class="model-select mp-filter" id="modelPickerFilter" role="combobox"[^>]*aria-controls="modelPickerList"[^>]* hidden>/);
+const matches = new Function(`return ${fn('pickerMatches')}\n    }`)();
+const o = (t) => ({ textContent: t });
+const flint = { label: 'Flint 40B-A2.5B', id: 'RecursiveSI/flint-int4-gguf', backend: 'flint-ssd' };
+assert.ok(matches(o('Flint 40B-A2.5B · SSD-streamed, experimental, coding (~26 GB)'), flint, ['ssd', 'flint']));
+assert.ok(matches(o('x'), flint, []), 'an empty field shows every model');
+assert.ok(!matches(o('Flint 40B-A2.5B · SSD-streamed'), flint, ['ssd', 'gemma']));
+assert.match(render, /if \(!pickerMatches\(o, m, terms\)\) continue;/);
+assert.match(render, /No model matches/);
+assert.match(fn('openModelPicker'), /modelPickerFilter\.hidden = false;[^]*modelPickerFilter\.focus\(\);/);
+assert.match(fn('closeModelPicker'), /modelPickerFilter\.hidden = true;/);
+
 // Storage-full load errors point at Settings → Models → Model cache.
 assert.match(html, /<button type="button" class="btn-icon" id="loadErrorStorage" hidden>Free up storage<\/button>/);
 assert.match(html, /<div class="settings-divider" data-tab="models" id="modelCacheSection">\s*<label>Model cache<\/label>/);

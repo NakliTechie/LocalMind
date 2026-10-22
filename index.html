@@ -1900,6 +1900,11 @@
     /* Delete control on stored rows: removes that model's files without selecting it. */
     .mp-del { align-self: center; flex: none; padding: 2px 6px; font-size: 0.68rem; }
     .mp-del:focus-visible { outline: 2px solid var(--indigo-500); }
+    /* Type-to-filter field at the top of the picker: the picker is a combo box. */
+    .mp-filter { position: absolute; top: 0; bottom: 0; right: 0; width: max(100%, 260px); box-sizing: border-box; z-index: 81; cursor: text; }
+    .mp-filter[hidden] { display: none; }
+    .mp-filter:focus, .mp-filter:focus-visible { outline: none; border-color: var(--indigo-500); }
+    .mp-empty { font-size: 0.78rem; color: var(--gray-600); padding: 8px; }
     .model-picker-note { font-size: 0.7rem; color: var(--gray-600); padding: 6px 8px 2px; border-top: 1px solid var(--gray-200); margin-top: 4px; }
 
     .mode-divider { width: 1px; height: 16px; background: var(--gray-200); margin: 0 4px; flex: none; align-self: center; }
@@ -2298,6 +2303,7 @@
       .actions-bar .model-picker-wrap { order: -1; flex: 1 1 100%; max-width: 100%; }
       .model-picker-btn { max-width: 100%; width: 100%; }
       .model-picker { left: 0; right: 0; width: auto; }
+      .mp-filter { font-size: 16px; } /* under 16px, iPhone Safari zooms the page on focus */
       .actions-bar .flex-spacer { display: none; }
       .btn-icon { padding: 7px 10px; font-size: 0.8rem; }
       .mode-chip { padding: 6px 11px; }
@@ -3005,6 +3011,8 @@
              already in this browser; picking sets the select's value and fires its change event. -->
         <span class="model-picker-wrap">
           <button type="button" class="model-select model-picker-btn" id="modelPickerBtn" aria-haspopup="listbox" aria-expanded="false" aria-controls="modelPickerList"></button>
+          <!-- While the list is open, this field sits over the button: you type in place to narrow the list. -->
+          <input type="text" class="model-select mp-filter" id="modelPickerFilter" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="modelPickerList" aria-label="Find a model" placeholder="Type to find a model" autocomplete="off" spellcheck="false" hidden>
           <div class="model-picker" id="modelPicker" hidden>
             <div role="listbox" id="modelPickerList" aria-label="Models" tabindex="-1"></div>
             <p class="model-picker-note">A model downloads once, then loads from this browser.</p>
@@ -19334,6 +19342,7 @@ self.addEventListener('message', async (e) => {
     const modelPickerBtn = document.getElementById('modelPickerBtn');
     const modelPicker = document.getElementById('modelPicker');
     const modelPickerList = document.getElementById('modelPickerList');
+    const modelPickerFilter = document.getElementById('modelPickerFilter');
     const ENGINE_STORES = {
       'transformers': ['transformers-cache'], 'wllama': ['wllama'], 'lfm2-webgpu': ['gguf-v1'],
       'bonsai2-webgpu': ['gguf-cache-v1'], 'gemma4-webgpu': ['safetensors-cache-v1', 'bonsai-pipeline-v1'],
@@ -19372,8 +19381,10 @@ self.addEventListener('message', async (e) => {
     let pickerGroups = null;
     function renderModelPicker() {
       const rows = { device: [], partial: [], download: [] };
+      const terms = modelPickerFilter.value.toLowerCase().split(/\s+/).filter(Boolean);
       for (const o of modelSelect.options) {
         const m = MODELS[o.value]; if (!m) continue;
+        if (!pickerMatches(o, m, terms)) continue;
         const state = modelCacheState(m, pickerGroups);
         const meta = m.backend === 'chrome-ai' ? 'built into Chrome'
           : m.backend === 'endpoint' ? 'local server'
@@ -19409,6 +19420,14 @@ self.addEventListener('message', async (e) => {
         }
         modelPickerList.appendChild(group);
       }
+      if (!modelPickerList.children.length) modelPickerList.innerHTML = `<div class="mp-empty">No model matches "${escapeHtml(modelPickerFilter.value.trim())}".</div>`;
+    }
+    // Every typed word must appear in the option's text, the model's label, its id, or its engine name
+    // ("ssd", "agent", "vision", "gguf", "27b" all work).
+    function pickerMatches(o, m, terms) {
+      if (!terms.length) return true;
+      const hay = [o.textContent, m.label, o.value, m.id, m.backend].filter(Boolean).join(' ').toLowerCase();
+      return terms.every(t => hay.includes(t));
     }
     const pickerRows = () => [...modelPickerList.querySelectorAll('.mp-opt:not([aria-disabled="true"])')];
     function focusPickerRow(row) {
@@ -19416,27 +19435,32 @@ self.addEventListener('message', async (e) => {
       if (!row) return;
       row.classList.add('focused');
       modelPickerList.setAttribute('aria-activedescendant', row.id);
+      modelPickerFilter.setAttribute('aria-activedescendant', row.id);
       row.scrollIntoView({ block: 'nearest' });
     }
-    function openModelPicker() {
+    function openModelPicker(initial) {
       if (modelPickerBtn.disabled) return;
+      modelPickerFilter.value = typeof initial === 'string' ? initial : '';
+      modelPickerFilter.placeholder = modelPickerBtn.textContent || 'Type to find a model';
       renderModelPicker();
       modelPicker.hidden = false;
+      modelPickerFilter.hidden = false;
       modelPickerBtn.setAttribute('aria-expanded', 'true');
-      focusPickerRow(modelPickerList.querySelector('.mp-opt[aria-selected="true"]') || pickerRows()[0]);
-      modelPickerList.focus();
+      focusPickerRow((!modelPickerFilter.value && modelPickerList.querySelector('.mp-opt[aria-selected="true"]')) || pickerRows()[0]);
+      modelPickerFilter.focus();
       // Cache state needs a storage walk; draw first, then redraw with it.
       inventoryModelCaches().then((g) => {
         pickerGroups = g;
         if (modelPicker.hidden) return;
         const focused = modelPickerList.querySelector('.mp-opt.focused')?.dataset.value;
         renderModelPicker();
-        focusPickerRow(modelPickerList.querySelector(`.mp-opt[data-value="${CSS.escape(focused || modelSelect.value)}"]`));
+        focusPickerRow(modelPickerList.querySelector(`.mp-opt[data-value="${CSS.escape(focused || modelSelect.value)}"]`) || pickerRows()[0]);
       }).catch(() => {});
     }
     function closeModelPicker(returnFocus) {
       if (modelPicker.hidden) return;
       modelPicker.hidden = true;
+      modelPickerFilter.hidden = true;
       modelPickerBtn.setAttribute('aria-expanded', 'false');
       if (returnFocus) modelPickerBtn.focus();
     }
@@ -19453,6 +19477,29 @@ self.addEventListener('message', async (e) => {
     modelPickerBtn.addEventListener('click', () => (modelPicker.hidden ? openModelPicker() : closeModelPicker(false)));
     modelPickerBtn.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); openModelPicker(); }
+      // Typing a letter on the closed picker opens it with that letter in the filter.
+      else if (e.key.length === 1 && e.key !== ' ' && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); openModelPicker(e.key); }
+    });
+    modelPickerFilter.addEventListener('input', () => {
+      renderModelPicker();
+      focusPickerRow(pickerRows()[0]);
+    });
+    // The filter owns the keyboard while the picker is open: arrows move the highlighted row, Enter picks it,
+    // Escape clears the text first and closes on an empty field. Home/End and Backspace stay text editing.
+    modelPickerFilter.addEventListener('keydown', (e) => {
+      const rows = pickerRows();
+      const i = rows.indexOf(modelPickerList.querySelector('.mp-opt.focused'));
+      if (e.key === 'ArrowDown') { e.preventDefault(); focusPickerRow(rows[Math.min(rows.length - 1, i + 1)]); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); focusPickerRow(rows[Math.max(0, i - 1)]); }
+      else if (e.key === 'PageDown') { e.preventDefault(); focusPickerRow(rows[rows.length - 1]); }
+      else if (e.key === 'PageUp') { e.preventDefault(); focusPickerRow(rows[0]); }
+      else if (e.key === 'Enter') { e.preventDefault(); if (rows[i]) pickModel(rows[i].dataset.value); }
+      else if (e.key === 'Escape') {
+        e.preventDefault();
+        if (modelPickerFilter.value) { modelPickerFilter.value = ''; renderModelPicker(); focusPickerRow(modelPickerList.querySelector('.mp-opt[aria-selected="true"]') || pickerRows()[0]); }
+        else closeModelPicker(true);
+      }
+      else if (e.key === 'Tab') closeModelPicker(false);
     });
     // A picker row's delete control: confirm with the name and the bytes it frees, then delete that model's stores
     // (deleteModelCaches unloads it first when it is the loaded model). Never selects or loads the row.
@@ -19464,11 +19511,11 @@ self.addEventListener('message', async (e) => {
       const shared = others.length ? ` This also removes ${others.join(' and ')}, which use${others.length === 1 ? 's' : ''} the same files.` : '';
       const active = value === activeModelKey || (MODELS[activeModelKey] && repoForModel(MODELS[activeModelKey]) === g.repo);
       if (!confirm(`Delete ${name} from this device? This frees ${fmtBytes(g.bytes)}.${shared}${active ? ' The model is unloaded first.' : ''} It downloads again the next time you load it.`)) {
-        modelPickerList.focus();
+        modelPickerFilter.focus();
         return;
       }
       if (await deleteModelCaches([g])) showToast(`Deleted ${name} — ${fmtBytes(g.bytes)} freed`);
-      if (!modelPicker.hidden) { modelPickerList.focus(); focusPickerRow(modelPickerList.querySelector(`.mp-opt[data-value="${CSS.escape(value)}"]`) || pickerRows()[0]); }
+      if (!modelPicker.hidden) { modelPickerFilter.focus(); focusPickerRow(modelPickerList.querySelector(`.mp-opt[data-value="${CSS.escape(value)}"]`) || pickerRows()[0]); }
     }
     modelPickerList.addEventListener('click', (e) => {
       const del = e.target.closest('.mp-del');
@@ -19480,7 +19527,7 @@ self.addEventListener('message', async (e) => {
       // On a delete control: Enter/Space press it (the button's own click), Shift+Tab goes back to the list, Escape closes.
       if (e.target.closest('.mp-del')) {
         if (e.key === 'Escape') { e.preventDefault(); closeModelPicker(true); }
-        else if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); modelPickerList.focus(); }
+        else if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); modelPickerFilter.focus(); }
         else if (e.key === 'Tab') closeModelPicker(false);
         return;
       }
