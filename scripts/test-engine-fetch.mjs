@@ -30,14 +30,14 @@ assert.ok(prelude.includes('self.requestAnimationFrame = (cb) => setTimeout('), 
 assert.ok(workerSource.includes(prelude.trimEnd()), 'inference-worker.js must carry the prelude byte-for-byte (copy #engineWorkerPreludeSrc from index.html)');
 
 // 2. Wiring.
-assert.match(workerSource, /Lfm2Mobile\.load\([^]*?fetch: engineFetch,/);
+assert.match(workerSource, /anyformerLoad\([^]*?fetch: engineFetch,/);   // anyformer passes it to the engine (v0.4.0)
 assert.doesNotMatch(workerSource, /accessToken:/);
-assert.match(block('ternaryBonsai2WebgpuWorkerSrc'), /TernaryBonsai2\.load\([^]*?fetch: engineFetch,/);
-assert.match(block('gemma4WebgpuWorkerSrc'), /Gemma4Mobile\.load\([^]*?fetch: engineFetch,/);
+assert.match(block('ternaryBonsai2WebgpuWorkerSrc'), /anyformerLoad\(repo, \{[^]*?fetch: engineFetch,/);   // anyformer passes it on
+assert.match(block('gemma4WebgpuWorkerSrc'), /anyformerLoad\(d\.modelId, \{[^]*?fetch: engineFetch,/);
 assert.doesNotMatch(block('gemma4WebgpuWorkerSrc'), /accessToken:/);
 assert.doesNotMatch(block('gemma4WebgpuWorkerSrc') + block('ternaryBonsai2WebgpuWorkerSrc'), /const engineFetch|self\.requestAnimationFrame =/);
-assert.match(indexSource, /code = engineWorkerPrelude\(\) \+ code\.replaceAll\('__GEMMA4_ENGINE_URL__'/);
-assert.match(indexSource, /code = engineWorkerPrelude\(\) \+ code\.replaceAll\('__TERNARY_BONSAI2_ENGINE_URL__'/);
+assert.match(indexSource, /code = engineWorkerPrelude\(\) \+ code;/);
+assert.match(indexSource, /code = engineWorkerPrelude\(\) \+ code\.replaceAll\('__TERNARY_BONSAI2_DFLASH_URL__'/);
 
 // 3. Runtime contract. Load the prelude as a module with a worker-shaped global.
 globalThis.self = globalThis;

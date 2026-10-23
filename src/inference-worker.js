@@ -19,9 +19,12 @@
 const PROTOCOL = 'localmind.inference.v1';
 const DEFAULT_MODEL_ID = 'LiquidAI/LFM2.5-230M-GGUF';
 const GGUF_FILE = 'LFM2.5-230M-Q4_0.gguf';
-const ENGINE_URL = new URL('./lfm2_5.js', import.meta.url).href;
+// The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy of
+// the LFM2.5 engine (Lfm2Mobile) and returns a session with the same generate / reset / dispose. Pinned to an exact
+// version; LocalMind's anyformer_models.js pins the same one.
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.1/index.js';
 
-let Lfm2Mobile = null;
+let anyformerLoad = null;
 let model = null;
 let abortController = null;
 let stopFlag = false;
@@ -164,10 +167,10 @@ const loadModel = async (request) => {
     post({ type: 'ready', backend: 'webgpu', model: request.modelId || DEFAULT_MODEL_ID }, id);
     return;
   }
-  if (!Lfm2Mobile) ({ Lfm2Mobile } = await import(ENGINE_URL));
+  if (!anyformerLoad) ({ load: anyformerLoad } = await import(ANYFORMER_URL));
   hfToken = (typeof request.hfToken === 'string' && request.hfToken.trim()) || null;
   post({ type: 'progress', data: { status: 'initiate', file: GGUF_FILE } }, id);
-  model = await Lfm2Mobile.load(request.modelId || DEFAULT_MODEL_ID, {
+  model = await anyformerLoad(request.modelId || DEFAULT_MODEL_ID, {
     // Range reads stream + resume and carry the optional HF token (prelude).
     fetch: engineFetch,
     onProgress: (event) => {

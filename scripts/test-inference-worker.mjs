@@ -11,7 +11,9 @@ await import(new URL('../host/host-model-catalog.js', import.meta.url));
 const catalog = globalThis.LocalMindHostCatalog;
 
 assert.match(source, /localmind\.inference\.v1/);
-assert.match(source, /new URL\('\.\/lfm2_5\.js', import\.meta\.url\)/);
+// LFM2.5 loads through anyformer (diskformer's copy of the engine), at an exact pinned version.
+assert.match(source, /const ANYFORMER_URL = 'https:\/\/cdn\.jsdelivr\.net\/(?:gh\/NakliTechie\/anyformer\.js@v|npm\/anyformer@)\d+\.\d+\.\d+\/index\.js';/);
+assert.match(source, /model = await anyformerLoad\(request\.modelId \|\| DEFAULT_MODEL_ID, \{/);
 assert.match(source, /type: 'ready'/);
 assert.match(source, /type: 'token'/);
 assert.match(source, /type: 'complete'/);
@@ -46,8 +48,14 @@ assert.match(indexSource, /const emsg = isImageServer\(\) \? endpointErrorMessag
 assert.match(indexSource, /async function syncImageEngineUi\(\) \{[^]*?if \(activeMode === 'image'\) refreshModeUI\(\);\s*if \(!server\) return;/);
 // ...and leaving the server engine clears its readiness line (it kept saying "No image server").
 assert.match(indexSource, /const leaving = [^\n]*\n[^]*?if \(!server && imageStepsWasServer\) \{\s*imageProgressFill\.style\.width = '0%';\s*imageProgressText\.textContent = imageIdleText\(\);/);
-assert.match(indexSource, /moduleUrl\('ternary_bonsai_2_27b\.js'\)/);
-assert.match(indexSource, /\(\{ TernaryBonsai2 \} = await import\(ENGINE_URL\)\)/);
+// Since 2026-10-23 the Bonsai 2, Gemma 4 E2B/E4B and LFM2.5 workers load through anyformer (one pinned version) and
+// drive session.engine; Bonsai's DFlash and MTP modules stay rolled in.
+assert.match(indexSource, /moduleUrl\('ternary_bonsai_2_dflash\.js'\)/);
+assert.match(indexSource, /session = await anyformerLoad\(repo, \{\s*budget: 8e9,/);
+{
+  const pins = new Set([...indexSource.matchAll(/ANYFORMER_URL = '([^']+)'/g)].map((m) => m[1]));
+  assert.equal(pins.size, 1, `one anyformer version across the page and its workers, got ${[...pins].join(', ')}`);
+}
 assert.match(indexSource, /id: 'prism-ml\/Ternary-Bonsai-2-27B-gguf',\s*label: 'Ternary Bonsai 2 27B',\s*backend: 'bonsai2-webgpu'/);
 assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgpu/);
 // DFlash 2 speculative decoding: the engine carries the seam + internals hook (scripts/bonsai2-dflash-patches.mjs),
@@ -144,7 +152,7 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   assert.match(indexSource, /'anyformer-glm47flash': \{ engine: 'anyformer_models\.js', exportName: 'Glm47Flash'/);
   assert.match(indexSource, /'ling-3-flash-anyformer': \{\s*id: 'inclusionAI\/Ling-3\.0-flash-GGUF',[^]*?backend: 'anyformer-ling3flash'/);
   assert.match(indexSource, /'anyformer-ling3flash': \{ engine: 'anyformer_models\.js', exportName: 'Ling3Flash'/);
-  assert.match(indexSource, /export const ANYFORMER_URL = 'https:\/\/cdn\.jsdelivr\.net\/npm\/anyformer@\d+\.\d+\.\d+\/index\.js';/);
+  assert.match(indexSource, /export const ANYFORMER_URL = 'https:\/\/cdn\.jsdelivr\.net\/(?:gh\/NakliTechie\/anyformer\.js@v|npm\/anyformer@)\d+\.\d+\.\d+\/index\.js';/);
   // Qwen3 4B + FlashMap speculative decoding (Qwen3Dense in qwen35_dense.js) on the same worker.
   assert.match(indexSource, /'qwen3-4b-flashmap': \{\s*id: 'Qwen\/Qwen3-4B-GGUF',[^]*?backend: 'qwen3dense'/);
   assert.match(indexSource, /'qwen3dense': \{ engine: 'qwen35_dense\.js', exportName: 'Qwen3Dense'/);
@@ -187,10 +195,10 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   assert.match(build, /UPSTREAM_SHA256 = '0234c0e866bfaa9623e938a7cfa7f5740cca22532cc1112dd4e8915b97f78d62'/);
   const engine = await readFile(new URL('../src/gemma-4-e2b.js', import.meta.url));
   assert.equal(createHash('sha256').update(engine).digest('hex'), '84540424d55384146e0dd695d303f0d84090809606f6ee77c0d5e44b40609d23', 'gemma-4-e2b.js differs from the last build: rerun scripts/build-gemma-4-e2b.mjs and update this pin');
-  assert.match(indexSource, /moduleUrl\('ple-opfs\.js'\)/);
+  // The OPFS PLE table: anyformer builds it from diskformer's ple-opfs.js when the worker passes ple.
   assert.match(indexSource, /'gemma4-e2b-webgpu': \{\s*id: 'google\/gemma-4-E2B-it-qat-mobile-transformers',[^]*?backend: 'gemma4-webgpu'/);
   assert.match(indexSource, /: isGemma4Webgpu \? createGemma4WebgpuWorker\(\)/);
-  assert.match(indexSource, /moduleUrl\('gemma-4-e2b\.js'\)/);
+  assert.match(indexSource, /session = await anyformerLoad\(d\.modelId, \{\s*budget: 8e9,\s*ple: !!d\.ple,/);
   const retired = indexSource.slice(indexSource.indexOf('const RETIRED_MODEL_REPOS = ['), indexSource.indexOf('];', indexSource.indexOf('const RETIRED_MODEL_REPOS = [')));
   assert.doesNotMatch(retired, /gemma-4-E2B-it-qat-mobile-transformers/, 'a live model must not be swept as retired');
   assert.match(indexSource, /'gemma4-e4b-webgpu': \{\s*id: 'google\/gemma-4-E4B-it-qat-mobile-transformers',[^]*?backend: 'gemma4-webgpu'/);
