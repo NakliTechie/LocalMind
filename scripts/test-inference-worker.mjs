@@ -144,7 +144,7 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   assert.match(indexSource, /'anyformer-glm47flash': \{ engine: 'anyformer_models\.js', exportName: 'Glm47Flash'/);
   assert.match(indexSource, /'ling-3-flash-anyformer': \{\s*id: 'inclusionAI\/Ling-3\.0-flash-GGUF',[^]*?backend: 'anyformer-ling3flash'/);
   assert.match(indexSource, /'anyformer-ling3flash': \{ engine: 'anyformer_models\.js', exportName: 'Ling3Flash'/);
-  assert.match(indexSource, /export const ANYFORMER_URL = 'https:\/\/cdn\.jsdelivr\.net\/gh\/NakliTechie\/anyformer\.js@v\d+\.\d+\.\d+\/index\.js';/);
+  assert.match(indexSource, /export const ANYFORMER_URL = 'https:\/\/cdn\.jsdelivr\.net\/npm\/anyformer@\d+\.\d+\.\d+\/index\.js';/);
   // Qwen3 4B + FlashMap speculative decoding (Qwen3Dense in qwen35_dense.js) on the same worker.
   assert.match(indexSource, /'qwen3-4b-flashmap': \{\s*id: 'Qwen\/Qwen3-4B-GGUF',[^]*?backend: 'qwen3dense'/);
   assert.match(indexSource, /'qwen3dense': \{ engine: 'qwen35_dense\.js', exportName: 'Qwen3Dense'/);

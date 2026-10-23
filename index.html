@@ -24026,7 +24026,7 @@ self.addEventListener('message', async (e) => {
  * AnyformerModel gives an anyformer session the engine interface LocalMind's SSD worker drives (moeSsdWorkerSrc):
  * static load(null, { maxCtx, localFile, onProgress, signal }), generate(messages, { maxNewTokens, signal,
  * enableThinking }) streaming { text, token }, prime(), ensureVision(), reset(), dispose(), and the think markers. One
- * subclass per model names its repo. anyformer loads from jsDelivr by GitHub tag until it is on npm.
+ * subclass per model names its repo. anyformer loads from npm through jsDelivr, at an exact version.
  *
  * Two shapes of session (anyformer v0.3.0):
  *   - a diskformer hand engine: chunks carry the engine's token ids and session.think its markers, so they pass
@@ -24037,7 +24037,7 @@ self.addEventListener('message', async (e) => {
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.3.0/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.3.2/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
