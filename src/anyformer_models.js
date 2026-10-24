@@ -124,8 +124,8 @@ export class Flint40B extends AnyformerModel {
   static poolBytes = 4 * 2 ** 30;
 }
 
-// NVIDIA's Nemotron 3.5 Bolt E4B (dense, 4B effective): NVIDIA's Q4_K_M GGUF (6.18 GB) plus its DFlash drafter
-// (BF16, 0.74 GB), both on diskformer's llama.cpp path; anyformer's catalog entry names the drafter. Fits a 5 GB budget.
+// NVIDIA's Nemotron 3.5 Bolt E4B (dense, 4B effective): NVIDIA's Q4_K_M GGUF (6.18 GB) on diskformer's llama.cpp path,
+// in a 5 GB budget. Its DFlash drafter stays off: in Chrome it ran 24.7 tok/s against 30.0 plain (diskformer, 2026-10-24).
 export class NemotronBoltE4B extends AnyformerModel {
   static repo = 'nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB';
   static file = 'Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf';
