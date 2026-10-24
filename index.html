@@ -10527,7 +10527,9 @@ self.addEventListener('message', async (e) => {
     // the prompt. Pure heuristics — no trained model. Default on; toggle in
     // Settings. "Reversible" in spirit: the full result still lives in the
     // conversation / RAG, this only shrinks the copy fed to the model.
-    const CONCISE_DIRECTIVE = 'Be concise and direct. Skip preamble and pleasantries, do not restate the question or echo the user\'s code back, and stop as soon as the answer is complete.';
+    // "Be concise" alone made Nemotron 3.5 Bolt E4B (and NVIDIA's own GGUF) drop code fences, so the chat collapsed the code's
+    // indentation (2026-10-24); the last sentence keeps code fenced.
+    const CONCISE_DIRECTIVE = 'Be concise and direct. Skip preamble and pleasantries, do not restate the question or echo the user\'s code back, and stop as soon as the answer is complete. Put any code in a fenced Markdown code block.';
 
     function tokenSaverOn() {
       return localStorage.getItem('lm_token_saver') !== '0';   // default on
