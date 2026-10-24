@@ -16,7 +16,7 @@
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.1/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.2/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
@@ -113,5 +113,21 @@ export class Qwen36 extends AnyformerModel {
 export class Gemma4_26B extends AnyformerModel {
   static repo = 'google/gemma-4-26B-A4B-it-qat-q4_0-gguf';
   static budget = 7.5e9;
+  static poolBytes = 4 * 2 ** 30;
+}
+
+// Flint 40B-A2.5B: Recursive's Q4_1 GGUF (26.0 GB) on diskformer's FlintMoeSsd hand engine (anyformer v0.4.2+), which
+// LocalMind ran itself until 2026-10-24; the stored copy is reused. A 4 GiB expert cache as before.
+export class Flint40B extends AnyformerModel {
+  static repo = 'RecursiveSI/flint-int4-gguf';
+  static budget = 7.5e9;
+  static poolBytes = 4 * 2 ** 30;
+}
+
+// LFM2.5 24B-A2B: Liquid AI's QAD-Q4_0 GGUF (13.6 GB) on diskformer's Lfm2MoeSsd hand engine (anyformer v0.4.2+). It
+// always reasons; session.think carries the markers. A 4 GiB expert cache as before.
+export class Lfm25_24B extends AnyformerModel {
+  static repo = 'LiquidAI/LFM2.5-24B-A2B-GGUF';
+  static budget = 7e9;
   static poolBytes = 4 * 2 ** 30;
 }
