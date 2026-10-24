@@ -9473,7 +9473,7 @@ self.addEventListener('message', async (e) => {
         multimodal: false,
         agentCapable: false,
         thinking: false,
-        contextSize: 4096,
+        contextSize: 1024,   // the context diskformer's one Chrome run used (2026-10-24)
         genConfig: { max_new_tokens: 256 },
       },
       'glm-4.7-flash-anyformer': {
