@@ -16,32 +16,45 @@
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.4/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.6/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
-// bytes while it ingests and with kind 'tensors' while it uploads, and 'init'. Every byte event must reach the worker:
-// the page's load watchdog ends a load that reports no progress for 3 minutes (the Ling production check, 2026-10-23).
-function toEngineProgress(e) {
+// bytes while it ingests and with kind 'tensors' while it uploads, and 'init'; the transformers.js back end reports
+// transformers.js's own per-file 'progress', summed here over the files seen so far (`files`, one per load) so the
+// bar does not restart at each file. Every byte event must reach the worker: the page's load watchdog ends a load
+// that reports no progress for 3 minutes (the Ling production check, 2026-10-23).
+function toEngineProgress(e, files) {
   if (!e) return null;
   if (e.status === 'download') return { status: 'weights', loaded: e.loaded, total: e.total };
+  if (e.status === 'progress' && e.file) {
+    files.set(e.file, [e.loaded || 0, e.total || 0]);
+    let loaded = 0, total = 0;
+    for (const [l, t] of files.values()) { loaded += l; total += t; }
+    return { status: 'weights', loaded, total };
+  }
   if (e.status === 'weights') return { status: 'weights', kind: e.kind, loaded: e.loaded, total: e.total };
   if (e.status === 'load' || e.status === 'plan' || e.status === 'init') return { status: 'init' };
   return null;
 }
 
 export class AnyformerModel {
+  // A key of anyformer's MODELS.chat: anyformer's catalog then names the repo, the back end and the budget, so a
+  // model moves between back ends with an anyformer release alone. repo / file / budget are for models not in it.
+  static entry = null;
   static repo = null;
   static file = undefined;   // a GGUF in the repo; undefined lets anyformer pick (the file diskformer checked)
   static budget = 4e9;   // GPU bytes: the llama.cpp path plans its expert slots from it; for a hand engine, the fit check
   static poolBytes = undefined;   // a hand engine's expert cache (LocalMind's own engines ran with 4 GiB)
 
   static async load(_id, opts = {}) {
-    const { load } = await import(ANYFORMER_URL);
-    const session = await load(this.repo, {
-      budget: opts.budget || this.budget, maxCtx: opts.maxCtx, signal: opts.signal, ...(this.file ? { file: this.file } : {}),
+    const { load, MODELS } = await import(ANYFORMER_URL);
+    const entry = this.entry && MODELS.chat[this.entry], files = new Map();
+    if (this.entry && !entry) throw new Error(`anyformer has no MODELS.chat.${this.entry}`);
+    const session = await load(entry || this.repo, {
+      ...(opts.budget || !entry ? { budget: opts.budget || this.budget } : {}), maxCtx: opts.maxCtx, signal: opts.signal, ...(this.file ? { file: this.file } : {}),
       ...(this.poolBytes ? { poolBytes: this.poolBytes } : {}), ...(opts.localFile ? { localFile: opts.localFile } : {}),
-      onProgress: (e) => { const ev = toEngineProgress(e); if (ev && opts.onProgress) opts.onProgress(ev); },
+      onProgress: (e) => { const ev = toEngineProgress(e, files); if (ev && opts.onProgress) opts.onProgress(ev); },
     });
     return new this(session);
   }
@@ -122,6 +135,14 @@ export class Flint40B extends AnyformerModel {
   static repo = 'RecursiveSI/flint-int4-gguf';
   static budget = 7.5e9;
   static poolBytes = 4 * 2 ** 30;
+}
+
+// NVIDIA's Nemotron 3.5 Bolt E4B (dense, 4B effective, post-trained from Gemma 4 E4B), by anyformer's catalog entry:
+// at v0.4.6 a community q4f16 ONNX on transformers.js, text only, 4.9 GB, 34-39 tok/s in Chrome (2026-10-24).
+// diskformer's llama.cpp path ran it at 30 tok/s and its DFlash drafter made it slower (24.7); when a drafter pays on
+// WebGPU, anyformer moves the entry back and LocalMind changes nothing.
+export class NemotronBoltE4B extends AnyformerModel {
+  static entry = 'NEMOTRON_3_5_BOLT_E4B';
 }
 
 // LFM2.5 24B-A2B: Liquid AI's QAD-Q4_0 GGUF (13.6 GB) on diskformer's Lfm2MoeSsd hand engine (anyformer v0.4.2+). It
