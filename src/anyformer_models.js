@@ -16,7 +16,7 @@
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.6/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.10/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
@@ -143,6 +143,16 @@ export class Flint40B extends AnyformerModel {
 // WebGPU, anyformer moves the entry back and LocalMind changes nothing.
 export class NemotronBoltE4B extends AnyformerModel {
   static entry = 'NEMOTRON_3_5_BOLT_E4B';
+}
+
+// NVIDIA's Nemotron-Labs-Diffusion-3B (block diffusion; naklitechie's ONNX, 2.7 GB) by anyformer's catalog entry, on
+// kohra.js at confidence threshold 0.9 (anyformer 0.4.8's default): 12-16 tok/s on an M4 Pro (kohra, 2026-10-24). Opt-in
+// and experimental, never a default chat model (Chirag, via kohra). Its replies open with a newline, trimmed here.
+export class NemotronDiffusion3B extends AnyformerModel {
+  static entry = 'NEMOTRON_DIFFUSION_3B';
+  async *generate(messages, opts) {
+    for await (const c of super.generate(messages, opts)) yield { ...c, text: String(c.text || '').replace(/^\s+/, '') };
+  }
 }
 
 // LFM2.5 24B-A2B: Liquid AI's QAD-Q4_0 GGUF (13.6 GB) on diskformer's Lfm2MoeSsd hand engine (anyformer v0.4.2+). It
