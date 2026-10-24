@@ -140,12 +140,14 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   assert.match(indexSource, /'minicpmv-ssd': \{ engine: 'qwen35_moe_ssd\.js', exportName: 'MiniCpmV47Ssd'/);
   assert.match(indexSource, /'minicpm-v47-35b-a3b-ssd': \{(?:(?!genConfig)[^])*?agentCapable: true,/);
   // LFM2.5 24B-A2B (rung 2d) on the same worker; reasoning-only, so the worker marks every reply as reasoning.
-  assert.match(indexSource, /'lfm25-24b-a2b-ssd': \{\s*id: 'LiquidAI\/LFM2\.5-24B-A2B-GGUF',[^]*?backend: 'lfm2moe-ssd'/);
+  assert.match(indexSource, /'lfm25-24b-a2b-ssd': \{\s*id: 'LiquidAI\/LFM2\.5-24B-A2B-GGUF',[^]*?backend: 'anyformer-lfm25-24b'/);
+  assert.match(indexSource, /'anyformer-lfm25-24b': \{ engine: 'anyformer_models\.js', exportName: 'Lfm25_24B'/);
   assert.match(indexSource, /'lfm2moe-ssd': \{ engine: 'lfm2_moe_ssd\.js', exportName: 'Lfm2MoeSsd'/);
   // Tools on, decided by scripts/tool-battery.mjs (2026-10-14).
   assert.match(indexSource, /'lfm25-24b-a2b-ssd': \{(?:(?!genConfig)[^])*?agentCapable: true,/);
   // Flint 40B-A2.5B (rung 2g) on the same worker, from Recursive's Q4_1 GGUF; tools off until a battery decides.
-  assert.match(indexSource, /'flint-40b-a2b-ssd': \{\s*id: 'RecursiveSI\/flint-int4-gguf',[^]*?backend: 'flint-ssd'/);
+  assert.match(indexSource, /'flint-40b-a2b-ssd': \{\s*id: 'RecursiveSI\/flint-int4-gguf',[^]*?backend: 'anyformer-flint'/);
+  assert.match(indexSource, /'anyformer-flint': \{ engine: 'anyformer_models\.js', exportName: 'Flint40B'/);
   assert.match(indexSource, /'flint-ssd': \{ engine: 'flint_moe_ssd\.js', exportName: 'FlintMoeSsd'/);
   // GLM-4.7-Flash through anyformer (anyformer_models.js, pinned tag) on the same worker: no LocalMind engine.
   assert.match(indexSource, /'glm-4\.7-flash-anyformer': \{\s*id: 'unsloth\/GLM-4\.7-Flash-GGUF',[^]*?backend: 'anyformer-glm47flash'/);

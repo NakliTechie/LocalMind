@@ -8017,7 +8017,7 @@ const engineFetch = async (url, init = {}) => {
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy
 // of the engine (Gemma4Mobile) and, with ple, builds the OPFS per-layer-embedding table itself. The worker then drives
 // session.engine exactly as it drove its own engine. Pinned to the same anyformer as anyformer_models.js.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.1/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.2/index.js';
 
 let anyformerLoad = null;
 let session = null;
@@ -8162,7 +8162,7 @@ self.onmessage = async (e) => {
 // rolled-in module URLs (moduleUrl()).
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy of
 // the engine (TernaryBonsai2); the worker drives session.engine as before and attaches DFlash / MTP itself.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.1/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.2/index.js';
 const DFLASH_URL = '__TERNARY_BONSAI2_DFLASH_URL__';
 const MTP_URL = '__TERNARY_BONSAI2_MTP_URL__';
 // MTP speculative decoding (Settings → Models, default OFF; posted as `mtp` + `mtpDepth` on the
@@ -9382,7 +9382,7 @@ self.addEventListener('message', async (e) => {
       'lfm25-24b-a2b-ssd': {
         id: 'LiquidAI/LFM2.5-24B-A2B-GGUF',
         label: 'LFM2.5 24B-A2B · SSD-streamed (experimental)',
-        backend: 'lfm2moe-ssd',
+        backend: 'anyformer-lfm25-24b',   // since 2026-10-24 through anyformer (diskformer's copy of Lfm2MoeSsd)
         size: '~13.6 GB',
         gguf: { file: 'LFM2.5-24B-A2B-QAD-Q4_0.gguf', size: 13578190880 },   // LFM25_24B_A2B in lfm2_moe_ssd.js
         type: 'causal',
@@ -9401,7 +9401,7 @@ self.addEventListener('message', async (e) => {
       'flint-40b-a2b-ssd': {
         id: 'RecursiveSI/flint-int4-gguf',
         label: 'Flint 40B-A2.5B · SSD-streamed (experimental)',
-        backend: 'flint-ssd',
+        backend: 'anyformer-flint',   // since 2026-10-24 through anyformer (diskformer's copy of FlintMoeSsd)
         size: '~26 GB',
         gguf: { file: 'flint-int4-q4_1.gguf', size: 25992966976 },   // FLINT_40B_A2B in flint_moe_ssd.js
         type: 'causal',
@@ -17790,6 +17790,8 @@ self.addEventListener('message', async (e) => {
         'lfm2moe-ssd': { engine: 'lfm2_moe_ssd.js', exportName: 'Lfm2MoeSsd', label: 'LFM2.5 24B-A2B (Q4_0)' },
         'flint-ssd': { engine: 'flint_moe_ssd.js', exportName: 'FlintMoeSsd', label: 'Flint 40B-A2.5B (Q4_1)' },
         'anyformer-gemma26b': { engine: 'anyformer_models.js', exportName: 'Gemma4_26B', label: 'Gemma 4 26B-A4B (Q4_0, via anyformer)' },
+        'anyformer-flint': { engine: 'anyformer_models.js', exportName: 'Flint40B', label: 'Flint 40B-A2.5B (Q4_1, via anyformer)' },
+        'anyformer-lfm25-24b': { engine: 'anyformer_models.js', exportName: 'Lfm25_24B', label: 'LFM2.5 24B-A2B (Q4_0, via anyformer)' },
         'anyformer-qwen36': { engine: 'anyformer_models.js', exportName: 'Qwen36', label: 'Qwen3.6 35B-A3B (Q8_0, via anyformer)' },
         'anyformer-ling3flash': { engine: 'anyformer_models.js', exportName: 'Ling3Flash', label: 'Ling 3.0 Flash (Q4_K_M, via anyformer)' },
         'anyformer-glm47flash': { engine: 'anyformer_models.js', exportName: 'Glm47Flash', label: 'GLM-4.7-Flash (Q4_K_M, via anyformer)' },
@@ -19404,7 +19406,7 @@ self.addEventListener('message', async (e) => {
     const ENGINE_STORES = {
       'transformers': ['transformers-cache'], 'wllama': ['wllama'], 'lfm2-webgpu': ['gguf-v1'],
       'bonsai2-webgpu': ['gguf-cache-v1'], 'gemma4-webgpu': ['safetensors-cache-v1', 'bonsai-pipeline-v1'],
-      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'anyformer-gemma26b': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
+      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'anyformer-flint': ['on disk (OPFS)'], 'anyformer-lfm25-24b': ['on disk (OPFS)'], 'anyformer-gemma26b': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
     };
     function parseSizeBytes(size) {
       const m = /([\d.]+)\s*(GB|MB)/i.exec(String(size || ''));
@@ -24040,7 +24042,7 @@ self.addEventListener('message', async (e) => {
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.1/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.2/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
@@ -24137,6 +24139,22 @@ export class Qwen36 extends AnyformerModel {
 export class Gemma4_26B extends AnyformerModel {
   static repo = 'google/gemma-4-26B-A4B-it-qat-q4_0-gguf';
   static budget = 7.5e9;
+  static poolBytes = 4 * 2 ** 30;
+}
+
+// Flint 40B-A2.5B: Recursive's Q4_1 GGUF (26.0 GB) on diskformer's FlintMoeSsd hand engine (anyformer v0.4.2+), which
+// LocalMind ran itself until 2026-10-24; the stored copy is reused. A 4 GiB expert cache as before.
+export class Flint40B extends AnyformerModel {
+  static repo = 'RecursiveSI/flint-int4-gguf';
+  static budget = 7.5e9;
+  static poolBytes = 4 * 2 ** 30;
+}
+
+// LFM2.5 24B-A2B: Liquid AI's QAD-Q4_0 GGUF (13.6 GB) on diskformer's Lfm2MoeSsd hand engine (anyformer v0.4.2+). It
+// always reasons; session.think carries the markers. A 4 GiB expert cache as before.
+export class Lfm25_24B extends AnyformerModel {
+  static repo = 'LiquidAI/LFM2.5-24B-A2B-GGUF';
+  static budget = 7e9;
   static poolBytes = 4 * 2 ** 30;
 }
 </script>
@@ -32370,7 +32388,7 @@ const GGUF_FILE = 'LFM2.5-230M-Q4_0.gguf';
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy of
 // the LFM2.5 engine (Lfm2Mobile) and returns a session with the same generate / reset / dispose. Pinned to an exact
 // version; LocalMind's anyformer_models.js pins the same one.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.1/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.2/index.js';
 
 let anyformerLoad = null;
 let model = null;
