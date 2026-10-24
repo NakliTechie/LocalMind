@@ -124,6 +124,14 @@ export class Flint40B extends AnyformerModel {
   static poolBytes = 4 * 2 ** 30;
 }
 
+// NVIDIA's Nemotron 3.5 Bolt E4B (dense, 4B effective): NVIDIA's Q4_K_M GGUF (6.18 GB) plus its DFlash drafter
+// (BF16, 0.74 GB), both on diskformer's llama.cpp path; anyformer's catalog entry names the drafter. Fits a 5 GB budget.
+export class NemotronBoltE4B extends AnyformerModel {
+  static repo = 'nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB';
+  static file = 'Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf';
+  static budget = 5e9;
+}
+
 // LFM2.5 24B-A2B: Liquid AI's QAD-Q4_0 GGUF (13.6 GB) on diskformer's Lfm2MoeSsd hand engine (anyformer v0.4.2+). It
 // always reasons; session.think carries the markers. A 4 GiB expert cache as before.
 export class Lfm25_24B extends AnyformerModel {

@@ -3008,6 +3008,7 @@
           <option value="lfm25-24b-a2b-ssd">LFM2.5 24B-A2B &middot; SSD-streamed, experimental (~13.6 GB)</option>
           <option value="flint-40b-a2b-ssd">Flint 40B-A2.5B &middot; SSD-streamed, experimental, coding (~26 GB)</option>
           <option value="ling-3-flash-anyformer">Ling 3.0 Flash 124B-A5B &middot; via anyformer, experimental (~81 GB)</option>
+          <option value="nemotron-bolt-e4b-anyformer">Nemotron 3.5 Bolt E4B &middot; via anyformer, DFlash drafter, experimental (~6.9 GB)</option>
           <option value="glm-4.7-flash-anyformer">GLM-4.7-Flash 30B-A3B &middot; via anyformer, experimental (~18 GB)</option>
           <option value="qwen3-4b-flashmap">Qwen3 4B &middot; FlashMap speculative decoding, experimental (~5.2 GB)</option>
         </select>
@@ -9421,6 +9422,20 @@ self.addEventListener('message', async (e) => {
         label: 'Ling 3.0 Flash 124B-A5B · via anyformer (experimental)',
         backend: 'anyformer-ling3flash',
         size: '~81 GB',
+        type: 'causal',
+        multimodal: false,
+        agentCapable: false,
+        thinking: true,
+        contextSize: 4096,
+        genConfig: { max_new_tokens: 2048 },
+      },
+      // backend:'anyformer-bolt-e4b' → NVIDIA's Nemotron 3.5 Bolt E4B through anyformer, which sends it to diskformer's
+      // llama.cpp path with its DFlash drafter (speculative decoding; greedy replies identical to plain decoding).
+      'nemotron-bolt-e4b-anyformer': {
+        id: 'nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB',
+        label: 'Nemotron 3.5 Bolt E4B · via anyformer, DFlash drafter (experimental)',
+        backend: 'anyformer-bolt-e4b',
+        size: '~6.9 GB',
         type: 'causal',
         multimodal: false,
         agentCapable: false,
@@ -17795,6 +17810,7 @@ self.addEventListener('message', async (e) => {
         'anyformer-qwen36': { engine: 'anyformer_models.js', exportName: 'Qwen36', label: 'Qwen3.6 35B-A3B (Q8_0, via anyformer)' },
         'anyformer-ling3flash': { engine: 'anyformer_models.js', exportName: 'Ling3Flash', label: 'Ling 3.0 Flash (Q4_K_M, via anyformer)' },
         'anyformer-glm47flash': { engine: 'anyformer_models.js', exportName: 'Glm47Flash', label: 'GLM-4.7-Flash (Q4_K_M, via anyformer)' },
+        'anyformer-bolt-e4b': { engine: 'anyformer_models.js', exportName: 'NemotronBoltE4B', label: 'Nemotron 3.5 Bolt E4B (Q4_K_M + DFlash, via anyformer)' },
         'qwen3dense': { engine: 'qwen35_dense.js', exportName: 'Qwen3Dense', label: 'Qwen3 4B (Q8_0) + FlashMap' },
         'hyv3-ssd': { engine: 'hy_v3_moe_ssd.js', exportName: 'HyV3MoeSsd', label: 'Hy-Memory 30B-A3B (Q8_0)' },   // the memory writer only (WRITER_MODELS)
         'qwen35dense': { engine: 'qwen35_dense.js', exportName: 'Qwen35Dense', label: 'Underdog Saluki 27B (IQ2-mix)' },
@@ -19406,7 +19422,7 @@ self.addEventListener('message', async (e) => {
     const ENGINE_STORES = {
       'transformers': ['transformers-cache'], 'wllama': ['wllama'], 'lfm2-webgpu': ['gguf-v1'],
       'bonsai2-webgpu': ['gguf-cache-v1'], 'gemma4-webgpu': ['safetensors-cache-v1', 'bonsai-pipeline-v1'],
-      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'anyformer-flint': ['on disk (OPFS)'], 'anyformer-lfm25-24b': ['on disk (OPFS)'], 'anyformer-gemma26b': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
+      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-bolt-e4b': ['on disk (OPFS)'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'anyformer-flint': ['on disk (OPFS)'], 'anyformer-lfm25-24b': ['on disk (OPFS)'], 'anyformer-gemma26b': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
     };
     function parseSizeBytes(size) {
       const m = /([\d.]+)\s*(GB|MB)/i.exec(String(size || ''));
@@ -24148,6 +24164,14 @@ export class Flint40B extends AnyformerModel {
   static repo = 'RecursiveSI/flint-int4-gguf';
   static budget = 7.5e9;
   static poolBytes = 4 * 2 ** 30;
+}
+
+// NVIDIA's Nemotron 3.5 Bolt E4B (dense, 4B effective): NVIDIA's Q4_K_M GGUF (6.18 GB) plus its DFlash drafter
+// (BF16, 0.74 GB), both on diskformer's llama.cpp path; anyformer's catalog entry names the drafter. Fits a 5 GB budget.
+export class NemotronBoltE4B extends AnyformerModel {
+  static repo = 'nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB';
+  static file = 'Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf';
+  static budget = 5e9;
 }
 
 // LFM2.5 24B-A2B: Liquid AI's QAD-Q4_0 GGUF (13.6 GB) on diskformer's Lfm2MoeSsd hand engine (anyformer v0.4.2+). It
