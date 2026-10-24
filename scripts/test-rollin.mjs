@@ -49,7 +49,7 @@ for (const [file, name] of Object.entries(expect)) {
   const mod = await import(dataUrl(file));
   assert.equal(typeof mod[name], 'function', `${file} does not export ${name} once rolled in`);
 }
-// inference-worker.js reaches lfm2_5.js through new URL('./lfm2_5.js', import.meta.url).
-assert.match(rewriteModuleImports(modules.find((m) => m.file === 'inference-worker.js').code, dataUrl), /new URL\('data:text\/javascript;base64,/);
+// inference-worker.js loads LFM2.5 through anyformer (an absolute jsDelivr URL), so it has no relative import left.
+assert.doesNotMatch(modules.find((m) => m.file === 'inference-worker.js').code, /new URL\('\.\//);
 
 console.log(`single file: ok — ${modules.length} modules rolled in, graph linked, ${(Buffer.byteLength(html) / 1e6).toFixed(2)} MB`);
