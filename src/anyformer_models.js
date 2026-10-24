@@ -16,7 +16,7 @@
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.10/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.11/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
@@ -153,6 +153,14 @@ export class NemotronDiffusion3B extends AnyformerModel {
   async *generate(messages, opts) {
     for await (const c of super.generate(messages, opts)) yield { ...c, text: String(c.text || '').replace(/^\s+/, '') };
   }
+}
+
+// DeepSeek V4.1 Flash 1017 (763B, 6 of 384 experts a token) by anyformer's catalog entry, on diskformer's llama.cpp
+// path: ISTA-DASLab's GSQ-RCO IQ1_M in four parts (120.7 GB) plus a separate 110.6 GB Engram file, 231.3 GB of browser
+// storage, an 8 GB GPU budget. A tech demo: about 0.4 tok/s natively with the weights on a USB SSD (diskformer,
+// 2026-10-24); one prompt checked in Chrome. Opt-in only.
+export class DeepSeekV41Flash extends AnyformerModel {
+  static entry = 'DEEPSEEK_V4_1_FLASH';
 }
 
 // LFM2.5 24B-A2B: Liquid AI's QAD-Q4_0 GGUF (13.6 GB) on diskformer's Lfm2MoeSsd hand engine (anyformer v0.4.2+). It
