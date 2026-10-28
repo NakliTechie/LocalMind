@@ -2674,7 +2674,7 @@
               <li><strong>Ternary Bonsai 2 27B</strong> (~5.9 GB) &mdash; text + agent. PrismML's Ternary Bonsai 2 27B (Sept 2026; ternary 1.75-bit weights, Qwen3.8-27B backbone, 98% of the full-precision model's benchmark score) on a from-scratch WebGPU engine: hand-written WGSL for ternary dequant + Gated-DeltaNet linear attention, reading the PTQ1_0 GGUF directly. Ported from <em>webml-community/ternary-bonsai-2-webgpu-kernels</em>; Apache-2.0 weights. WebGPU-only &mdash; the biggest in-browser model here. A reasoning model: flip <strong>Show reasoning</strong> in Settings for its chain-of-thought. Text-only here (its optional vision tower is not loaded).</li>
               <li><strong>Underdog Saluki 27B</strong> (~7.9 GB) &mdash; text + agent. ConwayResearch's Underdog Saluki 27B 1.0 (Oct 2026): Qwen3.8-27B as one 2-bit-class IQ2-mix GGUF, tuned to keep tool calling intact (the vendor reports 88 of 120 on a frozen BFCL v4 tool-calling set, against 84 for the full-size model and 70 for Ternary Bonsai 2). Runs on a from-scratch WebGPU engine that reads the GGUF&rsquo;s eleven llama.cpp block types directly; greedy output matches llama.cpp on the same file. The first load copies the 7.9 GB file into this browser&rsquo;s on-device storage once (or pick the file you already have with <strong>Load .gguf from disk&hellip;</strong>); it needs about 8 GB of GPU memory. Apache-2.0 weights. A reasoning model: flip <strong>Show reasoning</strong> in Settings for its chain-of-thought. Text-only here (its optional vision add-on is not loaded).</li>
               <li><strong>Qwen3.5 4B</strong> (~3 GB) &mdash; text + image + agent (tool calling). Qwen3.5 at q4f16, Apache-2.0; its native 262K context is capped to 32K to keep browser memory bounded.</li>
-              <li><strong>LFM2.5 1.2B</strong> (~760 MB) &mdash; text + agent (tool calling). Liquid AI's LFM2.5-1.2B-Instruct (Jan 2026) &mdash; same LFM2 hybrid arch as the 230M default, RL-tuned for instruction following + tool use. q4f16, 32K context.</li>
+              <li><strong>LFM3 1.7B</strong> (~1.4 GB) &mdash; text + agent (tool calling). Liquid AI's LFM3-1.7B (Oct 2026), post-trained for agent use, on a new hybrid of short convolutions, sliding-window and global attention. Its tokenizer spends 3 to 4 times fewer tokens on Indic scripts than LFM2.5. A reasoning model: flip <strong>Show reasoning</strong> in Settings for its chain-of-thought. q4f16, 32K context.</li>
               <li><strong>Gemini Nano</strong> (0 MB) &mdash; Google's on-device model built into Chrome, via the Prompt API. Zero download, no WebGPU. Chrome/Edge only; runs where your browser exposes <code>self.LanguageModel</code>. When Nano is already downloaded on desktop Chrome/Edge, LocalMind starts on it by default so you can chat with no model download.</li>
               <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
               <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only. About 4&times; the ONNX Gemma 4 E2B&rsquo;s decode speed on the same Mac (171 vs 42 tok/s, M4 Pro); text-only.</li>
@@ -2996,7 +2996,7 @@
           <option value="ternary-bonsai-2-27b-webgpu">Ternary Bonsai 2 27B &middot; Agent (~5.9 GB)</option>
           <option value="underdog-saluki-27b">Underdog Saluki 27B &middot; Agent (~7.9 GB)</option>
           <option value="qwen35-4b">Qwen3.5 4B &middot; Vision + Agent (~3 GB)</option>
-          <option value="lfm2-1.2b">LFM2.5 1.2B &middot; Agent (~760 MB)</option>
+          <option value="lfm3-1.7b">LFM3 1.7B &middot; Agent (~1.4 GB)</option>
           <option value="gemini-nano">Gemini Nano &middot; Built into Chrome (0 MB)</option>
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
@@ -7483,7 +7483,7 @@ reply({ type: 'worker-ready' });
 // recipe (fused fp16 for WebGPU) are in reference/MDLM-algorithm.md.
 
 import * as ortDefault from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.26.0/dist/ort.webgpu.min.mjs';
-import { AutoTokenizer } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
+import { AutoTokenizer } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/+esm';
 
 // Tiny-A2D Qwen3-0.6B MDLM token ids (tokenizer.mask_token_id / <|im_end|>).
 export const MASK_ID = 151669n;
@@ -8810,7 +8810,7 @@ self.onmessage = async (e) => {
 // WASM by default so it never contends with the chat model's WebGPU. On-device
 // only — the sole network touch is the one-time model fetch. (Non-English turns
 // route to the existing Whisper worker on the main thread instead.)
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/+esm';
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
 
@@ -8853,7 +8853,7 @@ self.onmessage = async (e) => {
 // every module fp16 (~1.0 GB); Light = q4f16 (~0.36 GB) for phones. (q4f16 was
 // degenerate on the 256M under 4.2.0; the 500M on this 3.7.1 pin is under test.)
 //
-// VERSION PIN — this vision worker pins transformers.js to 3.7.1, NOT the @4.3.1
+// VERSION PIN — this vision worker pins transformers.js to 3.7.1, NOT the @4.3.2
 // the chat/OCR workers use. Verified live 2026-08-21: on 4.2.0 SmolVLM's Idefics3
 // processor preprocesses fine but generation is DEGENERATE (pure gibberish); on
 // 3.7.1 the identical model+image+dtype produces a coherent, image-grounded
@@ -8940,7 +8940,7 @@ import {
   ChatterboxModel,
   AutoProcessor,
   Tensor,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/+esm';
 
 env.allowLocalModels = true;
 env.localModelPath = '/models/';
@@ -9055,6 +9055,7 @@ self.addEventListener('message', async (e) => {
       'onnx-community/Apertus-v1.1-4B-Instruct-ONNX', 'onnx-community/Qwen3-4B-ONNX',
       'onnx-community/granite-4.0-1b-ONNX-web', 'onnx-community/granite-4.0-micro-ONNX-web',
       'onnx-community/Ternary-Bonsai-4B-ONNX', // first-generation ternary 4B, replaced by Ternary Bonsai 2 4B (2026-10-16)
+      'LiquidAI/LFM2.5-1.2B-Instruct-ONNX', // replaced by LFM3 1.7B (2026-10-28)
     ];
 
     const MODELS = {
@@ -9077,23 +9078,23 @@ self.addEventListener('message', async (e) => {
         // top_k 20. Apache-2.0, native tool calling.
         genConfig: { temperature: 0.7, top_k: 20, top_p: 0.8, max_new_tokens: 2048, repetition_penalty: 1.05 },
       },
-      'lfm2-1.2b': {
-        id: 'LiquidAI/LFM2.5-1.2B-Instruct-ONNX',
-        label: 'LFM2.5 1.2B',
+      'lfm3-1.7b': {
+        id: 'LiquidAI/LFM3-1.7B-ONNX',
+        label: 'LFM3 1.7B',
         dtype: 'q4f16',
-        size: '~760 MB',
+        size: '~1.4 GB',
         type: 'causal',
         multimodal: false,
         agentCapable: true,
         contextSize: 32768,
-        // Liquid AI LFM2.5-1.2B-Instruct (Jan 2026) — the same LFM2 hybrid arch as
-        // the 230M default (so the ChatML-template fallback in generateCausal
-        // covers it), RL-tuned for instruction following + tool use (IFBench
-        // 47.33). A bigger-brain drop-in sibling of the default. First-party ONNX
-        // (q4f16). LFM Open License v1.0. Native 128K context capped to 32K.
-        // Liquid recommends temperature 0.3 / min_p 0.15 / rep 1.05; min_p isn't
-        // exposed by Transformers.js generate(), so top_p approximates.
-        genConfig: { temperature: 0.3, top_k: 20, top_p: 0.95, max_new_tokens: 2048, repetition_penalty: 1.05 },
+        // Liquid AI LFM3-1.7B (2026-10-23), replacing LFM2.5 1.2B (2026-10-28). model_type 'lfm3' (13 short-conv,
+        // 5 sliding-window and 6 global attention layers), which transformers.js loads from 4.3.2 on. First-party
+        // ONNX (q4f16, 1.38 GB). Post-trained for agent harnesses; its tool calls are the Qwen3-Coder XML form
+        // (<tool_call><function=…><parameter=…>), which parseToolCalls already reads. A reasoning model: the
+        // template thinks unless enable_thinking is false, so generateCausal passes the Show-reasoning toggle.
+        // LFM Open License v1.0. Native 256K context capped to 32K. Liquid's "general" sampling (chat, tools,
+        // agents): temperature 0.1, top_k 50, repetition_penalty 1.1, no top_p.
+        genConfig: { temperature: 0.1, top_k: 50, top_p: 1.0, max_new_tokens: 2048, repetition_penalty: 1.1 },
       },
       'gemini-nano': {
         id: 'chrome-builtin/gemini-nano',
@@ -10485,6 +10486,7 @@ self.addEventListener('message', async (e) => {
     const TOKEN_WEIGHTS = {
       qwen:     [0.196, 0.549, 0.473, 0.515, 0.933, 0.717, 1.011, 0.488, 0.644, 0.612, 0.615, 0.291, 0.236, 0.371, 2.845],
       lfm2:     [0.202, 0.578, 1.495, 2.353, 2.97, 2.964, 2.971, 2.494, 2.966, 2.956, 2.98, 0.485, 0.357, 0.446, 5.534],
+      lfm3:     [0.218, 0.387, 0.578, 0.682, 0.851, 0.661, 0.858, 0.716, 0.682, 0.66, 0.643, 0.312, 0.334, 0.494, 2.457],
       gemma:    [0.199, 0.618, 0.28, 0.237, 0.659, 0.424, 0.908, 0.25, 0.361, 0.34, 0.331, 0.352, 0.233, 0.412, 2.692],
       minicpm5: [0.212, 0.427, 0.902, 1.846, 3.18, 3.191, 3.124, 1.986, 2.127, 1.452, 2.386, 1.054, 0.278, 0.626, 0.01],
       unknown:  [0.244, 0.711, 1.719, 2.706, 3.657, 3.67, 3.593, 2.868, 3.411, 3.4, 3.427, 1.212, 0.411, 0.729, 6.364],
@@ -10502,7 +10504,7 @@ self.addEventListener('message', async (e) => {
       'gemma4-26b-a4b-ssd': 'gemma',
       'ternary-bonsai-2-2b-webgpu': 'qwen',
       'ternary-bonsai-2-4b-webgpu': 'qwen',
-      'lfm2-1.2b': 'lfm2',
+      'lfm3-1.7b': 'lfm3',
       'lfm2-230m-gguf': 'lfm2',
       'lfm2-230m-webgpu': 'lfm2',
       'gemma4-e2b': 'gemma',
@@ -17620,7 +17622,7 @@ import {
   pipeline,
   AutoTokenizer,
   AutoModelForSequenceClassification,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
@@ -17931,7 +17933,7 @@ import {
   Sam3TrackerModel,
   AutoProcessor,
   RawImage,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
@@ -18072,7 +18074,7 @@ import {
   RawImage,
   TextStreamer,
   InterruptableStoppingCriteria,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
@@ -18245,7 +18247,7 @@ import {
   AutoTokenizer,
   WhisperForConditionalGeneration,
   full,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm';
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/+esm';
 
 env.allowLocalModels  = true;
 env.localModelPath    = '/models/';
@@ -18724,10 +18726,10 @@ __rdbCleanup();
 // would race the 'load' postMessage from the main thread — it can arrive
 // before the module-body handler is registered and get dropped. Kick off
 // the import eagerly and have the message handler await it.
-let env, AutoTokenizer, AutoModelForCausalLM, AutoProcessor, Gemma4ForConditionalGeneration, Qwen3_5ForConditionalGeneration, load_image, TextStreamer, InterruptableStoppingCriteria;
+let env, AutoTokenizer, AutoModelForCausalLM, AutoProcessor, Gemma4ForConditionalGeneration, Qwen3_5ForConditionalGeneration, load_image, TextStreamer, InterruptableStoppingCriteria, Tensor;
 let stopping_criteria;
 
-const __modReady = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/+esm').then((m) => {
+const __modReady = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/+esm').then((m) => {
   env = m.env;
   AutoTokenizer = m.AutoTokenizer;
   AutoModelForCausalLM = m.AutoModelForCausalLM;
@@ -18737,6 +18739,7 @@ const __modReady = import('https://cdn.jsdelivr.net/npm/@huggingface/transformer
   load_image = m.load_image;
   TextStreamer = m.TextStreamer;
   InterruptableStoppingCriteria = m.InterruptableStoppingCriteria;
+  Tensor = m.Tensor;
   env.allowLocalModels  = true;
   env.localModelPath    = '/models/';
   env.allowRemoteModels = true;
@@ -18756,6 +18759,20 @@ function progressCallback(p) {
   self.postMessage({ type: 'progress', data: p });
 }
 
+// LiquidAI's LFM3 ONNX export names its last-position input logits_to_keep (shape [1]); transformers.js 4.3.2 feeds
+// only num_logits_to_keep and rejects the run as "Missing the following inputs: logits_to_keep". Hide the input from
+// transformers.js's check and add it at the session's run, set to 1: generate() reads only the last position's logits.
+// Checked in Chrome on this Mac, 2026-10-28: a 20-token and a 1,176-token prompt both answer correctly.
+function feedLogitsToKeep(m) {
+  const sess = m && m.sessions && m.sessions.model;
+  if (!sess || !sess.inputNames.includes('logits_to_keep')) return;
+  const names = sess.inputNames.filter((n) => n !== 'logits_to_keep');
+  const one = new Tensor('int64', [1n], [1]).ort_tensor;
+  const run = sess.run.bind(sess);
+  Object.defineProperty(sess, 'inputNames', { value: names });
+  sess.run = (feeds, opts) => run({ ...feeds, logits_to_keep: one }, opts);
+}
+
 async function loadCausal(modelId, dtype) {
   processor = null; tokenizer = null; model = null;
 
@@ -18768,6 +18785,7 @@ async function loadCausal(modelId, dtype) {
     device: 'webgpu',
     progress_callback: progressCallback,
   });
+  feedLogitsToKeep(model);
 
   // Warmup: compile WebGPU shaders with a single token
   self.postMessage({ type: 'warmup' });
@@ -18790,7 +18808,7 @@ async function loadMultimodal(modelId, dtype, modelClass) {
     ? Qwen3_5ForConditionalGeneration
     : Gemma4ForConditionalGeneration;
   if (!ConditionalGenerationModel) {
-    throw new Error('Transformers.js 4.3.1 does not export ' + modelClass);
+    throw new Error('Transformers.js 4.3.2 does not export ' + modelClass);
   }
   model = await ConditionalGenerationModel.from_pretrained(modelId, {
     dtype: dtype,
@@ -18807,8 +18825,10 @@ async function loadMultimodal(modelId, dtype, modelClass) {
   self.postMessage({ type: 'ready' });
 }
 
-async function generateCausal(chatMessages, id, genConfig) {
+async function generateCausal(chatMessages, id, genConfig, enableThinking) {
   stopping_criteria.reset();
+  // Templates that think by default (LFM3) read enable_thinking; the others ignore it.
+  const thinking = enableThinking === true;
 
   try {
     let inputs;
@@ -18816,6 +18836,7 @@ async function generateCausal(chatMessages, id, genConfig) {
       inputs = tokenizer.apply_chat_template(chatMessages, {
         add_generation_prompt: true,
         return_dict: true,
+        enable_thinking: thinking,
       });
     } catch (tplErr) {
       // The pinned transformers.js jinja can't parse some real templates — e.g.
@@ -18838,6 +18859,7 @@ async function generateCausal(chatMessages, id, genConfig) {
           inputs = tokenizer.apply_chat_template(chatMessages, {
             add_generation_prompt: true,
             return_dict: true,
+            enable_thinking: thinking,
             chat_template: raw,
           });
           salvaged = true;
@@ -18860,10 +18882,25 @@ async function generateCausal(chatMessages, id, genConfig) {
       }
     }
 
+    // A thinking template ends the prompt on an open <think> (LFM3), so the reply starts inside the thought: open
+    // LocalMind's <|think|> marker first and swap the model's </think> for <|/think|>. With thinking off LFM3 still
+    // opens <think> itself on some prompts (Liquid's card says so; seen on a 1,176-token prompt), so that becomes
+    // <|think|> too. Both tags are one token there, so each arrives whole in one streamer chunk.
+    const promptText = thinking ? tokenizer.decode(inputs.input_ids.tolist()[0].slice(-4).map(Number)) : '';
+    let inThink = thinking && promptText.trimEnd().endsWith('<think>');
+    if (inThink) self.postMessage({ type: 'token', token: '<|think|>', id });
     const streamer = new TextStreamer(tokenizer, {
       skip_prompt: true,
       skip_special_tokens: true,
       callback_function: (text) => {
+        if (!inThink && text.indexOf('<think>') !== -1) {
+          text = text.split('<think>').join('<|think|>');
+          inThink = true;
+        }
+        if (inThink && text.indexOf('</think>') !== -1) {
+          text = text.split('</think>').join('<|/think|>');
+          inThink = false;
+        }
         self.postMessage({ type: 'token', token: text, id });
       },
     });
@@ -18992,7 +19029,7 @@ self.addEventListener('message', async (e) => {
     if (loadedType === 'multimodal') {
       await generateMultimodal(messages, id, attData, enableThinking, generationConfig);
     } else {
-      await generateCausal(messages, id, generationConfig);
+      await generateCausal(messages, id, generationConfig, enableThinking);
     }
   } else if (type === 'stop') {
     stopping_criteria.interrupt();

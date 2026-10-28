@@ -14,7 +14,7 @@
 //   node scripts/bench-engines.mjs --url http://127.0.0.1:8000/ --profile ~/.cache/lm-bench --out bench.json
 //   node scripts/bench-engines.mjs --list          # print the rows and exit
 //   node scripts/bench-engines.mjs --row-timeout 20 # minutes a row may show no progress (default 20)
-//   node scripts/bench-engines.mjs --suite mtp --match 'plain|adaptive'   # only the rows whose engine label matches
+//   node scripts/bench-engines.mjs --suite mtp --match 'plain|adaptive'   # only the rows whose "model · engine" label matches
 //
 // Needs Chrome with WebGPU. The first run downloads every model in the suite into --profile (engines:
 // ~4.5 GB, dflash: ~7 GB, mtp: ~7.5 GB); later runs reuse that cache. Close other GPU-heavy work first: a busy
@@ -44,12 +44,15 @@ const STORY = 'Write a short paragraph about lighthouses.';
 const CODE = 'Write a Python class HashMap with put, get, delete and automatic resizing, using separate chaining. Code only.';
 const TOK = { // tokenizer.json source per model family
   lfm2: 'LiquidAI/LFM2.5-1.2B-Instruct-ONNX',
+  lfm3: 'LiquidAI/LFM3-1.7B-ONNX',
   gemma4: 'onnx-community/gemma-4-E2B-it-ONNX',
   qwen35: 'onnx-community/Qwen3.5-4B-ONNX-OPT',
   qwen38: 'Qwen/Qwen3.8-27B',
 };
 // Baselines the roster does not carry are registered as custom models for the run.
 const LFM230_ONNX = { id: 'LiquidAI/LFM2.5-230M-ONNX', label: 'LFM2.5 230M · ONNX (bench)', dtype: 'q4', size: '~210 MB',
+  type: 'causal', multimodal: false, agentCapable: false, contextSize: 32768, custom: true, genConfig: { max_new_tokens: 2048 } };
+const LFM12_ONNX = { id: 'LiquidAI/LFM2.5-1.2B-Instruct-ONNX', label: 'LFM2.5 1.2B · ONNX (bench)', dtype: 'q4f16', size: '~760 MB',
   type: 'causal', multimodal: false, agentCapable: false, contextSize: 32768, custom: true, genConfig: { max_new_tokens: 2048 } };
 const LFM12_GGUF_URL = 'https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/main/LFM2.5-1.2B-Instruct-Q4_K_M.gguf';
 const LFM12_GGUF = { id: LFM12_GGUF_URL, label: 'LFM2.5 1.2B · GGUF (bench)', backend: 'wllama', size: '~730 MB',
@@ -61,8 +64,9 @@ const ROWS = [
   { suite: 'engines', model: 'LFM2.5 230M', engine: 'wllama (GGUF)', key: 'lfm2-230m-gguf', tok: 'lfm2', prompt: PROSE },
   { suite: 'engines', model: 'Gemma 4 E2B', engine: 'hand-written WGSL', key: 'gemma4-e2b-webgpu', tok: 'gemma4', prompt: PROSE },
   { suite: 'engines', model: 'Gemma 4 E2B', engine: 'Transformers.js (ONNX)', key: 'gemma4-e2b', tok: 'gemma4', prompt: PROSE },
-  { suite: 'engines', model: 'LFM2.5 1.2B', engine: 'Transformers.js (ONNX)', key: 'lfm2-1.2b', tok: 'lfm2', prompt: PROSE },
+  { suite: 'engines', model: 'LFM2.5 1.2B', engine: 'Transformers.js (ONNX)', key: LFM12_ONNX.id, custom: LFM12_ONNX, tok: 'lfm2', prompt: PROSE },
   { suite: 'engines', model: 'LFM2.5 1.2B', engine: 'wllama (GGUF)', key: LFM12_GGUF_URL, custom: LFM12_GGUF, tok: 'lfm2', prompt: PROSE },
+  { suite: 'engines', model: 'LFM3 1.7B', engine: 'Transformers.js (ONNX)', key: 'lfm3-1.7b', tok: 'lfm3', prompt: PROSE },
   { suite: 'engines', model: 'Qwen3.5 4B', engine: 'Transformers.js (ONNX)', key: 'qwen35-4b', tok: 'qwen35', prompt: PROSE },
   { suite: 'dflash', model: 'Ternary Bonsai 2 27B', engine: 'hand-written WGSL · code', key: 'ternary-bonsai-2-27b-webgpu', dflash: false, tok: 'qwen38', prompt: CODE },
   { suite: 'dflash', model: 'Ternary Bonsai 2 27B', engine: 'WGSL + DFlash 2 · code', key: 'ternary-bonsai-2-27b-webgpu', dflash: true, tok: 'qwen38', prompt: CODE },
@@ -80,8 +84,8 @@ const ROWS = [
   { suite: 'ple', model: 'Gemma 4 E2B', engine: 'WGSL · PLE resident · code', key: 'gemma4-e2b-webgpu', ple: false, tok: 'gemma4', prompt: CODE },
   { suite: 'ple', model: 'Gemma 4 E2B', engine: 'WGSL · PLE from OPFS · code', key: 'gemma4-e2b-webgpu', ple: true, tok: 'gemma4', prompt: CODE },
 ];
-const MATCH = opt('match', null);   // keep only rows whose engine label matches this regex
-const rows = ROWS.filter((r) => (SUITE === 'all' || r.suite === SUITE) && (!MATCH || new RegExp(MATCH).test(r.engine)));
+const MATCH = opt('match', null);   // keep only rows whose "model · engine" label matches this regex
+const rows = ROWS.filter((r) => (SUITE === 'all' || r.suite === SUITE) && (!MATCH || new RegExp(MATCH).test(`${r.model} · ${r.engine}`)));
 // Every row's boot registers ALL the custom baselines, not just its own. LFM2.5-230M-ONNX is on the app's
 // retired list, and the boot sweep deletes a retired repo's cache unless a custom entry reads it, so a row
 // that dropped it would make the next run download it again.

@@ -212,7 +212,7 @@ ok('end to end on text', () => {
 ok('template kwargs', () => {
   assert.deepEqual(W.memoryWriterTemplateKwargs({ id: 'tencent/Hy-Memory-30B-A3B' }, 'hy-memory-30b-a3b-ssd'), { reasoning_effort: 'no_think', enable_thinking: false });
   assert.deepEqual(W.memoryWriterTemplateKwargs({ endpointModel: 'hy-memory', id: 'endpoint:x' }, 'ep-1'), { reasoning_effort: 'no_think', enable_thinking: false });
-  assert.deepEqual(W.memoryWriterTemplateKwargs({ id: 'LiquidAI/LFM2.5-1.2B-Instruct-ONNX' }, 'lfm2-1.2b'), { enable_thinking: false });
+  assert.deepEqual(W.memoryWriterTemplateKwargs({ id: 'LiquidAI/LFM3-1.7B-ONNX' }, 'lfm3-1.7b'), { enable_thinking: false });
   assert.deepEqual(W.MEMORY_WRITER_CATEGORIES, ['fact', 'preference', 'task']);
 });
 
