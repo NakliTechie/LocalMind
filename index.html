@@ -62535,7 +62535,7 @@ function _adapterBuildQwenXmlToolPrompt(tools, userPrompt) {
 function _adapterParseQwenXmlCalls(text, toolDefs) {
   const out = [];
   const propsFor = (name) => {
-    const t = (toolDefs || []).find(d => d && d.name === name);
+    const t = _adapterFindToolDef(toolDefs, name);
     return (t && t.parameters && t.parameters.properties) || {};
   };
   const fnRe = /(?:<tool_call>\s*)?<function=([^>\n]+)>([\s\S]*?)(?:<\/function>\s*(?:<\/tool_call>)?|(?=<tool_call>|<function=)|$)/g;
@@ -62643,7 +62643,7 @@ function _adapterCoerceXmlParam(raw, schema) {
 function _adapterParseXmlFunctionCalls(text, toolDefs) {
   const out = [];
   const propsFor = (name) => {
-    const t = (toolDefs || []).find(d => d && d.name === name);
+    const t = _adapterFindToolDef(toolDefs, name);
     return (t && t.parameters && t.parameters.properties) || {};
   };
   const readParams = (body, name) => {
@@ -62720,6 +62720,24 @@ function _adapterParseStrippedXmlCall(text) {
   return { name: segs[0].name, args, start: segs[0].start, end: text.length };
 }
 
+// The tool a model named, matched to the caller's list. Small models change the case of a name (LFM3 1.7B wrote
+// <function=bash> for a tool named Bash, seen in NakliOS 2026-10-28), so an exact match wins, then a single
+// case-insensitive match; two tools that differ only by case stay ambiguous and match nothing. With no list, the
+// name passes through unchanged, as before.
+function _adapterResolveToolName(name, knownToolNames) {
+  if (!knownToolNames || !knownToolNames.length) return name;
+  if (knownToolNames.indexOf(name) !== -1) return name;
+  const lower = String(name).toLowerCase();
+  const hits = knownToolNames.filter(n => String(n).toLowerCase() === lower);
+  return hits.length === 1 ? hits[0] : null;
+}
+// The same match against tool definitions, for the argument schema.
+function _adapterFindToolDef(toolDefs, name) {
+  const defs = (toolDefs || []).filter(d => d && d.name);
+  const resolved = _adapterResolveToolName(name, defs.map(d => d.name));
+  return resolved == null ? undefined : defs.find(d => d.name === resolved);
+}
+
 function _adapterParseToolCalls(text, knownToolNames, toolDefs) {
   const toolCalls = [];
   let cleanText = text;
@@ -62752,8 +62770,8 @@ function _adapterParseToolCalls(text, knownToolNames, toolDefs) {
   // Gated on nothing matching above and on a known tool name, so a hallucinated name never runs.
   if (toolCalls.length === 0 && text.indexOf('<function=') !== -1) {
     for (const c of _adapterParseQwenXmlCalls(text, toolDefs)) {
-      const allowed = !knownToolNames || !knownToolNames.length || knownToolNames.indexOf(c.name) !== -1;
-      if (allowed) toolCalls.push({ name: c.name, arguments: c.arguments });
+      const name = _adapterResolveToolName(c.name, knownToolNames);
+      if (name != null) toolCalls.push({ name, arguments: c.arguments });
       cleanText = cleanText.replace(c.raw, '');
     }
     cleanText = cleanText.replace(/<\/?tool_call>/g, '').trim();
@@ -62840,9 +62858,8 @@ function _adapterParseToolCalls(text, knownToolNames, toolDefs) {
     const callStr = seg.split('<|tool_call_end|>')[0];
     const m = callStr.match(/([a-zA-Z_]\w*)\s*\(([\s\S]*?)\)\s*\]?\s*$/) || callStr.match(/([a-zA-Z_]\w*)\s*\(([\s\S]*)/);
     if (m) {
-      const name = m[1];
-      const allowed = !knownToolNames || !knownToolNames.length || knownToolNames.indexOf(name) !== -1;
-      if (allowed) {
+      const name = _adapterResolveToolName(m[1], knownToolNames);
+      if (name != null) {
         toolCalls.push({ name, arguments: _adapterParsePythonicArgs(m[2]) });
         cleanText = cleanText.replace(/<\|tool_call_start\|>[\s\S]*?(<\|tool_call_end\|>|$)/, '').trim();
       }
@@ -62860,8 +62877,8 @@ function _adapterParseToolCalls(text, knownToolNames, toolDefs) {
   // hallucinated name is ignored rather than executed.
   if (toolCalls.length === 0 && text.indexOf('<function') !== -1) {
     for (const c of _adapterParseXmlFunctionCalls(text, toolDefs)) {
-      const allowed = !knownToolNames || !knownToolNames.length || knownToolNames.indexOf(c.name) !== -1;
-      if (allowed) toolCalls.push({ name: c.name, arguments: c.arguments });
+      const name = _adapterResolveToolName(c.name, knownToolNames);
+      if (name != null) toolCalls.push({ name, arguments: c.arguments });
       // Strip the markup either way — a rejected call must not render raw.
       cleanText = cleanText.replace(c.raw, '');
     }
@@ -62875,12 +62892,13 @@ function _adapterParseToolCalls(text, knownToolNames, toolDefs) {
   // would have to contain a literal name="<a real tool name>"> to misfire.
   if (toolCalls.length === 0 && text.indexOf('<function') === -1 && /name\s*=\s*["'][^"']+["']\s*>/.test(text)) {
     const c = _adapterParseStrippedXmlCall(text);
-    if (c && knownToolNames && knownToolNames.indexOf(c.name) !== -1) {
-      const t = (toolDefs || []).find(d => d && d.name === c.name);
+    const name6 = c && knownToolNames && knownToolNames.length ? _adapterResolveToolName(c.name, knownToolNames) : null;
+    if (name6 != null) {
+      const t = _adapterFindToolDef(toolDefs, c.name);
       const props = (t && t.parameters && t.parameters.properties) || {};
       const args = {};
       for (const k of Object.keys(c.args)) args[k] = _adapterCoerceXmlParam(c.args[k], props[k]);
-      toolCalls.push({ name: c.name, arguments: args });
+      toolCalls.push({ name: name6, arguments: args });
       cleanText = (cleanText.slice(0, c.start) + cleanText.slice(c.end)).trim();
     }
   }
@@ -62897,11 +62915,10 @@ function _adapterParseToolCalls(text, knownToolNames, toolDefs) {
     const re = /<tool_call>\s*<name>\s*([a-zA-Z_][\w.-]*)\s*<\/name>\s*(?:<arguments>([\s\S]*?)(?:<\/arguments>|(?=<\/tool_call>)|$))?\s*(?:<\/tool_call>)?/g;
     let m7;
     while ((m7 = re.exec(text)) !== null) {
-      const name = m7[1];
-      const allowed = knownToolNames && knownToolNames.indexOf(name) !== -1;
-      if (allowed) {
+      const name = knownToolNames && knownToolNames.length ? _adapterResolveToolName(m7[1], knownToolNames) : null;
+      if (name != null) {
         const body = (m7[2] || '').trim();
-        const t = (toolDefs || []).find(d => d && d.name === name);
+        const t = _adapterFindToolDef(toolDefs, name);
         const props = (t && t.parameters && t.parameters.properties) || {};
         let args = null;
         if (body[0] === '{') args = _adapterRepairJSON(body);
@@ -62916,11 +62933,16 @@ function _adapterParseToolCalls(text, knownToolNames, toolDefs) {
       // Strip the markup either way — a rejected call must not render raw.
       // Pass 1 may already have removed the <tool_call> marker (its
       // no-JSON branch), so match from <name> and tolerate a missing tag.
-      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const esc = m7[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       cleanText = cleanText.replace(new RegExp('(?:<tool_call>\\s*)?<name>\\s*' + esc + '\\s*<\\/name>[\\s\\S]*?(?:<\\/tool_call>|$)'), '').trim();
     }
   }
 
+  // Passes 1 and 3 keep the model's spelling; give every call the caller's spelling when one tool matches.
+  for (const c of toolCalls) {
+    const name = _adapterResolveToolName(c.name, knownToolNames);
+    if (name != null) c.name = name;
+  }
   return { toolCalls, cleanText: cleanText.trim() };
 }
 
@@ -62934,6 +62956,7 @@ ${JSON.stringify({ name, result })}
 
 export {
   _adapterRepairJSON,
+  _adapterResolveToolName,
   _adapterBuildToolPrompt,
   _adapterPyJson,
   _adapterBuildQwenXmlToolPrompt,

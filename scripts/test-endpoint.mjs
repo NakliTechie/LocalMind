@@ -305,4 +305,30 @@ const reset = () => { requests.length = 0; harness.reset(); for (const k of Obje
   console.log('Qwen3-Coder XML tool calls (prompt text, typed params, unclosed, two calls, unknown name, JSON fallback): ok');
 }
 
+// Tool names match case-insensitively when exactly one tool fits (LFM3 1.7B wrote <function=bash> for Bash).
+{
+  const { _adapterParseToolCalls: parse, _adapterResolveToolName: resolve } = await import(new URL('../src/tool-calls.js', import.meta.url));
+  const tools = [
+    { name: 'Bash', parameters: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'number' } } } },
+    { name: 'calculate', parameters: { type: 'object', properties: { expression: { type: 'string' } } } },
+  ];
+  const known = tools.map((t) => t.name);
+  assert.equal(resolve('Bash', known), 'Bash');
+  assert.equal(resolve('bash', known), 'Bash');
+  assert.equal(resolve('rm', known), null);
+  assert.equal(resolve('Fetch', ['fetch', 'FETCH']), null, 'two tools that differ only by case stay ambiguous');
+  assert.equal(resolve('anything', []), 'anything', 'no list: the name passes through');
+  // Qwen3-Coder XML, with the schema found through the case-insensitive match (timeout coerced to a number).
+  assert.deepEqual(parse('<tool_call>\n<function=bash>\n<parameter=command>\nls\n</parameter>\n<parameter=timeout>\n30\n</parameter>\n</function>\n</tool_call>', known, tools).toolCalls,
+    [{ name: 'Bash', arguments: { command: 'ls', timeout: 30 } }]);
+  // JSON <tool_call>, LFM2 Pythonic, and MiniCPM5 XML all come back with the caller's spelling.
+  assert.deepEqual(parse('<tool_call>{"name": "CALCULATE", "arguments": {"expression": "2+2"}}</tool_call>', known, tools).toolCalls,
+    [{ name: 'calculate', arguments: { expression: '2+2' } }]);
+  assert.deepEqual(parse('<|tool_call_start|>[bash(command="pwd")]<|tool_call_end|>', known, tools).toolCalls,
+    [{ name: 'Bash', arguments: { command: 'pwd' } }]);
+  assert.deepEqual(parse('<function name="BASH"><param name="command">date</param></function>', known, tools).toolCalls.map((c) => c.name), ['Bash']);
+  assert.deepEqual(parse('<tool_call>\n<function=bash_exec>\n</function>\n</tool_call>', known, tools).toolCalls, [], 'an unknown name still never runs');
+  console.log('tool names match case-insensitively when one tool fits: ok');
+}
+
 console.log('LocalMind endpoint backend: ok');
