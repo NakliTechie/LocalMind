@@ -28,7 +28,10 @@ const slice = (startMarker, endMarker) => {
   return indexSource.slice(a, b);
 };
 const endpointBlock = slice('    function normalizeEndpointBase(input) {', '    function clearEndpointModels() {');
-const adapterBlock = slice('    function _adapterRepairJSON(str) {', '    function _adapterFormatToolResultMessage(');
+// The tool prompts and parser are src/tool-calls.js (index.html imports it); inline it without its export list.
+const toolCallsSource = await readFile(new URL('../src/tool-calls.js', import.meta.url), 'utf8');
+const adapterBlock = toolCallsSource.slice(0, toolCallsSource.lastIndexOf('export {'));
+assert.match(indexSource, /\} = await import\(moduleUrl\('tool-calls\.js'\)\);/);
 const sinkBlock = slice('    let endpointAbort = null;', '    // ── Chrome built-in AI');
 // The bubble shows streamed text through streamDisplayText (tool-call markup hidden); slice it in with its helper.
 const displayBlock = slice('    function stripToolCallTags(text) {', '    function saveChat() {');
