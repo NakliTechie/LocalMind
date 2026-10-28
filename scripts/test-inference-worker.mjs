@@ -23,7 +23,8 @@ assert.match(source, /request\.type === 'unload'/);
 assert.match(source, /config\.reset === true/);
 assert.match(protocol, /Only one generation can be active/);
 assert.match(onnxSource, /localmind\.inference\.v1/);
-assert.match(onnxSource, /@huggingface\/transformers@4\.2\.0/);
+assert.match(onnxSource, /@huggingface\/transformers@4\.3\.2/);   // 4.3.2: the first release that loads lfm3 (LFM3 1.7B)
+assert.match(onnxSource, /function feedLogitsToKeep/);
 assert.match(onnxSource, /Gemma4ForConditionalGeneration/);
 assert.match(onnxSource, /Qwen3_5ForConditionalGeneration/);
 assert.match(onnxSource, /AutoModelForCausalLM/);
@@ -261,11 +262,15 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   assert.equal((bench.slice(bench.indexOf('async function runRow('), bench.indexOf('async function runRowWatched(')).match(/\bcdp\.ev\(/g) || []).length, 1, 'runRow must reach the page only through its guarded ev');
   assert.match(bench, /if \(r\.error\) throw new Error\(r\.error\.message\);/);
 }
-assert.equal(catalog.defaultKey, 'lfm2-230m-webgpu');
+assert.equal(catalog.defaultKey, 'lfm3-1.7b');
 assert.deepEqual(
   catalog.models.map((model) => model.key),
-  ['lfm2-230m-webgpu', 'gemma4-e2b', 'gemma4-e4b', 'qwen35-4b'],
+  ['lfm3-1.7b', 'lfm2-230m-webgpu', 'gemma4-e2b', 'gemma4-e4b', 'qwen35-4b'],
 );
+// The host catalog's LFM3 entry is the app registry's: same repo and precision.
+assert.equal(catalog.get('lfm3-1.7b').id, 'LiquidAI/LFM3-1.7B-ONNX');
+assert.equal(catalog.get('lfm3-1.7b').dtype, 'q4f16');
+assert.equal(catalog.get('lfm3-1.7b').worker, 'onnx-inference-worker.js');
 const qwen35 = catalog.get('qwen35-4b');
 assert.equal(qwen35.id, 'onnx-community/Qwen3.5-4B-ONNX-OPT');
 assert.equal(qwen35.modelType, 'multimodal');

@@ -7,7 +7,7 @@
 
 const PROTOCOL = 'localmind.inference.v1';
 const TRANSFORMERS_URL =
-  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm';
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/+esm';
 
 let transformers = null;
 let processor = null;
@@ -47,6 +47,21 @@ async function unload() {
   activeRequestId = null;
 }
 
+// LiquidAI's LFM3 ONNX export names its last-position input logits_to_keep
+// (shape [1]); Transformers.js 4.3.2 feeds only num_logits_to_keep and rejects
+// the run as "Missing the following inputs: logits_to_keep". Hide the input
+// from that check and add it at the session's run, set to 1: generate() reads
+// only the last position's logits. Ported from LocalMind 38c4627.
+function feedLogitsToKeep(loaded) {
+  const sess = loaded?.sessions?.model;
+  if (!sess || !sess.inputNames.includes('logits_to_keep')) return;
+  const names = sess.inputNames.filter((n) => n !== 'logits_to_keep');
+  const one = new transformers.Tensor('int64', [1n], [1]).ort_tensor;
+  const run = sess.run.bind(sess);
+  Object.defineProperty(sess, 'inputNames', { value: names });
+  sess.run = (feeds, opts) => run({ ...feeds, logits_to_keep: one }, opts);
+}
+
 async function loadModel(request) {
   const id = request.id;
   const modelId = String(request.modelId || '');
@@ -76,7 +91,7 @@ async function loadModel(request) {
       ? mod.Qwen3_5ForConditionalGeneration
       : mod.Gemma4ForConditionalGeneration;
     if (!ConditionalGenerationModel) {
-      throw new Error(`Transformers.js 4.2.0 does not export ${modelClass}`);
+      throw new Error(`Transformers.js 4.3.2 does not export ${modelClass}`);
     }
     model = await ConditionalGenerationModel.from_pretrained(modelId, {
       dtype,
@@ -93,6 +108,7 @@ async function loadModel(request) {
       device: 'webgpu',
       progress_callback,
     });
+    feedLogitsToKeep(model);
   }
 
   post({ type: 'progress', data: { status: 'warmup', file: modelId } }, id);
@@ -126,9 +142,11 @@ function normaliseMessages(messages, multimodal = false) {
 
 function causalInputs(messages) {
   try {
+    // Templates that think by default (LFM3) read enable_thinking; others ignore it.
     return tokenizer.apply_chat_template(messages, {
       add_generation_prompt: true,
       return_dict: true,
+      enable_thinking: false,
     });
   } catch (_) {
     let prompt = '';
@@ -160,13 +178,27 @@ async function generate(request) {
   const inputs = multimodal
     ? await multimodalInputs(messages)
     : causalInputs(messages);
+  // With thinking off, LFM3 still opens <think> on some prompts. Host apps get
+  // answer text only, so drop that span. Each tag is one token and arrives
+  // whole in one streamer chunk.
+  let inThink = false;
   const streamer = new transformers.TextStreamer(
     multimodal ? processor.tokenizer : tokenizer,
     {
       skip_prompt: true,
       skip_special_tokens: true,
-      callback_function: (token) => {
-        post({ type: 'token', token }, id);
+      callback_function: (chunk) => {
+        let token = '';
+        let rest = String(chunk);
+        while (rest) {
+          const tag = inThink ? '</think>' : '<think>';
+          const at = rest.indexOf(tag);
+          if (at === -1) { if (!inThink) token += rest; break; }
+          if (!inThink) token += rest.slice(0, at);
+          rest = rest.slice(at + tag.length);
+          inThink = !inThink;
+        }
+        if (token) post({ type: 'token', token }, id);
       },
     },
   );

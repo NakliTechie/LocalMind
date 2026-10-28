@@ -9,6 +9,28 @@
 
 const LOCALMIND_HOST_MODELS = Object.freeze([
   Object.freeze({
+    key: 'lfm3-1.7b',
+    id: 'LiquidAI/LFM3-1.7B-ONNX',
+    label: 'LFM3 1.7B',
+    family: 'LFM3',
+    runtime: 'transformers-webgpu',
+    worker: 'onnx-inference-worker.js',
+    dtype: 'q4f16',
+    size: '~1.4 GB',
+    sizeBytes: 1_390_000_000,
+    contextTokens: 32_768,
+    modelType: 'causal',
+    description:
+      'Default. Stronger small text model. Native 256K context is capped ' +
+      'to 32K to bound browser memory.',
+    generationConfig: Object.freeze({
+      temperature: 0.1,
+      top_k: 50,
+      top_p: 1.0,
+      repetition_penalty: 1.1,
+    }),
+  }),
+  Object.freeze({
     key: 'lfm2-230m-webgpu',
     id: 'LiquidAI/LFM2.5-230M-GGUF',
     label: 'LFM2.5 230M',
@@ -20,7 +42,7 @@ const LOCALMIND_HOST_MODELS = Object.freeze([
     sizeBytes: 140_000_000,
     contextTokens: 32_768,
     modelType: 'causal',
-    description: 'Fastest start. The default LocalMind WebGPU engine.',
+    description: 'Fastest start and lowest memory. The LocalMind WebGPU engine.',
     generationConfig: Object.freeze({
       temperature: 0.3,
       top_k: 20,
@@ -121,7 +143,7 @@ const LOCALMIND_HOST_IMAGE_MODELS = Object.freeze([
   }),
 ]);
 
-const LOCALMIND_DEFAULT_MODEL_KEY = 'lfm2-230m-webgpu';
+const LOCALMIND_DEFAULT_MODEL_KEY = 'lfm3-1.7b';
 const LOCALMIND_DEFAULT_IMAGE_MODEL_KEY = 'flux2-klein-4b-webgpu';
 
 function getLocalMindHostModel(key) {
