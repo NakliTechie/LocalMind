@@ -2679,6 +2679,7 @@
               <li><strong>LFM2.5 230M &middot; WebGPU kernels</strong> (~140 MB) &mdash; the same LFM2.5 230M run on a from-scratch WebGPU engine whose every kernel (RoPE, RMSNorm, Q4_0 dequant, the LFM2 short-conv, GQA attention) is hand-written WGSL, reading a Q4_0 GGUF directly (no ONNX, no llama.cpp). Ported from <em>webml-community/lfm2-webgpu-kernels</em>. WebGPU-only, tuned for maximal decode throughput.</li>
               <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only. About 4&times; the ONNX Gemma 4 E2B&rsquo;s decode speed on the same Mac (171 vs 42 tok/s, M4 Pro); text-only.</li>
               <li><strong>Gemma 4 E4B &middot; WebGPU kernels</strong> (~3.6 GB) &mdash; text + agent. The larger Gemma 4 (QAT mobile) on the same hand-written WebGPU engine. Its per-layer embedding table can also live on disk (Settings &rarr; Models, below).</li>
+              <li><strong>LFM3-VL 2B</strong> (~1.9 GB) &mdash; text and images, with reasoning. Liquid AI's LFM3-VL-2B (October 2026): the LFM3 language model with a new vision encoder, through Transformers.js on WebGPU. Attach an image and ask about it. Show reasoning turns its step-by-step thinking on.</li>
               <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
               <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
               <li><strong>LFM2.5 230M &middot; GGUF</strong> (~170 MB) &mdash; the same LFM2.5 230M through wllama (llama.cpp &rarr; WebAssembly), reading a Q5_K_M GGUF. WebGPU when your browser has it, CPU otherwise, so it also runs where WebGPU is missing.</li>
@@ -2998,6 +2999,7 @@
           <option value="qwen35-4b">Qwen3.5 4B &middot; Vision + Agent (~3 GB)</option>
           <option value="lfm3-1.7b">LFM3 1.7B &middot; Agent (~1.4 GB)</option>
           <option value="gemini-nano">Gemini Nano &middot; Built into Chrome (0 MB)</option>
+          <option value="lfm3-vl-2b">LFM3-VL 2B &middot; Text and images (~1.9 GB)</option>
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
           <option value="lfm2-230m-gguf">LFM2.5 230M &middot; GGUF (~170 MB)</option>
@@ -9097,6 +9099,29 @@ self.addEventListener('message', async (e) => {
         // agents): temperature 0.1, top_k 50, repetition_penalty 1.1, no top_p.
         genConfig: { temperature: 0.1, top_k: 50, top_p: 1.0, max_new_tokens: 2048, repetition_penalty: 1.1 },
       },
+      'lfm3-vl-2b': {
+        id: 'onnx-community/LFM3-VL-2B-ONNX',
+        label: 'LFM3-VL 2B',
+        // Per-part precision as Liquid's model card loads it: fp16 vision encoder (379 MB) and embeddings (524 MB),
+        // q4f16 decoder (1.04 GB).
+        dtype: { vision_encoder: 'fp16', embed_tokens: 'fp16', decoder_model_merged: 'q4f16' },
+        size: '~1.9 GB',
+        type: 'multimodal',   // runtime loads this via the multimodal processor path
+        modelClass: 'lfm3_vl',
+        multimodal: true,
+        imageInput: true,
+        audioInput: false,
+        videoInput: false,
+        agentCapable: false,
+        contextSize: 32768,
+        // Liquid AI LFM3-VL-2B (2026-10-27): the LFM3 language model plus a new vision encoder; images in, text out
+        // (the model also reads video, which LocalMind does not send yet). model_type 'lfm3_vl', which transformers.js
+        // loads from 4.3.2 on. This export's decoder takes num_logits_to_keep, which transformers.js feeds, so it
+        // needs no logits_to_keep shim. A reasoning model: the template thinks unless enable_thinking is false, so
+        // generateMultimodal passes the Show-reasoning toggle and maps the think tags. Same tokenizer vocabulary as
+        // LFM3 1.7B. LFM Open License v1.0. Liquid's "general" sampling, as for LFM3 1.7B.
+        genConfig: { temperature: 0.1, top_k: 50, top_p: 1.0, max_new_tokens: 2048, repetition_penalty: 1.1 },
+      },
       'gemini-nano': {
         id: 'chrome-builtin/gemini-nano',
         label: 'Gemini Nano',
@@ -10521,6 +10546,7 @@ self.addEventListener('message', async (e) => {
       'ternary-bonsai-2-2b-webgpu': 'qwen',
       'ternary-bonsai-2-4b-webgpu': 'qwen',
       'lfm3-1.7b': 'lfm3',
+      'lfm3-vl-2b': 'lfm3',
       'lfm2-230m-gguf': 'lfm2',
       'lfm2-230m-webgpu': 'lfm2',
       'gemma4-e2b': 'gemma',
@@ -18297,7 +18323,7 @@ __rdbCleanup();
 // would race the 'load' postMessage from the main thread — it can arrive
 // before the module-body handler is registered and get dropped. Kick off
 // the import eagerly and have the message handler await it.
-let env, AutoTokenizer, AutoModelForCausalLM, AutoProcessor, Gemma4ForConditionalGeneration, Qwen3_5ForConditionalGeneration, load_image, TextStreamer, InterruptableStoppingCriteria, Tensor;
+let env, AutoTokenizer, AutoModelForCausalLM, AutoProcessor, Gemma4ForConditionalGeneration, Qwen3_5ForConditionalGeneration, Lfm3VlForConditionalGeneration, load_image, TextStreamer, InterruptableStoppingCriteria, Tensor;
 let stopping_criteria;
 
 const __modReady = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/+esm').then((m) => {
@@ -18307,6 +18333,7 @@ const __modReady = import('https://cdn.jsdelivr.net/npm/@huggingface/transformer
   AutoProcessor = m.AutoProcessor;
   Gemma4ForConditionalGeneration = m.Gemma4ForConditionalGeneration;
   Qwen3_5ForConditionalGeneration = m.Qwen3_5ForConditionalGeneration;
+  Lfm3VlForConditionalGeneration = m.Lfm3VlForConditionalGeneration;
   load_image = m.load_image;
   TextStreamer = m.TextStreamer;
   InterruptableStoppingCriteria = m.InterruptableStoppingCriteria;
@@ -18325,6 +18352,7 @@ let processor = null;
 let tokenizer = null;
 let model = null;
 let loadedType = null;
+let loadedClass = null;
 
 function progressCallback(p) {
   self.postMessage({ type: 'progress', data: p });
@@ -18375,8 +18403,8 @@ async function loadMultimodal(modelId, dtype, modelClass) {
   });
   tokenizer = processor.tokenizer;
 
-  const ConditionalGenerationModel = modelClass === 'qwen3_5'
-    ? Qwen3_5ForConditionalGeneration
+  const ConditionalGenerationModel = modelClass === 'qwen3_5' ? Qwen3_5ForConditionalGeneration
+    : modelClass === 'lfm3_vl' ? Lfm3VlForConditionalGeneration
     : Gemma4ForConditionalGeneration;
   if (!ConditionalGenerationModel) {
     throw new Error('Transformers.js 4.3.2 does not export ' + modelClass);
@@ -18389,10 +18417,14 @@ async function loadMultimodal(modelId, dtype, modelClass) {
 
   // Warmup
   self.postMessage({ type: 'warmup' });
-  const warmupInputs = await processor('a', null, null, { add_special_tokens: false });
+  // LFM3-VL's processor takes (images, text, options); Gemma 4's and Qwen3.5's take (text, images, audio, options).
+  const warmupInputs = modelClass === 'lfm3_vl'
+    ? await processor(null, 'a', { add_special_tokens: false })
+    : await processor('a', null, null, { add_special_tokens: false });
   await model.generate({ ...warmupInputs, max_new_tokens: 1 });
 
   loadedType = 'multimodal';
+  loadedClass = modelClass;
   self.postMessage({ type: 'ready' });
 }
 
@@ -18544,12 +18576,28 @@ async function generateMultimodal(chatMessages, id, attachmentData, enableThinki
     // The processor dispatches arg[1] to vision and arg[2] to audio extractor.
     const imageArg = images.length > 0 ? (images.length === 1 ? images[0] : images) : null;
     const audioArg = audios.length > 0 ? (audios.length === 1 ? audios[0] : audios) : null;
-    const inputs = await processor(prompt, imageArg, audioArg, { add_special_tokens: false });
+    const inputs = loadedClass === 'lfm3_vl'
+      ? await processor(imageArg, prompt, { add_special_tokens: false })
+      : await processor(prompt, imageArg, audioArg, { add_special_tokens: false });
 
+    // LFM3-VL writes <think>/</think> as text, like LFM3 1.7B in generateCausal: with thinking on its template ends
+    // the prompt on an open <think>, so open LocalMind's <|think|> marker first and swap the tags for the markers.
+    // Only for LFM3-VL, so Qwen3.5 and Gemma 4 stream exactly as before.
+    const thinkTags = loadedClass === 'lfm3_vl';
+    let inThink = thinkTags && enableThinking === true && String(prompt).trimEnd().endsWith('<think>');
+    if (inThink) self.postMessage({ type: 'token', token: '<|think|>', id });
     const streamer = new TextStreamer(processor.tokenizer, {
       skip_prompt: true,
       skip_special_tokens: true,
       callback_function: (text) => {
+        if (thinkTags && !inThink && text.indexOf('<think>') !== -1) {
+          text = text.split('<think>').join('<|think|>');
+          inThink = true;
+        }
+        if (thinkTags && inThink && text.indexOf('</think>') !== -1) {
+          text = text.split('</think>').join('<|/think|>');
+          inThink = false;
+        }
         self.postMessage({ type: 'token', token: text, id });
       },
     });

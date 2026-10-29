@@ -32,6 +32,13 @@ assert.match(onnxSource, /request\.type === 'unload'/);
 assert.doesNotMatch(onnxSource, /transformers@4\/\+esm/);
 assert.match(indexSource, /Qwen3_5ForConditionalGeneration/);
 assert.doesNotMatch(indexSource, /transformers@4\/\+esm/);
+// LFM3-VL 2B: the chat worker loads its class, calls its processor images-first, and maps its think tags.
+assert.match(indexSource, /Lfm3VlForConditionalGeneration = m\.Lfm3VlForConditionalGeneration;/);
+assert.match(indexSource, /modelClass === 'lfm3_vl' \? Lfm3VlForConditionalGeneration/);
+assert.match(indexSource, /await processor\(imageArg, prompt, \{ add_special_tokens: false \}\)/);
+assert.match(indexSource, /const thinkTags = loadedClass === 'lfm3_vl';/);
+assert.match(indexSource, /'lfm3-vl-2b': \{\s*id: 'onnx-community\/LFM3-VL-2B-ONNX',[^]*?modelClass: 'lfm3_vl',\s*multimodal: true,\s*imageInput: true,/);
+assert.match(indexSource, /<option value="lfm3-vl-2b">/);
 // Ternary Bonsai 2 27B: the worker block, its engine file, and the registry entry agree.
 const bonsai2Engine = await readFile(new URL('../src/ternary_bonsai_2_27b.js', import.meta.url), 'utf8');
 assert.match(bonsai2Engine, /export\{[^}]*zl as TernaryBonsai2[^}]*\}/);
@@ -122,7 +129,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'));
   const keys = [...registry.slice(0, registry.indexOf('\n    };')).matchAll(/^      '([^']+)': \{/gm)].map((m) => m[1]);
   assert.deepEqual([...options].sort(), [...keys].sort(), 'picker options and MODELS registry keys must match');
-  assert.equal(options.length, 25);   // 2026-10-24: DeepSeek V4.1 Flash, Nemotron-Labs-Diffusion 3B and Nemotron 3.5 Bolt E4B via anyformer in; 2026-10-23: Ling 3.0 Flash via anyformer in; 2026-10-22: GLM-4.7-Flash via anyformer in; earlier the same day Flint 40B-A2.5B and Qwen3 4B + FlashMap in (2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out)
+  assert.equal(options.length, 26);   // 2026-10-29: LFM3-VL 2B in; 2026-10-24: DeepSeek V4.1 Flash, Nemotron-Labs-Diffusion 3B and Nemotron 3.5 Bolt E4B via anyformer in; 2026-10-23: Ling 3.0 Flash via anyformer in; 2026-10-22: GLM-4.7-Flash via anyformer in; earlier the same day Flint 40B-A2.5B and Qwen3 4B + FlashMap in (2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out)
 }
 // window.localmind.load() sets the select before loading, so the composer's picker names the loaded model.
 assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ modelSelect\.value = key; \} catch \{\}\s*loadModel\(key\);/);
