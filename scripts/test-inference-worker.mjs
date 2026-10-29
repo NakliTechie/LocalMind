@@ -64,6 +64,12 @@ assert.match(indexSource, /<option value="lfm3-vl-2b">/);
   assert.equal(ref.length, 384);
   assert.ok(Math.abs(Math.hypot(...ref) - 1) < 1e-3, 'reference vector is unit length');
   assert.match(workerSrc, /if \(!\(cos >= NPU_MIN_COS\)\) throw new Error/);
+  // The reranker on the Neural Engine: same lengths, a load check on a relevant vs an unrelated pair, CPU fallback.
+  assert.match(workerSrc, /const RERANK_MIN_GAP = 8;/);
+  assert.match(workerSrc, /if \(!\(rel - irr >= RERANK_MIN_GAP\)\) throw new Error/);
+  assert.match(workerSrc, /padding: 'max_length', truncation: true, max_length: len \}\);\n  return Number\(\(await m\(inputs\)\)\.logits\.data\[0\]\);/);
+  assert.match(indexSource, /self\._embWorker\.postMessage\(\{ type: 'rerank', query, passages, model, id, npu: npuEmbedOn\(\) \}\);/);
+  assert.equal((indexSource.match(/askDownload\(rerankDownloadSpec\(\)\)/g) || []).length, 2);
 }
 // Follow-up questions to an image model get the earlier turns' images back (2026-10-29: LFM3-VL said "orange" for a
 // white chest because history was text only). Run withEarlierImages from index.html on a sample chat.

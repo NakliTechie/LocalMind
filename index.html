@@ -2754,7 +2754,7 @@
             <input type="checkbox" id="ragRerankToggle"> Rerank retrieved memory <span style="font-weight:400;color:var(--gray-500)">(bge-reranker-v2-m3 re-scores the memories found for each message and for the memory tools, for sharper recall &mdash; a ~570&nbsp;MB on-device model, downloaded on first use)</span>
           </label>
           <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:400;cursor:pointer">
-            <input type="checkbox" id="npuEmbedToggle" checked> Run the memory model on the Neural Engine when the browser allows it <span style="font-weight:400;color:var(--gray-500)">(WebNN; in Chrome it needs chrome://flags/#web-machine-learning-neural-network. With WebNN it downloads a 235 MB copy of multilingual-e5-small; without it, or if a check fails, the CPU runs it as before. Takes effect after a reload)</span>
+            <input type="checkbox" id="npuEmbedToggle" checked> Run the memory model and the reranker on the Neural Engine when the browser allows it <span style="font-weight:400;color:var(--gray-500)">(WebNN; in Chrome it needs chrome://flags/#web-machine-learning-neural-network. With WebNN they download fp16 copies: 235 MB for multilingual-e5-small, 1.14 GB for the reranker if you use it; without WebNN, or if a check fails, the CPU runs them as before. Takes effect after a reload)</span>
           </label>
           <div id="npuEmbedStatus" style="font-size:0.75rem;color:var(--gray-500);margin-top:2px;min-height:1em"></div>
           <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:400;cursor:pointer">
@@ -11198,6 +11198,12 @@ self.addEventListener('message', async (e) => {
         .slice(0, topK);
     }
     // END RERANK-ORDER
+    // With WebNN the reranker runs fp16 on the Neural Engine (1.14 GB) instead of q8 on the CPU (571 MB).
+    function rerankDownloadSpec() {
+      return npuEmbedOn() && typeof navigator !== 'undefined' && 'ml' in navigator
+        ? { ...RERANK_DOWNLOAD, bytes: 1136e6, label: 'the bge-reranker-v2-m3 memory reranker (fp16, for the Neural Engine)' }
+        : RERANK_DOWNLOAD;
+    }
 
     // Vector search, then (with the reranker on) cross-encode each (query, memory) pair and reorder.
     // `pool` is how many vector hits the reranker sees; `rerankThreshold` is the cosine floor for that pool.
@@ -11208,7 +11214,7 @@ self.addEventListener('message', async (e) => {
       const candidates = await searchByVector(vec, pool, rerankThreshold);
       if (candidates.length <= 1) return candidates.slice(0, topK);
       // Switched on before the download question existed: ask now; a no turns it off and keeps vector order.
-      if (!(await askDownload(RERANK_DOWNLOAD))) {
+      if (!(await askDownload(rerankDownloadSpec()))) {
         try { localStorage.setItem('lm_rag_rerank', '0'); } catch {}
         const t = document.getElementById('ragRerankToggle'); if (t) t.checked = false;
         return candidates.slice(0, topK);
@@ -12505,7 +12511,7 @@ self.addEventListener('message', async (e) => {
     if (ragRerankToggle) {
       ragRerankToggle.checked = localStorage.getItem('lm_rag_rerank') === '1';
       ragRerankToggle.addEventListener('change', async () => {
-        if (ragRerankToggle.checked && !(await askDownload(RERANK_DOWNLOAD))) ragRerankToggle.checked = false;
+        if (ragRerankToggle.checked && !(await askDownload(rerankDownloadSpec()))) ragRerankToggle.checked = false;
         try { localStorage.setItem('lm_rag_rerank', ragRerankToggle.checked ? '1' : '0'); } catch {}
       });
     }
@@ -17063,13 +17069,17 @@ self.addEventListener('message', async (e) => {
           if (self._embWorker) return self._ensureEmbWorker();   // another caller started it while the dialog was open
           self._embWorker = createEmbeddingWorker();
           // Which hardware the memory model runs on: set at 'ready', changed by 'backend' if a Neural Engine run fails.
+          // Which hardware the memory model and the reranker run on: 'ready' / 'backend' for the memory model,
+          // 'rerank_backend' for the reranker (on its first use). Quiet unless the Neural Engine runs one or failed.
+          const npuStatus = { embed: '', rerank: '' };
           self._embWorker.addEventListener('message', (e) => {
-            if (e.data.type !== 'ready' && e.data.type !== 'backend') return;
-            self.embedBackend = e.data.backend || 'wasm';
+            const say = (name, d) => d.backend === 'webnn-npu' ? 'The ' + name + ' runs on the Neural Engine.'
+              : d.fallback ? 'The ' + name + ' runs on the CPU: ' + d.fallback : '';
+            if (e.data.type === 'ready' || e.data.type === 'backend') { self.embedBackend = e.data.backend || 'wasm'; npuStatus.embed = say('memory model', e.data); }
+            else if (e.data.type === 'rerank_backend') { self.rerankBackend = e.data.backend; npuStatus.rerank = say('reranker', e.data); }
+            else return;
             const st = document.getElementById('npuEmbedStatus');
-            // Quiet unless the Neural Engine runs it or tried and failed: most browsers have no WebNN yet.
-            if (st) st.textContent = self.embedBackend === 'webnn-npu' ? 'The memory model runs on the Neural Engine.'
-              : e.data.fallback ? 'The memory model runs on the CPU: ' + e.data.fallback : '';
+            if (st) st.textContent = [npuStatus.embed, npuStatus.rerank].filter(Boolean).join(' ');
           });
           return new Promise((resolve, reject) => {
             const handler = (e) => {
@@ -17144,7 +17154,7 @@ self.addEventListener('message', async (e) => {
               }
             };
             self._embWorker.addEventListener('message', handler);
-            self._embWorker.postMessage({ type: 'rerank', query, passages, model, id });
+            self._embWorker.postMessage({ type: 'rerank', query, passages, model, id, npu: npuEmbedOn() });
           });
         }));
         return this._embQueue;
@@ -17333,6 +17343,25 @@ async function loadWasmEmbedder() {
     progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
   });
 }
+// The reranker on the Neural Engine (rerank message npu: true, WebNN present): fp16, padded to the shortest of
+// NPU_LENS that holds the pair, one session per length. Load check: a relevant pair must outscore an unrelated one by
+// RERANK_MIN_GAP (CPU q8 and Neural Engine fp16 both give ~16.5, plan/2026-10-29-webnn-rerank); else the CPU runs it.
+const RERANK_MIN_GAP = 8;
+let rerankNpu = null;     // null: not tried; true: on the Neural Engine; false: CPU
+const rerankNpuModels = {};
+async function rerankNpuScore(modelId, query, passage) {
+  const n0 = rerankTokenizer(query, { text_pair: passage, truncation: true, max_length: 512 }).input_ids.dims[1];
+  const len = NPU_LENS.find((l) => n0 <= l);
+  rerankNpuModels[modelId + ':' + len] ||= AutoModelForSequenceClassification.from_pretrained(modelId, {
+    device: 'webnn-npu',
+    dtype: 'fp16',
+    session_options: { freeDimensionOverrides: { batch_size: 1, sequence_length: len } },
+    progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
+  });
+  const m = await rerankNpuModels[modelId + ':' + len];
+  const inputs = rerankTokenizer(query, { text_pair: passage, padding: 'max_length', truncation: true, max_length: len });
+  return Number((await m(inputs)).logits.data[0]);
+}
 let reranker = null;      // lazy cross-encoder (SequenceClassification) for rerank
 let rerankTokenizer = null;
 let rerankerId = null;    // model id the reranker was loaded with
@@ -17398,6 +17427,31 @@ self.addEventListener('message', async (e) => {
       // logit, which the pipeline softmaxes to a constant 1.0 (verified 2026-08-21),
       // destroying the ranking signal.
       const modelId = e.data.model || 'onnx-community/bge-reranker-v2-m3-ONNX';
+      if (rerankNpu === null && e.data.npu && 'ml' in navigator) {
+        try {
+          rerankTokenizer = await AutoTokenizer.from_pretrained(modelId);
+          const rel = await rerankNpuScore(modelId, 'What is my favourite tea?', 'My favourite tea is masala chai with extra cardamom.');
+          const irr = await rerankNpuScore(modelId, 'What is my favourite tea?', 'To reset the router, hold the back button for ten seconds.');
+          if (!(rel - irr >= RERANK_MIN_GAP)) throw new Error('its scores fail the check (gap ' + (rel - irr).toFixed(2) + ')');
+          rerankNpu = true; rerankerId = modelId;
+          self.postMessage({ type: 'rerank_backend', backend: 'webnn-npu' });
+        } catch (err) {
+          rerankNpu = false;
+          self.postMessage({ type: 'rerank_backend', backend: 'wasm', fallback: 'the Neural Engine path failed (' + (err.message || String(err)).slice(0, 160) + ').' });
+        }
+      }
+      if (rerankNpu === true && rerankerId === modelId) {
+        const scores = [];
+        try {
+          for (const p of (e.data.passages || [])) scores.push(await rerankNpuScore(modelId, e.data.query || '', p));
+          self.postMessage({ type: 'rerank_scores', scores, id });
+          return;
+        } catch (err) {
+          // A Neural Engine run failed: score on the CPU from here on.
+          rerankNpu = false;
+          self.postMessage({ type: 'rerank_backend', backend: 'wasm', fallback: 'a Neural Engine run failed (' + (err.message || String(err)).slice(0, 160) + ').' });
+        }
+      }
       if (!reranker || rerankerId !== modelId) {
         rerankTokenizer = await AutoTokenizer.from_pretrained(modelId);
         reranker = await AutoModelForSequenceClassification.from_pretrained(modelId, {
