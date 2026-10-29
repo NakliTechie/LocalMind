@@ -77,10 +77,11 @@ export function makeApi(log = () => {}) {
     },
     // Plain greedy (prefill, then one-token steps) against FlashMap speculative greedy, per prompt: tokens, time, and
     // whether the outputs are the same. Thinking off; stops at the model's stop tokens or maxNew.
-    async flashmapBench(texts, maxNew = 256, specOpts = {}) {
+    // thinking: render the prompt with the template's reasoning on (the reply starts inside <think>).
+    async flashmapBench(texts, maxNew = 256, specOpts = {}, { thinking = false } = {}) {
       const stops = new Set(m.stopTokenIds), rows = [];
       for (const text of texts) {
-        const ids = m.tokenizer.encode(m.chatPrompt([{ role: 'user', content: text }], { enableThinking: false }));
+        const ids = m.tokenizer.encode(m.chatPrompt([{ role: 'user', content: text }], { enableThinking: thinking }));
         m.reset();
         let t0 = performance.now(), next = await m.prefill(ids, 'argmax');
         const plainPrefill = (performance.now() - t0) / 1000, plain = [next];
