@@ -56,8 +56,14 @@ assert.match(indexSource, /<option value="lfm3-vl-2b">/);
   assert.match(workerSrc, /padding: 'max_length', truncation: true, max_length: len/);
   assert.match(workerSrc, /if \(!npuOn\) await loadWasmEmbedder\(\);/);
   assert.match(indexSource, /self\._embWorker\.postMessage\(\{ type: 'load', npu: npuEmbedOn\(\) \}\);/);
-  assert.match(indexSource, /<input type="checkbox" id="npuEmbedToggle">/);
-  assert.match(indexSource, /function npuEmbedOn\(\) \{ try \{ return localStorage\.getItem\(NPU_EMBED_KEY\) === 'on'; \}/);
+  assert.match(indexSource, /<input type="checkbox" id="npuEmbedToggle" checked>/);
+  assert.match(indexSource, /function npuEmbedOn\(\) \{ try \{ return localStorage\.getItem\(NPU_EMBED_KEY\) !== 'off'; \} catch \{ return true; \} \}/);
+  assert.match(indexSource, /return askDownload\(embedDownloadSpec\(\)\)\.then/);
+  // Known answer: 384 reference numbers, unit length, and the check that throws below the threshold.
+  const ref = JSON.parse(/const NPU_WARMUP_REF = (\[[^\]]+\]);/.exec(workerSrc)[1]);
+  assert.equal(ref.length, 384);
+  assert.ok(Math.abs(Math.hypot(...ref) - 1) < 1e-3, 'reference vector is unit length');
+  assert.match(workerSrc, /if \(!\(cos >= NPU_MIN_COS\)\) throw new Error/);
 }
 // Follow-up questions to an image model get the earlier turns' images back (2026-10-29: LFM3-VL said "orange" for a
 // white chest because history was text only). Run withEarlierImages from index.html on a sample chat.
