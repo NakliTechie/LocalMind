@@ -2754,6 +2754,10 @@
             <input type="checkbox" id="ragRerankToggle"> Rerank retrieved memory <span style="font-weight:400;color:var(--gray-500)">(bge-reranker-v2-m3 re-scores the memories found for each message and for the memory tools, for sharper recall &mdash; a ~570&nbsp;MB on-device model, downloaded on first use)</span>
           </label>
           <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:400;cursor:pointer">
+            <input type="checkbox" id="npuEmbedToggle"> Run the memory model on the Neural Engine <span style="font-weight:400;color:var(--gray-500)">(experimental; needs Chrome&rsquo;s WebNN flag, chrome://flags/#web-machine-learning-neural-network; downloads a 235 MB copy of multilingual-e5-small; uses the CPU when WebNN is missing; takes effect after a reload)</span>
+          </label>
+          <div id="npuEmbedStatus" style="font-size:0.75rem;color:var(--gray-500);margin-top:2px;min-height:1em"></div>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:400;cursor:pointer">
             <input type="checkbox" id="memoryWriterAutoToggle"> Write memories after each reply <span style="font-weight:400;color:var(--gray-500)">(when a reply finishes, the loaded model reads that exchange, saves new facts about you and updates or removes memories they change; it waits for the reply, and stops when you send the next message. Memory panel &rarr; &ldquo;Write memories from this chat&rdquo; does the same for the whole chat)</span>
           </label>
           <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:400">
@@ -10346,6 +10350,9 @@ self.addEventListener('message', async (e) => {
     const KEYLESS_WEB_KEY = 'lm_keyless_web';
     // On by default (Chirag, 2026-10-29: "keyless web tools should be on by default"); each lookup still asks first
     // through the approval card (approvalHost), and switching the setting off hides both tools.
+    // The memory model (multilingual-e5-small) on the Neural Engine through WebNN (Chrome's WebNN flag); off by default.
+    const NPU_EMBED_KEY = 'lm_npu_embed';
+    function npuEmbedOn() { try { return localStorage.getItem(NPU_EMBED_KEY) === 'on'; } catch { return false; } }
     function keylessWebOn() { try { return localStorage.getItem(KEYLESS_WEB_KEY) !== 'off'; } catch { return true; } }
     async function fetchToolJson(url) {
       const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
@@ -12494,6 +12501,11 @@ self.addEventListener('message', async (e) => {
         if (ragRerankToggle.checked && !(await askDownload(RERANK_DOWNLOAD))) ragRerankToggle.checked = false;
         try { localStorage.setItem('lm_rag_rerank', ragRerankToggle.checked ? '1' : '0'); } catch {}
       });
+    }
+    const npuEmbedToggle = document.getElementById('npuEmbedToggle');
+    if (npuEmbedToggle) {
+      npuEmbedToggle.checked = npuEmbedOn();
+      npuEmbedToggle.addEventListener('change', () => { try { localStorage.setItem(NPU_EMBED_KEY, npuEmbedToggle.checked ? 'on' : 'off'); } catch {} });
     }
 
     // ── JavaScript API: chip, toggle, activity log ──────────────
@@ -17043,6 +17055,14 @@ self.addEventListener('message', async (e) => {
           if (self._embReady) return;
           if (self._embWorker) return self._ensureEmbWorker();   // another caller started it while the dialog was open
           self._embWorker = createEmbeddingWorker();
+          // Which hardware the memory model runs on: set at 'ready', changed by 'backend' if a Neural Engine run fails.
+          self._embWorker.addEventListener('message', (e) => {
+            if (e.data.type !== 'ready' && e.data.type !== 'backend') return;
+            self.embedBackend = e.data.backend || 'wasm';
+            const st = document.getElementById('npuEmbedStatus');
+            if (st) st.textContent = self.embedBackend === 'webnn-npu' ? 'The memory model runs on the Neural Engine.'
+              : npuEmbedOn() ? 'The memory model runs on the CPU: ' + (e.data.fallback || 'WebNN is not available in this browser.') : '';
+          });
           return new Promise((resolve, reject) => {
             const handler = (e) => {
               if (e.data.type === 'ready') {
@@ -17057,7 +17077,7 @@ self.addEventListener('message', async (e) => {
               }
             };
             self._embWorker.addEventListener('message', handler);
-            self._embWorker.postMessage({ type: 'load' });
+            self._embWorker.postMessage({ type: 'load', npu: npuEmbedOn() });
           });
         });
       },
@@ -17256,6 +17276,7 @@ import {
   env,
   pipeline,
   AutoTokenizer,
+  AutoModel,
   AutoModelForSequenceClassification,
 } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/+esm';
 
@@ -17264,6 +17285,41 @@ env.localModelPath    = '/models/';
 env.allowRemoteModels = true;
 
 let embedder = null;
+// Neural Engine path (load message npu: true, WebNN present): e5-small fp16 through onnxruntime-web's WebNN provider.
+// WebNN needs fixed shapes, so a text is padded to the shortest of NPU_LENS that holds it (512 is the model's limit,
+// so nothing is cut that the pipeline would keep). Padding costs: 1.9 ms per text at 128 tokens, 14 ms at 512 (M4 Pro,
+// plan/2026-10-29-webnn-embed). Each length is its own session, made on first use. Pooling is the pipeline's: mean
+// over real tokens, then L2 norm.
+const NPU_LENS = [128, 512];
+let npuOn = false, npuTokenizer = null;
+const npuModels = {};
+async function npuSession(len) {
+  npuModels[len] ||= AutoModel.from_pretrained('Xenova/multilingual-e5-small', {
+    device: 'webnn-npu',
+    dtype: 'fp16',
+    session_options: { freeDimensionOverrides: { batch_size: 1, sequence_length: len } },
+    progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
+  });
+  return npuModels[len];
+}
+async function npuEmbed(text) {
+  const n0 = npuTokenizer(text, { truncation: true, max_length: NPU_LENS[NPU_LENS.length - 1] }).input_ids.dims[1];
+  const len = NPU_LENS.find((l) => n0 <= l);
+  const enc = npuTokenizer(text, { padding: 'max_length', truncation: true, max_length: len });
+  const h = (await (await npuSession(len))(enc)).last_hidden_state, D = h.dims[2], m = enc.attention_mask.data, x = h.data;
+  const v = new Float32Array(D); let n = 0;
+  for (let t = 0; t < len; t++) if (Number(m[t])) { n++; for (let d = 0; d < D; d++) v[d] += Number(x[t * D + d]); }
+  let s = 0; for (let d = 0; d < D; d++) { v[d] /= n; s += v[d] * v[d]; }
+  s = Math.sqrt(s) || 1; for (let d = 0; d < D; d++) v[d] /= s;
+  return Array.from(v);
+}
+async function loadWasmEmbedder() {
+  embedder = await pipeline('feature-extraction', 'Xenova/multilingual-e5-small', {
+    device: 'wasm',
+    dtype: 'q8',
+    progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
+  });
+}
 let reranker = null;      // lazy cross-encoder (SequenceClassification) for rerank
 let rerankTokenizer = null;
 let rerankerId = null;    // model id the reranker was loaded with
@@ -17279,12 +17335,21 @@ self.addEventListener('message', async (e) => {
       // smallest ONNX variant is ~541 MB (a per-user download on every RAG use),
       // chat-model-sized for an embedder. The reranker below is the precision
       // lever instead. See ROADMAP §"RAG embedder" if we revisit it.
-      embedder = await pipeline('feature-extraction', 'Xenova/multilingual-e5-small', {
-        device: 'wasm',
-        dtype: 'q8',
-        progress_callback: (p) => self.postMessage({ type: 'progress', data: p }),
-      });
-      self.postMessage({ type: 'ready' });
+      let fallback = null;
+      if (e.data.npu && 'ml' in navigator) {
+        try {
+          npuTokenizer = await AutoTokenizer.from_pretrained('Xenova/multilingual-e5-small');
+          npuOn = true;
+          await npuEmbed('query: warm up');
+        } catch (err) {
+          npuOn = false;
+          fallback = 'the Neural Engine path failed to load (' + (err.message || String(err)).slice(0, 160) + ').';
+        }
+      } else if (e.data.npu) {
+        fallback = 'WebNN is not available in this browser (turn on chrome://flags/#web-machine-learning-neural-network).';
+      }
+      if (!npuOn) await loadWasmEmbedder();
+      self.postMessage({ type: 'ready', backend: npuOn ? 'webnn-npu' : 'wasm', fallback });
     } catch (err) {
       self.postMessage({ type: 'error', message: err.message || String(err) });
     }
@@ -17293,6 +17358,15 @@ self.addEventListener('message', async (e) => {
       const prefix = (kind === 'query') ? 'query: ' : 'passage: ';
       const results = [];
       for (const text of texts) {
+        if (npuOn) {
+          try { results.push(await npuEmbed(prefix + text)); continue; }
+          catch (err) {
+            // A Neural Engine run failed: switch to the CPU path for the rest of this session.
+            npuOn = false;
+            self.postMessage({ type: 'backend', backend: 'wasm', fallback: 'a Neural Engine run failed (' + (err.message || String(err)).slice(0, 160) + ').' });
+            if (!embedder) await loadWasmEmbedder();
+          }
+        }
         const output = await embedder(prefix + text, { pooling: 'mean', normalize: true });
         results.push(Array.from(output.data));
       }

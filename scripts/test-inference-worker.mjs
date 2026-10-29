@@ -39,6 +39,26 @@ assert.match(indexSource, /await processor\(imageArg, prompt, \{ add_special_tok
 assert.match(indexSource, /const thinkTags = loadedClass === 'lfm3_vl';/);
 assert.match(indexSource, /'lfm3-vl-2b': \{\s*id: 'onnx-community\/LFM3-VL-2B-ONNX',[^]*?modelClass: 'lfm3_vl',\s*multimodal: true,\s*imageInput: true,/);
 assert.match(indexSource, /<option value="lfm3-vl-2b">/);
+// The memory model on the Neural Engine (opt-in, WebNN): the embedding worker's source parses as a module once its
+// template literal is evaluated, pads to a fixed length, and falls back to the CPU pipeline.
+{
+  const start = indexSource.indexOf('    function createEmbeddingWorker() {\n      const code = `');
+  assert.ok(start > 0, 'createEmbeddingWorker not found');
+  const body = indexSource.slice(indexSource.indexOf('`', start) + 1, indexSource.indexOf('\n`;', start));
+  const workerSrc = new Function('return `' + body + '`;')();
+  const { execFileSync } = await import('node:child_process');
+  const { writeFileSync, mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(tmpdir() + '/lm-embed-');
+  try { writeFileSync(dir + '/w.mjs', workerSrc); execFileSync(process.execPath, ['--check', dir + '/w.mjs']); } finally { rmSync(dir, { recursive: true, force: true }); }
+  assert.match(workerSrc, /const NPU_LENS = \[128, 512\];/);
+  assert.match(workerSrc, /device: 'webnn-npu',\s*dtype: 'fp16',\s*session_options: \{ freeDimensionOverrides: \{ batch_size: 1, sequence_length: len \} \}/);
+  assert.match(workerSrc, /padding: 'max_length', truncation: true, max_length: len/);
+  assert.match(workerSrc, /if \(!npuOn\) await loadWasmEmbedder\(\);/);
+  assert.match(indexSource, /self\._embWorker\.postMessage\(\{ type: 'load', npu: npuEmbedOn\(\) \}\);/);
+  assert.match(indexSource, /<input type="checkbox" id="npuEmbedToggle">/);
+  assert.match(indexSource, /function npuEmbedOn\(\) \{ try \{ return localStorage\.getItem\(NPU_EMBED_KEY\) === 'on'; \}/);
+}
 // Follow-up questions to an image model get the earlier turns' images back (2026-10-29: LFM3-VL said "orange" for a
 // white chest because history was text only). Run withEarlierImages from index.html on a sample chat.
 {
