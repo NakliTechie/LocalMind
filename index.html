@@ -9647,6 +9647,11 @@ self.addEventListener('message', async (e) => {
 
     // ── State ───────────────────────────────────────────────────
     let messages = [];
+    // Image blobs of each sent user turn, keyed by its stored message, so follow-up questions to an image model can
+    // see them again. Chat storage keeps text only (Blobs do not serialise), so a page reload forgets them.
+    const turnImages = new WeakMap();
+    // At most this many images from earlier turns go back to the model, newest first, to bound the image tokens.
+    const MAX_EARLIER_IMAGES = 3;
     let generating = false;
     let msgIdCounter = 0;
     let currentAssistantEl = null;
@@ -10650,6 +10655,26 @@ self.addEventListener('message', async (e) => {
       return Math.max(1500, Math.min(8000, Math.round(ctx * 0.8)));
     }
 
+    // Each history entry buildContextMessages returns → the stored message it came from (for turnImages).
+    const contextSource = new WeakMap();
+    // Give earlier user turns in the context window their images back, newest first, up to MAX_EARLIER_IMAGES.
+    // The last user turn is skipped: the send path gives it the current attachments.
+    function withEarlierImages(chatMessages) {
+      let budget = MAX_EARLIER_IMAGES;
+      let lastUser = chatMessages.length - 1;
+      while (lastUser >= 0 && chatMessages[lastUser].role !== 'user') lastUser--;
+      for (let i = lastUser - 1; i >= 0 && budget > 0; i--) {
+        const entry = chatMessages[i];
+        const images = entry.role === 'user' && turnImages.get(contextSource.get(entry));
+        if (!images || !images.length) continue;
+        const keep = images.slice(-budget);
+        budget -= keep.length;
+        const text = typeof entry.content === 'string' && entry.content !== '(attachments only)' ? entry.content : '';
+        chatMessages[i] = { role: 'user', content: [...keep.map((data) => ({ type: 'image', data })), ...(text ? [{ type: 'text', text }] : [])] };
+      }
+      return chatMessages;
+    }
+
     function buildContextMessages(allMessages, systemPrompt, modelKey) {
       const m = MODELS[modelKey];
       const maxCtx = m ? m.contextSize : 4096;
@@ -10676,7 +10701,9 @@ self.addEventListener('message', async (e) => {
       if (used + historyTokens <= budgetForHistory) {
         // Everything fits — send it all
         for (const msg of allMessages) {
-          out.push({ role: msg.role === 'assistant' ? 'assistant' : 'user', content: msg.content });
+          const entry = { role: msg.role === 'assistant' ? 'assistant' : 'user', content: msg.content };
+          contextSource.set(entry, msg);
+          out.push(entry);
         }
         return out;
       }
@@ -10709,7 +10736,7 @@ self.addEventListener('message', async (e) => {
 
       // Add recent turns
       for (const pair of recentPairs) {
-        if (pair.user) out.push({ role: 'user', content: pair.user.content });
+        if (pair.user) { const entry = { role: 'user', content: pair.user.content }; contextSource.set(entry, pair.user); out.push(entry); }
         if (pair.assistant) out.push({ role: 'assistant', content: pair.assistant.content });
       }
 
@@ -20278,7 +20305,10 @@ self.addEventListener('message', async (e) => {
       // A turn that failed left its question with no reply. Drop it, so a retry does not send the question
       // twice (an iPhone retry sent it three times, 2026-10-14).
       if (messages.length && messages[messages.length - 1].role === 'user') messages.pop();
-      messages.push({ role: 'user', content: userContent });
+      const userMsg = { role: 'user', content: userContent };
+      messages.push(userMsg);
+      const sentImages = attachments.filter((a) => a.type === 'image' && a.blob).map((a) => a.blob);
+      if (sentImages.length) turnImages.set(userMsg, sentImages);
       addUserMessage(text || '(attachments)', hasAttachments);
       saveChat();
 
@@ -20351,6 +20381,7 @@ self.addEventListener('message', async (e) => {
 
       // Build context-windowed chat history
       const chatMessages = buildContextMessages(messages, sysPrompt, activeModelKey);
+      if (caps && caps.image) withEarlierImages(chatMessages);
 
       // For multimodal sends, replace the most-recent user message in
       // chatMessages with the data-bearing content array we built

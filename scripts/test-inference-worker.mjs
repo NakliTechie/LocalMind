@@ -39,6 +39,26 @@ assert.match(indexSource, /await processor\(imageArg, prompt, \{ add_special_tok
 assert.match(indexSource, /const thinkTags = loadedClass === 'lfm3_vl';/);
 assert.match(indexSource, /'lfm3-vl-2b': \{\s*id: 'onnx-community\/LFM3-VL-2B-ONNX',[^]*?modelClass: 'lfm3_vl',\s*multimodal: true,\s*imageInput: true,/);
 assert.match(indexSource, /<option value="lfm3-vl-2b">/);
+// Follow-up questions to an image model get the earlier turns' images back (2026-10-29: LFM3-VL said "orange" for a
+// white chest because history was text only). Run withEarlierImages from index.html on a sample chat.
+{
+  assert.match(indexSource, /if \(sentImages\.length\) turnImages\.set\(userMsg, sentImages\);/);
+  assert.match(indexSource, /if \(caps && caps\.image\) withEarlierImages\(chatMessages\);/);
+  const start = indexSource.indexOf('    function withEarlierImages(chatMessages) {');
+  const fnSrc = indexSource.slice(start, indexSource.indexOf('\n    }\n', start) + 6);
+  const turnImages = new WeakMap(), contextSource = new WeakMap();
+  const withEarlierImages = new Function('turnImages', 'contextSource', 'MAX_EARLIER_IMAGES', fnSrc + '\nreturn withEarlierImages;')(turnImages, contextSource, 3);
+  const stored = [{ role: 'user', content: '(attachments only)' }, { role: 'user', content: 'Two more' }, { role: 'user', content: 'And now?' }];
+  turnImages.set(stored[0], ['a']); turnImages.set(stored[1], ['b', 'c', 'd']); turnImages.set(stored[2], ['current']);
+  const chat = [{ role: 'system', content: 'S' }];
+  for (const [i, m] of stored.entries()) { const e = { role: 'user', content: m.content }; contextSource.set(e, m); chat.push(e); if (i < 2) chat.push({ role: 'assistant', content: 'R' + i }); }
+  withEarlierImages(chat);
+  // The newest earlier turn keeps its three images and its text; the budget of three leaves the oldest text only; the
+  // last user turn is left for the send path's current attachments.
+  assert.deepEqual(chat[3].content, [{ type: 'image', data: 'b' }, { type: 'image', data: 'c' }, { type: 'image', data: 'd' }, { type: 'text', text: 'Two more' }]);
+  assert.equal(chat[1].content, '(attachments only)');
+  assert.equal(chat[5].content, 'And now?');
+}
 // Ternary Bonsai 2 27B: the worker block, its engine file, and the registry entry agree.
 const bonsai2Engine = await readFile(new URL('../src/ternary_bonsai_2_27b.js', import.meta.url), 'utf8');
 assert.match(bonsai2Engine, /export\{[^}]*zl as TernaryBonsai2[^}]*\}/);
@@ -177,7 +197,7 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   // Every engine worker holds back a delta whose decoded text ends in U+FFFD (a character split across tokens).
   assert.equal((indexSource.match(/endsWith\('\\uFFFD'\)/g) || []).length, 4);
   // A failed turn's unanswered question is dropped before the retry is added.
-  assert.match(indexSource, /if \(messages\.length && messages\[messages\.length - 1\]\.role === 'user'\) messages\.pop\(\);\s*messages\.push\(\{ role: 'user', content: userContent \}\);/);
+  assert.match(indexSource, /if \(messages\.length && messages\[messages\.length - 1\]\.role === 'user'\) messages\.pop\(\);\s*const userMsg = \{ role: 'user', content: userContent \};\s*messages\.push\(userMsg\);/);
   // A worker swap ends the generation still waiting on the old worker.
   assert.match(indexSource, /if \(generateResolve\) \{ const r = generateResolve; generateResolve = null; r\(currentAssistantText\); \}\n\n      activeModelKey = key;/);
   assert.match(indexSource, /let inThink = \(wantThink \|\| model\.alwaysThinks === true\) && model\.thinkInPrompt !== false;/);
