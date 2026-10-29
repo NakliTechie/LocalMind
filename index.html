@@ -2845,7 +2845,7 @@
             Ask before running custom and MCP tools <span style="font-weight:400;color:var(--gray-500)">(they send the model's arguments to another server; also asks before weather and Wikipedia lookups)</span>
           </label>
           <label class="toggle-row" id="keylessWebRow">
-            <input type="checkbox" id="keylessWebToggle">
+            <input type="checkbox" id="keylessWebToggle" checked>
             Keyless web tools: weather and Wikipedia <span style="font-weight:400;color:var(--gray-500)">(agent-capable models; sends the place name to open-meteo.com or the topic to wikipedia.org, no key or account)</span>
           </label>
           <label class="toggle-row" id="pageProxyRow">
@@ -9080,6 +9080,7 @@ self.addEventListener('message', async (e) => {
       },
       'lfm3-1.7b': {
         id: 'LiquidAI/LFM3-1.7B-ONNX',
+        toolFormat: 'template',
         label: 'LFM3 1.7B',
         dtype: 'q4f16',
         size: '~1.4 GB',
@@ -10309,7 +10310,9 @@ self.addEventListener('message', async (e) => {
     // Keyless web tools send the place name or query to a public API, so they stay off until the user turns them on
     // (Settings → Tools), and each still asks on its first use per session through the approval card.
     const KEYLESS_WEB_KEY = 'lm_keyless_web';
-    function keylessWebOn() { try { return localStorage.getItem(KEYLESS_WEB_KEY) === 'on'; } catch { return false; } }
+    // On by default (Chirag, 2026-10-29: "keyless web tools should be on by default"); each lookup still asks first
+    // through the approval card (approvalHost), and switching the setting off hides both tools.
+    function keylessWebOn() { try { return localStorage.getItem(KEYLESS_WEB_KEY) !== 'off'; } catch { return true; } }
     async function fetchToolJson(url) {
       const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error('HTTP ' + res.status + ' from ' + new URL(url).host);
@@ -10453,6 +10456,19 @@ self.addEventListener('message', async (e) => {
     // tools array from TOOL_REGISTRY. Stays outside the adapter — the
     // adapter receives an explicit tools[] array per call and never
     // sees TOOL_REGISTRY directly.
+    // A built-in tool the user has switched off is missing from the tool list, so a model told nothing says it "has
+    // no access to weather" (MiniCPM-V 4.7 and LFM3, 2026-10-28). Name the switched-off tools and the setting, so the
+    // reply points at it. Only when the list holds the app's own tools and lacks the switched-off ones.
+    function toolsSwitchedOffHint(tools) {
+      if (keylessWebOn()) return '';
+      const names = new Set((tools || []).map((t) => t && t.name));
+      if (![...names].some((n) => TOOL_REGISTRY[n])) return '';
+      // Plain words, no tool names: a small model given a name tends to call it, and the parser drops unknown names.
+      const off = Object.entries(TOOL_REGISTRY).some(([n, t]) => t.requiresKeylessWeb && !names.has(n));
+      if (!off) return '';
+      return 'Live weather and Wikipedia lookups are switched off in Settings → Tools → Keyless web tools. If the user asks ' +
+        'for weather or a Wikipedia lookup, tell them they can turn that setting on. Still use your tools for the rest of the request.';
+    }
     function buildToolsForRuntime() {
       const webConfigured = isSearchConfigured();
       const caps = LocalMind.runtime.capabilities();
@@ -16728,6 +16744,12 @@ self.addEventListener('message', async (e) => {
         // template renders as <tool_response>. Endpoints (incl. a router escalation) keep the JSON prompt.
         const nativeXmlTools = !!(activeModel && activeModel.toolFormat === 'qwen3-xml')
           && !(LocalMind.runtime.isEndpoint && LocalMind.runtime.isEndpoint());
+        // Tools through the model's own chat template (model entry toolFormat 'template', Transformers.js worker only:
+        // LFM3): the worker passes them to apply_chat_template, so the model sees the tool block it was trained on;
+        // tool results stay role 'tool'. On LocalMind's JSON prompt LFM3 1.7B offered get_current_time instead of
+        // calling it (Chirag, 2026-10-28).
+        const templateTools = !!(activeModel && activeModel.toolFormat === 'template')
+          && !(LocalMind.runtime.isEndpoint && LocalMind.runtime.isEndpoint());
 
         const iter = makeAsyncIterator();
         let completionTokens = 0;
@@ -16801,7 +16823,7 @@ self.addEventListener('message', async (e) => {
                   content = String(content == null ? '' : content);
                 }
                 if (m.role === 'tool') {
-                  if (nativeXmlTools) return { role: 'tool', name: m.name || 'tool', content };
+                  if (nativeXmlTools || templateTools) return { role: 'tool', name: m.name || 'tool', content };
                   const toolPayload = (() => {
                     try { return JSON.parse(content); } catch { return content; }
                   })();
@@ -16824,8 +16846,15 @@ self.addEventListener('message', async (e) => {
                 userSysContent = typeof c === 'string' ? c : '';
                 chatMessages = chatMessages.slice(1);
               }
-              const toolSys = nativeXmlTools ? _adapterBuildQwenXmlToolPrompt(tools, userSysContent) : _adapterBuildToolPrompt(tools, userSysContent);
-              chatMessages = [{ role: 'system', content: toolSys }].concat(chatMessages);
+              const hint = toolsSwitchedOffHint(tools);
+              if (hint) userSysContent = userSysContent ? userSysContent + '\n\n' + hint : hint;
+              if (templateTools) {
+                genConfig.tools = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
+                if (userSysContent) chatMessages = [{ role: 'system', content: userSysContent }].concat(chatMessages);
+              } else {
+                const toolSys = nativeXmlTools ? _adapterBuildQwenXmlToolPrompt(tools, userSysContent) : _adapterBuildToolPrompt(tools, userSysContent);
+                chatMessages = [{ role: 'system', content: toolSys }].concat(chatMessages);
+              }
             }
           } catch (e) {
             const err = e instanceof Error ? e : new Error(String(e));
@@ -18379,6 +18408,7 @@ async function generateCausal(chatMessages, id, genConfig, enableThinking) {
         add_generation_prompt: true,
         return_dict: true,
         enable_thinking: thinking,
+        ...(Array.isArray(genConfig && genConfig.tools) ? { tools: genConfig.tools } : {}),
       });
     } catch (tplErr) {
       // The pinned transformers.js jinja can't parse some real templates — e.g.
@@ -18402,6 +18432,7 @@ async function generateCausal(chatMessages, id, genConfig, enableThinking) {
             add_generation_prompt: true,
             return_dict: true,
             enable_thinking: thinking,
+            ...(Array.isArray(genConfig && genConfig.tools) ? { tools: genConfig.tools } : {}),
             chat_template: raw,
           });
           salvaged = true;

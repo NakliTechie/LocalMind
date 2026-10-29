@@ -156,13 +156,14 @@ eq(cal({ title: 'a', start: '2026-10-20T15:00', duration_minutes: '90' }).end_ut
 }
 
 // ── wiring in the app ─────────────────────────────────────────
-ok(/\.filter\(\(\[_, t\]\) => !t\.requiresKeylessWeb \|\| keylessWebOn\(\)\)/.test(html), 'buildToolsForRuntime hides keyless web tools until the setting is on');
+ok(/\.filter\(\(\[_, t\]\) => !t\.requiresKeylessWeb \|\| keylessWebOn\(\)\)/.test(html), 'buildToolsForRuntime hides keyless web tools when the setting is off');
+ok(/function keylessWebOn\(\) \{ try \{ return localStorage\.getItem\(KEYLESS_WEB_KEY\) !== 'off'; \} catch \{ return true; \} \}/.test(html), 'keyless web tools are on unless switched off');
+ok(/<input type="checkbox" id="keylessWebToggle" checked>/.test(html), 'the keyless web checkbox starts checked');
 ok(/tool\._custom \|\| tool\._mcp \|\| tool\.approvalHost/.test(html), 'approvalHost tools go through the approval card');
 ok(/TOOL_REGISTRY\.get_weather = \{[\s\S]*?requiresKeylessWeb: true,\s*approvalHost: 'open-meteo\.com'/.test(html), 'get_weather is gated');
 ok(/TOOL_REGISTRY\.wikipedia_lookup = \{[\s\S]*?requiresKeylessWeb: true,\s*approvalHost: 'wikipedia\.org'/.test(html), 'wikipedia_lookup is gated');
 ok(!/TOOL_REGISTRY\.create_calendar_event = \{[^}]*?(requiresKeylessWeb|approvalHost)/.test(html), 'the calendar tool is offline and ungated');
 eq((html.match(/attachToolDownload\(/g) || []).length, 3, 'both agent loops attach the .ics download (plus the definition)');
 eq((html.match(/\.\.\.toolResultSources\(tc\.name, toolResult\)/g) || []).length, 2, 'both agent loops collect tool sources');
-ok(/<input type="checkbox" id="keylessWebToggle">/.test(html), 'the setting defaults off');
 
 console.log(`agent tools: ${checks} checks passed (weather, Wikipedia, calendar with ${refusals.length} refusals, wiring)`);
