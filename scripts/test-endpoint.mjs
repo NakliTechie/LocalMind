@@ -331,4 +331,28 @@ const reset = () => { requests.length = 0; harness.reset(); for (const k of Obje
   console.log('tool names match case-insensitively when one tool fits: ok');
 }
 
+// <arg_key>/<arg_value> calls (Flint 40B-A2.5B, toolFormat 'arg-key'): paired, unclosed, argument-less; values coerced.
+{
+  const { _adapterParseToolCalls: parse, _adapterBuildArgKeyToolPrompt: prompt } = await import(new URL('../src/tool-calls.js', import.meta.url));
+  const tools = [
+    { name: 'calculate', parameters: { type: 'object', properties: { expression: { type: 'string' } } } },
+    { name: 'set_reminder', parameters: { type: 'object', properties: { message: { type: 'string' }, minutes: { type: 'number' } } } },
+    { name: 'list_memories', parameters: { type: 'object', properties: {} } },
+  ];
+  const known = tools.map((t) => t.name);
+  const r = parse('<think>use the calculator</think>Checking. <tool_call>calculate<arg_key>expression</arg_key><arg_value>4821 * 377</arg_value></tool_call>', known, tools);
+  assert.deepEqual(r.toolCalls, [{ name: 'calculate', arguments: { expression: '4821 * 377' } }]);
+  assert.equal(r.cleanText, '<think>use the calculator</think>Checking.');
+  assert.deepEqual(parse('<tool_call>set_reminder<arg_key>message</arg_key><arg_value>stretch</arg_value><arg_key>minutes</arg_key><arg_value>10</arg_value>', known, tools).toolCalls,
+    [{ name: 'set_reminder', arguments: { message: 'stretch', minutes: 10 } }], 'cut at the token cap, minutes coerced to a number');
+  assert.deepEqual(parse('<tool_call>list_memories</tool_call>', known, tools).toolCalls, [{ name: 'list_memories', arguments: {} }]);
+  assert.deepEqual(parse('<tool_call>translate<arg_key>q</arg_key><arg_value>hi</arg_value></tool_call>', known, tools).toolCalls, [], 'an unknown name never runs');
+  assert.deepEqual(parse('<tool_call>{"name": "calculate", "arguments": {"expression": "1+1"}}</tool_call>', known, tools).toolCalls,
+    [{ name: 'calculate', arguments: { expression: '1+1' } }], 'JSON calls still read by pass 1');
+  const p = prompt(tools, 'Be brief.');
+  assert.match(p, /<tool_call>\{function-name\}<arg_key>\{arg-key-1\}<\/arg_key><arg_value>\{arg-value-1\}<\/arg_value>\.\.\.<\/tool_call>\n\nBe brief\.$/);
+  assert.match(p, /\n\{"type": "function", "function": \{"name": "calculate"/);
+  console.log('arg_key tool calls (Flint): ok');
+}
+
 console.log('LocalMind endpoint backend: ok');

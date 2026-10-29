@@ -78,6 +78,45 @@ function _adapterBuildQwenXmlToolPrompt(tools, userPrompt) {
   return p;
 }
 
+// Native tool prompt for templates that call with <arg_key>/<arg_value> pairs (Flint 40B-A2.5B: model entry
+// `toolFormat: 'arg-key'`; GLM-4.7 uses the same call shape). The text is what Flint's GGUF chat template renders as
+// its tool preamble: one JSON object per tool inside <tools>, then the call format. The caller's system text follows.
+function _adapterBuildArgKeyToolPrompt(tools, userPrompt) {
+  let p = '# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>';
+  for (const t of (tools || [])) {
+    p += '\n' + _adapterPyJson({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } });
+  }
+  p += '\n</tools>\n\nFor each function call, output the function name and arguments within the following XML format:\n<tool_call>{function-name}<arg_key>{arg-key-1}</arg_key><arg_value>{arg-value-1}</arg_value>...</tool_call>';
+  if (userPrompt && userPrompt.trim()) p += '\n\n' + userPrompt.trim();
+  return p;
+}
+
+// Read <arg_key>/<arg_value> tool calls:
+//   <tool_call>NAME<arg_key>KEY</arg_key><arg_value>VALUE</arg_value>...</tool_call>
+// The template writes a string value raw and any other value as JSON, so each value is coerced against the tool's
+// JSON-schema type. Closing tags are optional (a reply cut at the token cap still yields the call). A call with no
+// arguments is <tool_call>NAME</tool_call>. Returns [{ name, arguments, raw }], `raw` being the span to strip.
+function _adapterParseArgKeyCalls(text, toolDefs) {
+  const out = [];
+  const re = /<tool_call>\s*([A-Za-z_][\w.-]*)\s*((?:<arg_key>[\s\S]*?)?)(?:<\/tool_call>|(?=<tool_call>)|$)/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const name = m[1];
+    const t = _adapterFindToolDef(toolDefs, name);
+    const props = (t && t.parameters && t.parameters.properties) || {};
+    const args = {};
+    const pRe = /<arg_key>\s*([\s\S]*?)\s*<\/arg_key>\s*(?:<arg_value>([\s\S]*?)(?:<\/arg_value>|(?=<arg_key>)|$))?/g;
+    let pm;
+    while ((pm = pRe.exec(m[2])) !== null) {
+      if (pm[1]) args[pm[1]] = _adapterCoerceXmlParam(pm[2] == null ? '' : pm[2].trim(), props[pm[1]]);
+      if (pm[0].length === 0) pRe.lastIndex++;
+    }
+    out.push({ name, arguments: args, raw: m[0] });
+    if (m[0].length === 0) re.lastIndex++;
+  }
+  return out;
+}
+
 // Read Qwen3-Coder XML tool calls:
 //   <tool_call>\n<function=NAME>\n<parameter=KEY>\nVALUE\n</parameter>\n</function>\n</tool_call>
 // A value is raw text (no escaping) between the newline after <parameter=KEY> and the newline before
@@ -316,6 +355,18 @@ function _adapterParseToolCalls(text, knownToolNames, toolDefs) {
     cleanText = cleanText.replace(match[0], '');
   }
 
+  // 1c. <arg_key>/<arg_value> calls (Flint, GLM-4.7): <tool_call>NAME<arg_key>K</arg_key><arg_value>V</arg_value></tool_call>.
+  // Pass 1 cannot read the body as JSON and has already cut the paired blocks from cleanText, so read `text` here.
+  // Gated on nothing matching above, a bare name right after <tool_call>, and a known tool name.
+  if (toolCalls.length === 0 && /<tool_call>\s*[A-Za-z_][\w.-]*\s*(?:<arg_key>|<\/tool_call>|$)/.test(text)) {
+    for (const c of _adapterParseArgKeyCalls(text, toolDefs)) {
+      const name = knownToolNames && knownToolNames.length ? _adapterResolveToolName(c.name, knownToolNames) : null;
+      if (name != null) toolCalls.push({ name, arguments: c.arguments });
+      cleanText = cleanText.replace(c.raw, '');
+    }
+    cleanText = cleanText.replace(/<\/?tool_call>/g, '').trim();
+  }
+
   // 1a. Qwen3-Coder XML calls: <tool_call><function=NAME><parameter=KEY>VALUE</parameter></function></tool_call>.
   // Ternary Bonsai 2 is prompted for this format (_adapterBuildQwenXmlToolPrompt); any Qwen3.8-family model
   // may emit it unprompted. The JSON pass above cannot read the body, so read it here, paired or unclosed.
@@ -513,6 +564,8 @@ export {
   _adapterPyJson,
   _adapterBuildQwenXmlToolPrompt,
   _adapterParseQwenXmlCalls,
+  _adapterBuildArgKeyToolPrompt,
+  _adapterParseArgKeyCalls,
   _adapterInferToolFromArgs,
   _adapterParsePythonicArgs,
   _adapterCoerceXmlParam,

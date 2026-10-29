@@ -2688,7 +2688,7 @@
               <li><strong>MiniCPM-V 4.7 35B-A3B &middot; SSD-streamed (experimental)</strong> (~20 GB) &mdash; text and images, with reasoning. OpenBMB's MiniCPM-V 4.7 (released 2026-10): a 35B mixture-of-experts (256 experts, 8 active per token, about 3B parameters per token) built on the same architecture as Qwen3.6 35B-A3B, from OpenBMB's own 4-bit (Q4_0) GGUF. Attention, the recurrent layers, routers and KV cache stay on the GPU while the routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~20 GB of disk). Attach an image and it reads it: the first image downloads the vision encoder (1.1 GB) into this browser's storage once. A large image is read as an overview plus up to 9 tiles of about 448 &times; 448 (up to about 650 image tokens), as the model was trained. It can use tools (calculator, time, memory, reminders): it called the right tool on 6 of 6 test prompts and answered 5 of 5 plain questions without one.</li>
               <li><strong>Gemma 4 26B-A4B &middot; SSD-streamed (experimental)</strong> (~14 GB) &mdash; text, with reasoning. Google's Gemma 4 26B-A4B mixture-of-experts (128 experts, 8 active per token) from its official 4-bit QAT GGUF (14.4 GB) on the same from-scratch WebGPU engine family: attention, the dense MLP, routers and KV cache stay on the GPU (~1.6 GB plus a 4 GB expert pool) while the 3,840 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~14 GB of disk; about 12 minutes on a fast connection). About 23 tokens/s on an M4 Pro with 24 GB, and prompts are read in chunks at about 55 tokens/s. Greedy output matches llama.cpp. Flip <strong>Show reasoning</strong> for its thinking.</li>
               <li><strong>LFM2.5 24B-A2B &middot; SSD-streamed (experimental)</strong> (~13.6 GB) &mdash; text, reasoning-only. Liquid AI's LFM2.5-24B-A2B (released 2026-10-13): a 24B mixture-of-experts (64 experts, 4 active per token, about 2.4B parameters per token) with short-convolution and attention layers, from Liquid's own 4-bit GGUF. Short-convolution and attention layers, routers and KV cache stay on the GPU while the 2,432 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~13.6 GB of disk). About 16 tokens/s on an M4 Pro with 24 GB, and prompts are read in chunks at about 50 tokens/s. Greedy output matches llama.cpp (8 of 8 prompts). It always reasons before it answers, so every reply opens with its reasoning. It can use tools (calculator, time, memory, reminders): it called the right tool on 6 of 6 test prompts and answered 5 of 5 plain questions without one.</li>
-              <li><strong>Flint 40B-A2.5B &middot; SSD-streamed (experimental)</strong> (~26 GB) &mdash; text, coding, reasoning. Recursive's Flint (released 2026-10-21, Apache-2.0): a 39.8B mixture-of-experts coding model (256 experts, 6 active per token, about 2.5B parameters per token), from Recursive's own 4-bit (Q4_1) GGUF, whose card asks for 48 GB of memory under llama.cpp. Attention, routers, the token table and KV cache stay on the GPU while the 12,032 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~26 GB of disk). About 8.7 tokens/s on an M4 Pro with 24 GB, and prompts are read at about 27 tokens/s. Its output stays as close to llama.cpp's Metal backend as llama.cpp's own CPU backend does. It reasons before it answers, so replies open with its reasoning. Tools are off for now.</li>
+              <li><strong>Flint 40B-A2.5B &middot; SSD-streamed (experimental)</strong> (~26 GB) &mdash; text, coding, reasoning. Recursive's Flint (released 2026-10-21, Apache-2.0): a 39.8B mixture-of-experts coding model (256 experts, 6 active per token, about 2.5B parameters per token), from Recursive's own 4-bit (Q4_1) GGUF, whose card asks for 48 GB of memory under llama.cpp. Attention, routers, the token table and KV cache stay on the GPU while the 12,032 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~26 GB of disk). About 8.7 tokens/s on an M4 Pro with 24 GB, and prompts are read at about 27 tokens/s. Its output stays as close to llama.cpp's Metal backend as llama.cpp's own CPU backend does. It reasons before it answers, so replies open with its reasoning. It can use tools (calculator, time, memory, reminders, weather, Wikipedia, calendar): it called the right tool on 11 of 13 test prompts and answered 11 of 11 plain questions without one.</li>
               <li><strong>Ling 3.0 Flash 124B-A5B &middot; via anyformer (experimental)</strong> (~81 GB) &mdash; text, reasoning. inclusionAI's Ling 3.0 Flash (released 2026-08-02, MIT): a 124B mixture-of-experts (512 experts, 8 active per token, about 5.1B parameters per token) whose layers mix linear attention (KDA) and latent attention (MLA), from inclusionAI's own 4-bit Q4_K_M GGUF (77 GB in two parts). anyformer loads it on diskformer's engine for it, which keeps the attention, routers and caches on the GPU (about 2.5 GB plus a 4 GB expert cache; it needs about 7 GB of GPU memory) and streams the 20,480 routed experts from on-device storage (OPFS). The first load copies the model into this browser's storage once (~81 GB of disk). About 5.5 tokens/s on an M4 Pro with 24 GB, and prompts are read at about 5 tokens/s. Flip <strong>Show reasoning</strong> for its thinking. Tools are off for now.</li>
               <li><strong>DeepSeek V4.1 Flash 763B &middot; tech demo, very slow, chat untested</strong> (~231 GB) &mdash; text. DeepSeek's 763B mixture-of-experts model, 6 of its 384 experts per token, from ISTA-DASLab's IQ1_M files plus a separate Engram file. anyformer runs it on diskformer's llama.cpp path: an 8 GB GPU budget, with the experts read from this browser's storage as each token needs them. It needs 231 GB of free browser storage and runs at under one token a second, so treat it as a demonstration, not a chat model. One plain prompt was checked in Chrome; chat through its template has not been run, so replies may come out wrong. Reasoning and tools are off.</li>
               <li><strong>Nemotron-Labs-Diffusion 3B &middot; experimental &middot; diffusion</strong> (~2.7 GB) &mdash; text. NVIDIA's Nemotron-Labs-Diffusion-3B writes by diffusion: it fills in whole blocks of words at once instead of one word at a time. It runs on kohra.js through anyformer, at about 12-16 tokens a second on an M4 Pro. Opt-in and experimental: only single-turn chats have been checked. Reasoning and tools are off.</li>
@@ -8665,7 +8665,8 @@ self.onmessage = async (e) => {
       let ai = 0;
       const msgs = [];
       for (const m of (d.messages || [])) {
-        const role = (m.role === 'system' || m.role === 'assistant') ? m.role : 'user';
+        // Role 'tool' arrives only for toolFormat 'arg-key' (Flint), whose engine renders it as <|observation|>.
+        const role = (m.role === 'system' || m.role === 'assistant' || m.role === 'tool') ? m.role : 'user';
         if (vision && Array.isArray(m.content) && m.content.some((b) => b && b.type === 'image')) {
           const parts = [];
           for (const b of m.content) {
@@ -9439,7 +9440,10 @@ self.addEventListener('message', async (e) => {
         gguf: { file: 'flint-int4-q4_1.gguf', size: 25992966976 },   // FLINT_40B_A2B in flint_moe_ssd.js
         type: 'causal',
         multimodal: false,
-        agentCapable: false,
+        toolFormat: 'arg-key',   // its template's <tool_call>NAME<arg_key>…</arg_key><arg_value>…</arg_value> calls
+        // Tool battery 2026-10-29 (plan/2026-10-29-flint-tools): 22/24 (calls 11/13, restraint 11/11), round trip
+        // passed. Both misses were calendar prompts where it asked for the time first, as the tool's description says.
+        agentCapable: true,
         thinking: true,
         contextSize: 8192,
         genConfig: { max_new_tokens: 4096 },
@@ -16251,6 +16255,7 @@ self.addEventListener('message', async (e) => {
       _adapterPyJson,
       _adapterBuildQwenXmlToolPrompt,
       _adapterParseQwenXmlCalls,
+      _adapterBuildArgKeyToolPrompt,
       _adapterInferToolFromArgs,
       _adapterParsePythonicArgs,
       _adapterCoerceXmlParam,
@@ -16803,6 +16808,10 @@ self.addEventListener('message', async (e) => {
         // calling it (Chirag, 2026-10-28).
         const templateTools = !!(activeModel && activeModel.toolFormat === 'template')
           && !(LocalMind.runtime.isEndpoint && LocalMind.runtime.isEndpoint());
+        // Native <arg_key>/<arg_value> tool calls (model entry toolFormat 'arg-key': Flint): the tool block in the
+        // template's own words; tool results stay role 'tool', which Flint's engine renders as <|observation|>.
+        const argKeyTools = !!(activeModel && activeModel.toolFormat === 'arg-key')
+          && !(LocalMind.runtime.isEndpoint && LocalMind.runtime.isEndpoint());
 
         const iter = makeAsyncIterator();
         let completionTokens = 0;
@@ -16876,7 +16885,7 @@ self.addEventListener('message', async (e) => {
                   content = String(content == null ? '' : content);
                 }
                 if (m.role === 'tool') {
-                  if (nativeXmlTools || templateTools) return { role: 'tool', name: m.name || 'tool', content };
+                  if (nativeXmlTools || templateTools || argKeyTools) return { role: 'tool', name: m.name || 'tool', content };
                   const toolPayload = (() => {
                     try { return JSON.parse(content); } catch { return content; }
                   })();
@@ -16905,7 +16914,9 @@ self.addEventListener('message', async (e) => {
                 genConfig.tools = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
                 if (userSysContent) chatMessages = [{ role: 'system', content: userSysContent }].concat(chatMessages);
               } else {
-                const toolSys = nativeXmlTools ? _adapterBuildQwenXmlToolPrompt(tools, userSysContent) : _adapterBuildToolPrompt(tools, userSysContent);
+                const toolSys = nativeXmlTools ? _adapterBuildQwenXmlToolPrompt(tools, userSysContent)
+                  : argKeyTools ? _adapterBuildArgKeyToolPrompt(tools, userSysContent)
+                  : _adapterBuildToolPrompt(tools, userSysContent);
                 chatMessages = [{ role: 'system', content: toolSys }].concat(chatMessages);
               }
             }
@@ -62636,6 +62647,45 @@ function _adapterBuildQwenXmlToolPrompt(tools, userPrompt) {
   return p;
 }
 
+// Native tool prompt for templates that call with <arg_key>/<arg_value> pairs (Flint 40B-A2.5B: model entry
+// `toolFormat: 'arg-key'`; GLM-4.7 uses the same call shape). The text is what Flint's GGUF chat template renders as
+// its tool preamble: one JSON object per tool inside <tools>, then the call format. The caller's system text follows.
+function _adapterBuildArgKeyToolPrompt(tools, userPrompt) {
+  let p = '# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>';
+  for (const t of (tools || [])) {
+    p += '\n' + _adapterPyJson({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } });
+  }
+  p += '\n</tools>\n\nFor each function call, output the function name and arguments within the following XML format:\n<tool_call>{function-name}<arg_key>{arg-key-1}</arg_key><arg_value>{arg-value-1}</arg_value>...</tool_call>';
+  if (userPrompt && userPrompt.trim()) p += '\n\n' + userPrompt.trim();
+  return p;
+}
+
+// Read <arg_key>/<arg_value> tool calls:
+//   <tool_call>NAME<arg_key>KEY</arg_key><arg_value>VALUE</arg_value>...</tool_call>
+// The template writes a string value raw and any other value as JSON, so each value is coerced against the tool's
+// JSON-schema type. Closing tags are optional (a reply cut at the token cap still yields the call). A call with no
+// arguments is <tool_call>NAME</tool_call>. Returns [{ name, arguments, raw }], `raw` being the span to strip.
+function _adapterParseArgKeyCalls(text, toolDefs) {
+  const out = [];
+  const re = /<tool_call>\s*([A-Za-z_][\w.-]*)\s*((?:<arg_key>[\s\S]*?)?)(?:<\/tool_call>|(?=<tool_call>)|$)/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const name = m[1];
+    const t = _adapterFindToolDef(toolDefs, name);
+    const props = (t && t.parameters && t.parameters.properties) || {};
+    const args = {};
+    const pRe = /<arg_key>\s*([\s\S]*?)\s*<\/arg_key>\s*(?:<arg_value>([\s\S]*?)(?:<\/arg_value>|(?=<arg_key>)|$))?/g;
+    let pm;
+    while ((pm = pRe.exec(m[2])) !== null) {
+      if (pm[1]) args[pm[1]] = _adapterCoerceXmlParam(pm[2] == null ? '' : pm[2].trim(), props[pm[1]]);
+      if (pm[0].length === 0) pRe.lastIndex++;
+    }
+    out.push({ name, arguments: args, raw: m[0] });
+    if (m[0].length === 0) re.lastIndex++;
+  }
+  return out;
+}
+
 // Read Qwen3-Coder XML tool calls:
 //   <tool_call>\n<function=NAME>\n<parameter=KEY>\nVALUE\n</parameter>\n</function>\n</tool_call>
 // A value is raw text (no escaping) between the newline after <parameter=KEY> and the newline before
@@ -62874,6 +62924,18 @@ function _adapterParseToolCalls(text, knownToolNames, toolDefs) {
     cleanText = cleanText.replace(match[0], '');
   }
 
+  // 1c. <arg_key>/<arg_value> calls (Flint, GLM-4.7): <tool_call>NAME<arg_key>K</arg_key><arg_value>V</arg_value></tool_call>.
+  // Pass 1 cannot read the body as JSON and has already cut the paired blocks from cleanText, so read `text` here.
+  // Gated on nothing matching above, a bare name right after <tool_call>, and a known tool name.
+  if (toolCalls.length === 0 && /<tool_call>\s*[A-Za-z_][\w.-]*\s*(?:<arg_key>|<\/tool_call>|$)/.test(text)) {
+    for (const c of _adapterParseArgKeyCalls(text, toolDefs)) {
+      const name = knownToolNames && knownToolNames.length ? _adapterResolveToolName(c.name, knownToolNames) : null;
+      if (name != null) toolCalls.push({ name, arguments: c.arguments });
+      cleanText = cleanText.replace(c.raw, '');
+    }
+    cleanText = cleanText.replace(/<\/?tool_call>/g, '').trim();
+  }
+
   // 1a. Qwen3-Coder XML calls: <tool_call><function=NAME><parameter=KEY>VALUE</parameter></function></tool_call>.
   // Ternary Bonsai 2 is prompted for this format (_adapterBuildQwenXmlToolPrompt); any Qwen3.8-family model
   // may emit it unprompted. The JSON pass above cannot read the body, so read it here, paired or unclosed.
@@ -63071,6 +63133,8 @@ export {
   _adapterPyJson,
   _adapterBuildQwenXmlToolPrompt,
   _adapterParseQwenXmlCalls,
+  _adapterBuildArgKeyToolPrompt,
+  _adapterParseArgKeyCalls,
   _adapterInferToolFromArgs,
   _adapterParsePythonicArgs,
   _adapterCoerceXmlParam,
