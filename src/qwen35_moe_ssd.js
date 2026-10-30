@@ -741,6 +741,7 @@ function guarded(src) {
 }
 
 export class Qwen35MoeSsd extends Qwen3MoeSsd {
+  static archs = ['qwen35moe'];
   // Without a url, the pinned Hugging Face file; with one (a local serve, a layer cut), the OPFS
   // directory is named after the file, never after rung 2a's model.
   static async load(modelId = null, opts = {}) {
@@ -751,7 +752,7 @@ export class Qwen35MoeSsd extends Qwen3MoeSsd {
   constructor(device, manifest, gguf, opts) {
     super(device, manifest, gguf, opts);
     const c = this.cfg;
-    if (c.arch !== 'qwen35moe') throw new Error(`Qwen35MoeSsd needs a qwen35moe GGUF, got ${c.arch}`);
+    if (!this.constructor.archs.includes(c.arch)) throw new Error(`${this.constructor.name} needs a ${this.constructor.archs.join(' or ')} GGUF, got ${c.arch}`);
     if (c.ssm.dConv !== 4) throw new Error(`gdnConv assumes a 4-tap conv, got ${c.ssm.dConv}`);
     if (c.ssm.dState !== 128 || c.ssm.dInner !== c.ssm.vHeads * c.ssm.dState) throw new Error('gdnStep assumes 128-wide heads');
     // Weight type: Q8_0 (Qwen3.6, MiniCPM-V Q8_0) or Q4_0 (MiniCPM-V Q4_0: Q4_0 matrices and experts, Q6_K output).

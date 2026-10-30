@@ -21,7 +21,10 @@ export const FORMAT = 'diskformer-gguf/1';
 // ── Ingest: GGUF (over HTTP Range, or a local file) → OPFS, in the engine layout ──
 export const storeKey = (file) => file.replace(/\.gguf$/i, '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
 
-export async function readHeader(url, fetchFn, signal) {
+// The header bytes stream with 'ingest-header' progress ({ loaded, total }): on a slow link the first 16 MB (more for a
+// large tokenizer) take minutes, and a host's watchdog must see the download moving (LocalMind 2026-10-24: at 0.1 MB/s
+// a silent header fetch ended Flint's ingest after 3 minutes).
+export async function readHeader(url, fetchFn, signal, onProgress = () => {}) {
   let n = 16 << 20;
   for (;;) {
     const r = await fetchFn(url, { headers: { Range: `bytes=0-${n - 1}` }, signal, cache: 'no-store' });
@@ -29,10 +32,36 @@ export async function readHeader(url, fetchFn, signal) {
     const h = (name) => (r.headers && r.headers.get ? r.headers.get(name) : null);
     const total = /\/(\d+)\s*$/.exec(h('content-range') || '');
     const file = { size: total ? Number(total[1]) : null, etag: h('etag') };   // for the resume identity
-    const u8 = new Uint8Array(await r.arrayBuffer());
+    const want = Math.min(n, file.size ?? n);
+    let u8;
+    if (r.body && r.body.getReader) {
+      const reader = r.body.getReader(), parts = [];
+      let got = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        parts.push(value); got += value.byteLength;
+        onProgress({ status: 'ingest-header', loaded: got, total: want });
+      }
+      u8 = new Uint8Array(got);
+      let at = 0;
+      for (const p of parts) { u8.set(p, at); at += p.byteLength; }
+    } else {
+      u8 = new Uint8Array(await r.arrayBuffer());
+    }
     try { return { gguf: parseGguf(u8), bytes: u8, file }; } catch (e) { if (!e.needBytes) throw e; n = e.needBytes; }
   }
 }
+
+// A network failure while a range streams (the connection dropped, a 5xx or 429) is retried from the last byte
+// consumed, up to RETRIES times with growing pauses (1, 2, 4, 8 s, then 15 s); an abort, a 4xx and a write failure are
+// not. Every retry reports 'ingest-retry' ({ attempt, at, error }).
+const RETRIES = 6;
+const retryable = (e) => { e.retryable = true; return e; };
+const pause = (ms, signal) => new Promise((resolve, reject) => {
+  const t = setTimeout(resolve, ms);
+  if (signal) signal.addEventListener('abort', () => { clearTimeout(t); reject(signal.reason ?? new Error('aborted')); }, { once: true });
+});
 
 // A local file as the source: a fetch-shaped function that answers ingestGguf's Range requests from a Blob (a GGUF
 // the user picked, e.g. from a Hugging Face or LM Studio cache), so nothing is downloaded. Pass it as `fetch`.
@@ -69,7 +98,7 @@ async function ingest({ url, key, plan, root = ROOT, format = FORMAT, fetch: fet
   rangeBytes = 1 << 30, io = { OpfsWriter, readOpfsText, writeOpfsText } }) {
   if (!plan || !plan.layout || !plan.units) throw new Error('ingestGguf: plan { layout, units } is required');
   const t0 = performance.now();
-  const { gguf, bytes: headerBuf, file } = await readHeader(url, fetchFn, signal);
+  const { gguf, bytes: headerBuf, file } = await readHeader(url, fetchFn, signal, onProgress);
   const layout = plan.layout(gguf);
   const dir = `${root}/${key}`;
   const storage = typeof navigator !== 'undefined' && navigator.storage;
@@ -138,26 +167,39 @@ async function ingest({ url, key, plan, root = ROOT, format = FORMAT, fetch: fet
     let pos = units[startUnit].src;
     for (let start = pos; start < last; start += rangeBytes) {
       const end = Math.min(last, start + rangeBytes) - 1;
-      const r = await fetchFn(url, { headers: { Range: `bytes=${start}-${end}` }, signal, cache: 'no-store' });
-      if (r.status !== 206) throw new Error(`GGUF range ${start}-${end}: HTTP ${r.status}`);
-      const reader = r.body.getReader();
-      for (;;) {
-        const { done: eof, value } = await reader.read();
-        if (eof) break;
-        let off = 0;
-        while (off < value.byteLength && ui < units.length) {
-          const u = units[ui];
-          if (pos < u.src) { const skip = Math.min(u.src - pos, value.byteLength - off); pos += skip; off += skip; continue; }
-          const take = Math.min(u.len - fill, value.byteLength - off);
-          unitBuf.set(value.subarray(off, off + take), fill);
-          fill += take; off += take; pos += take;
-          if (fill === u.len) { await flushUnit(u); ui++; fill = 0; }
-        }
-        done = pos - first;
-        onProgress({ status: 'ingest', loaded: done, total: last - first, resumedFrom, written, secs: (performance.now() - t0) / 1000 });
-        if (written - quotaLog[quotaLog.length - 1].written > 4 * 2 ** 30 && storage && storage.estimate) {
-          const e = await storage.estimate();
-          quotaLog.push({ written, quota: e.quota, usage: e.usage });
+      for (let attempt = 1; pos <= end; attempt++) {
+        try {
+          // from pos, not start: a retry asks only for the bytes this range has not delivered yet
+          const r = await fetchFn(url, { headers: { Range: `bytes=${pos}-${end}` }, signal, cache: 'no-store' }).catch((e) => { throw retryable(e); });
+          if (r.status !== 206) {
+            const e = new Error(`GGUF range ${pos}-${end}: HTTP ${r.status}`);
+            throw r.status >= 500 || r.status === 429 ? retryable(e) : e;
+          }
+          const reader = r.body.getReader();
+          for (;;) {
+            const { done: eof, value } = await reader.read().catch((e) => { throw retryable(e); });
+            if (eof) break;
+            let off = 0;
+            while (off < value.byteLength && ui < units.length) {
+              const u = units[ui];
+              if (pos < u.src) { const skip = Math.min(u.src - pos, value.byteLength - off); pos += skip; off += skip; continue; }
+              const take = Math.min(u.len - fill, value.byteLength - off);
+              unitBuf.set(value.subarray(off, off + take), fill);
+              fill += take; off += take; pos += take;
+              if (fill === u.len) { await flushUnit(u); ui++; fill = 0; }
+            }
+            done = pos - first;
+            onProgress({ status: 'ingest', loaded: done, total: last - first, resumedFrom, written, secs: (performance.now() - t0) / 1000 });
+            if (written - quotaLog[quotaLog.length - 1].written > 4 * 2 ** 30 && storage && storage.estimate) {
+              const e = await storage.estimate();
+              quotaLog.push({ written, quota: e.quota, usage: e.usage });
+            }
+          }
+          if (pos <= end) throw retryable(new Error(`GGUF range ended at byte ${pos}, expected ${end + 1}`));
+        } catch (e) {
+          if ((signal && signal.aborted) || !e.retryable || attempt >= RETRIES) throw e;
+          onProgress({ status: 'ingest-retry', attempt, at: pos - first, total: last - first, error: String(e && e.message || e) });
+          await pause(Math.min(15000, 1000 * 2 ** (attempt - 1)), signal);
         }
       }
       // Every unit before ui is written: flush, then record ui as the resume point.
@@ -190,8 +232,13 @@ async function ingest({ url, key, plan, root = ROOT, format = FORMAT, fetch: fet
 // Ingest progress as hosts read it: a 'weights' event with byte counts. The spread goes first, so the
 // event's own status ('ingest') cannot overwrite 'weights' (LocalMind's 2026-10-04 bug: a host's load
 // watchdog, seeing no progress, killed a 37 GB first download).
+// The header download and a retry pause count as progress too ('weights' with phase 'header' / 'retry'), so a watchdog
+// that waits for 'weights' keeps a slow or flaky download alive.
 export function ingestProgress(e) {
-  return e && e.status === 'ingest' ? { ...e, status: 'weights', loaded: e.loaded, total: e.total } : e;
+  if (e && e.status === 'ingest') return { ...e, status: 'weights', loaded: e.loaded, total: e.total };
+  if (e && e.status === 'ingest-header') return { ...e, status: 'weights', phase: 'header', loaded: e.loaded, total: e.total };
+  if (e && e.status === 'ingest-retry') return { ...e, status: 'weights', phase: 'retry', loaded: e.at, total: e.total };
+  return e;
 }
 
 // ── The stores on disk: which are usable, which to remove ──

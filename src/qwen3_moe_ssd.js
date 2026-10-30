@@ -43,12 +43,13 @@ export { FORMAT as STORE_FORMAT, OPFS_ROOT as STORE_ROOT };
 
 // ── GGUF ────────────────────────────────────────────────────────────────────
 // qwen3moe (rung 2a) and qwen35moe (Qwen3.5/3.6 MoE, rung 2b: qwen35_moe_ssd.js) share the
-// expert layout; qwen35moe adds the Gated DeltaNet (ssm.*), partial RoPE and a shared expert.
+// expert layout; qwen35moe adds the Gated DeltaNet (ssm.*), partial RoPE and a shared expert. clover_moe (Clover,
+// block diffusion on Qwen3.6: clover_moe_ssd.js) is qwen35moe plus per-DeltaNet-layer preview tensors.
 export function configFromGguf(kv) {
   const a = kv['general.architecture'];
-  if (a !== 'qwen3moe' && a !== 'qwen35moe') throw new Error(`expected a qwen3moe or qwen35moe GGUF, got ${a}`);
+  if (a !== 'qwen3moe' && a !== 'qwen35moe' && a !== 'clover_moe') throw new Error(`expected a qwen3moe, qwen35moe or clover_moe GGUF, got ${a}`);
   const g = (k) => kv[`${a}.${k}`];
-  const extra = a !== 'qwen35moe' ? {} : {
+  const extra = a === 'qwen3moe' ? {} : {
     ropeDims: g('rope.dimension_count'), shexpFf: g('expert_shared_feed_forward_length'),
     attnInterval: g('full_attention_interval') || 4,
     ssm: { dConv: g('ssm.conv_kernel'), dInner: g('ssm.inner_size'), dState: g('ssm.state_size'), vHeads: g('ssm.time_step_rank'), kHeads: g('ssm.group_count') },
