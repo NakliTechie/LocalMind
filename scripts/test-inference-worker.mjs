@@ -181,7 +181,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'));
   const keys = [...registry.slice(0, registry.indexOf('\n    };')).matchAll(/^      '([^']+)': \{/gm)].map((m) => m[1]);
   assert.deepEqual([...options].sort(), [...keys].sort(), 'picker options and MODELS registry keys must match');
-  assert.equal(options.length, 26);   // 2026-10-29: LFM3-VL 2B in; 2026-10-24: DeepSeek V4.1 Flash, Nemotron-Labs-Diffusion 3B and Nemotron 3.5 Bolt E4B via anyformer in; 2026-10-23: Ling 3.0 Flash via anyformer in; 2026-10-22: GLM-4.7-Flash via anyformer in; earlier the same day Flint 40B-A2.5B and Qwen3 4B + FlashMap in (2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out)
+  assert.equal(options.length, 27);   // 2026-10-30: LFM3-Omni 2B via anyformer in; 2026-10-29: LFM3-VL 2B in; 2026-10-24: DeepSeek V4.1 Flash, Nemotron-Labs-Diffusion 3B and Nemotron 3.5 Bolt E4B via anyformer in; 2026-10-23: Ling 3.0 Flash via anyformer in; 2026-10-22: GLM-4.7-Flash via anyformer in; earlier the same day Flint 40B-A2.5B and Qwen3 4B + FlashMap in (2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out)
 }
 // window.localmind.load() sets the select before loading, so the composer's picker names the loaded model.
 assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ modelSelect\.value = key; \} catch \{\}\s*loadModel\(key\);/);

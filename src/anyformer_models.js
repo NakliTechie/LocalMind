@@ -16,7 +16,8 @@
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.11/index.js';
+// 0.4.13 (LFM3-Omni-2B) is tagged but not yet on npm: the GitHub tag from jsDelivr until it is.
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.13/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
@@ -169,4 +170,23 @@ export class Lfm25_24B extends AnyformerModel {
   static repo = 'LiquidAI/LFM2.5-24B-A2B-GGUF';
   static budget = 7e9;
   static poolBytes = 4 * 2 ** 30;
+}
+
+// LiquidAI's LFM3-Omni-2B (LiquidAI/LFM3-Omni-2B-ONNX: q4f16 decoder, int8 vision encoder, fp32 audio encoder, 2.14 GB)
+// by anyformer's catalog entry, on diskformer's onnxruntime-web engine (lfm3_omni.js, gated 2026-10-30: 32 of 32
+// greedy tokens equal Liquid's CPU reference for text, image and speech in). transformers.js 4.3.2 has no lfm3_omni
+// class; when it adds one, anyformer moves the entry and LocalMind changes nothing. Text out only for now.
+// mediaParts: the SSD worker passes image parts as { type:'image', rgb, width, height } and audio parts as
+// { type:'audio', pcm } (16 kHz mono, at most 30 s); this class turns them into anyformer's content blocks.
+export class Lfm3Omni2B extends AnyformerModel {
+  static entry = 'LFM3_OMNI_2B';
+  get mediaParts() { return true; }
+  async *generate(messages, opts) {
+    const blocks = messages.map((m) => !Array.isArray(m.content) ? m : {
+      ...m,
+      content: m.content.map((b) => b.type === 'image' ? { type: 'image', image: { data: b.rgb, width: b.width, height: b.height, channels: 3 } }
+        : b.type === 'audio' ? { type: 'audio', audio: b.pcm } : b),
+    });
+    yield* super.generate(blocks, opts);
+  }
 }

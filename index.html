@@ -2680,6 +2680,7 @@
               <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only. About 4&times; the ONNX Gemma 4 E2B&rsquo;s decode speed on the same Mac (171 vs 42 tok/s, M4 Pro); text-only.</li>
               <li><strong>Gemma 4 E4B &middot; WebGPU kernels</strong> (~3.6 GB) &mdash; text + agent. The larger Gemma 4 (QAT mobile) on the same hand-written WebGPU engine. Its per-layer embedding table can also live on disk (Settings &rarr; Models, below).</li>
               <li><strong>LFM3-VL 2B</strong> (~1.9 GB) &mdash; text and images, with reasoning. Liquid AI's LFM3-VL-2B (October 2026): the LFM3 language model with a new vision encoder, through Transformers.js on WebGPU. Attach an image and ask about it. Show reasoning turns its step-by-step thinking on.</li>
+              <li><strong>LFM3-Omni 2B</strong> (~2.1 GB) &mdash; text, images and speech in, with reasoning and tools. Liquid AI's LFM3-Omni-2B (October 2026), one model that reads text, pictures and spoken questions (up to 30 seconds a clip). Transformers.js does not run it yet, so it comes through anyformer on diskformer's own onnxruntime-web engine; the first load stores the files in this browser once. It answers in text for now; spoken answers come later.</li>
               <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
               <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
               <li><strong>LFM2.5 230M &middot; GGUF</strong> (~170 MB) &mdash; the same LFM2.5 230M through wllama (llama.cpp &rarr; WebAssembly), reading a Q5_K_M GGUF. WebGPU when your browser has it, CPU otherwise, so it also runs where WebGPU is missing.</li>
@@ -3004,6 +3005,7 @@
           <option value="lfm3-1.7b">LFM3 1.7B &middot; Agent (~1.4 GB)</option>
           <option value="gemini-nano">Gemini Nano &middot; Built into Chrome (0 MB)</option>
           <option value="lfm3-vl-2b">LFM3-VL 2B &middot; Text and images (~1.9 GB)</option>
+          <option value="lfm3-omni-2b-anyformer">LFM3-Omni 2B &middot; Text, images and speech in (~2.1 GB)</option>
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
           <option value="lfm2-230m-gguf">LFM2.5 230M &middot; GGUF (~170 MB)</option>
@@ -8029,7 +8031,7 @@ const engineFetch = async (url, init = {}) => {
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy
 // of the engine (Gemma4Mobile) and, with ple, builds the OPFS per-layer-embedding table itself. The worker then drives
 // session.engine exactly as it drove its own engine. Pinned to the same anyformer as anyformer_models.js.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.11/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.13/index.js';
 
 let anyformerLoad = null;
 let session = null;
@@ -8174,7 +8176,7 @@ self.onmessage = async (e) => {
 // rolled-in module URLs (moduleUrl()).
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy of
 // the engine (TernaryBonsai2); the worker drives session.engine as before and attaches DFlash / MTP itself.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.11/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.13/index.js';
 const DFLASH_URL = '__TERNARY_BONSAI2_DFLASH_URL__';
 const MTP_URL = '__TERNARY_BONSAI2_MTP_URL__';
 // MTP speculative decoding (Settings → Models, default OFF; posted as `mtp` + `mtpDepth` on the
@@ -8657,9 +8659,12 @@ self.onmessage = async (e) => {
       // Both models have a real system role; the engine applies the chat template itself. An engine with a vision
       // encoder (MiniCPM-V 4.7: ensureVision) gets image parts: the page sends each image as a placeholder block in
       // the message plus its bytes in d.attachments, in order; the first image downloads the encoder (1.1 GB) once.
-      const atts = Array.isArray(d.attachments) ? d.attachments.filter((a) => a && a.type === 'image') : [];
-      const vision = atts.length && typeof model.ensureVision === 'function';
-      if (vision) {
+      // A model that reads media parts itself (LFM3-Omni: mediaParts) gets images and audio clips the same way, audio as
+      // { type:'audio', pcm } (16 kHz mono, as the page decodes it).
+      const media = model.mediaParts === true;
+      const atts = Array.isArray(d.attachments) ? d.attachments.filter((a) => a && (a.type === 'image' || (media && a.type === 'audio'))) : [];
+      const vision = atts.length && (media || typeof model.ensureVision === 'function');
+      if (vision && !media) {
         post({ type: 'progress', data: { status: 'loading', file: 'vision encoder' } });
         await model.ensureVision({ onProgress: (ev) => {
           if (ev.status === 'vision-download') post({ type: 'progress', data: { status: 'progress_total', file: 'vision encoder into on-device storage', loaded: ev.loaded, total: ev.total } });
@@ -8671,10 +8676,15 @@ self.onmessage = async (e) => {
       for (const m of (d.messages || [])) {
         // Role 'tool' arrives only for toolFormat 'arg-key' (Flint), whose engine renders it as <|observation|>.
         const role = (m.role === 'system' || m.role === 'assistant' || m.role === 'tool') ? m.role : 'user';
-        if (vision && Array.isArray(m.content) && m.content.some((b) => b && b.type === 'image')) {
+        if (vision && Array.isArray(m.content) && m.content.some((b) => b && (b.type === 'image' || (media && b.type === 'audio')))) {
           const parts = [];
           for (const b of m.content) {
-            if (b && b.type === 'image' && ai < atts.length) parts.push(await imageRgb(atts[ai].data, atts[ai++].mimeType));
+            if (b && (b.type === 'image' || (media && b.type === 'audio')) && ai < atts.length) {
+              const a = atts[ai++];
+              parts.push(a.type === 'audio'
+                ? { type: 'audio', pcm: a.pcmData instanceof Float32Array ? a.pcmData : new Float32Array(a.pcmData) }
+                : await imageRgb(a.data, a.mimeType));
+            }
             else if (b && b.type === 'text') parts.push({ type: 'text', text: b.text });
           }
           msgs.push({ role, content: parts });
@@ -9471,6 +9481,25 @@ self.addEventListener('message', async (e) => {
       },
       // backend:'anyformer-bolt-e4b' → NVIDIA's Nemotron 3.5 Bolt E4B through anyformer, which sends it to transformers.js
       // (a community q4f16 ONNX, text only). Reasoning off: anyformer's text-only Gemma 4 path renders the template without it.
+      // backend:'anyformer-lfm3-omni' → LiquidAI's LFM3-Omni-2B through anyformer, which sends it to diskformer's
+      // onnxruntime-web engine (lfm3_omni.js) until transformers.js supports it. Images and speech clips in (up to 30 s
+      // each), text out; speech out is not built yet. Tools in the Qwen3-Coder XML form its template uses.
+      'lfm3-omni-2b-anyformer': {
+        id: 'LiquidAI/LFM3-Omni-2B-ONNX',
+        label: 'LFM3-Omni 2B',
+        backend: 'anyformer-lfm3-omni',
+        size: '~2.1 GB',
+        type: 'causal',
+        multimodal: true,
+        imageInput: true,
+        audioInput: true,
+        videoInput: false,
+        agentCapable: true,
+        toolFormat: 'qwen3-xml',
+        thinking: true,
+        contextSize: 32768,
+        genConfig: { max_new_tokens: 2048 },
+      },
       'nemotron-bolt-e4b-anyformer': {
         id: 'danyalmalik/NVIDIA-Nemotron-3.5-Bolt-E4B-ONNX-WebGPU',
         label: 'Nemotron 3.5 Bolt E4B · via anyformer (experimental)',
@@ -10570,6 +10599,7 @@ self.addEventListener('message', async (e) => {
       'ternary-bonsai-2-4b-webgpu': 'qwen',
       'lfm3-1.7b': 'lfm3',
       'lfm3-vl-2b': 'lfm3',
+      'lfm3-omni-2b-anyformer': 'lfm3',
       'lfm2-230m-gguf': 'lfm2',
       'lfm2-230m-webgpu': 'lfm2',
       'gemma4-e2b': 'gemma',
@@ -17626,6 +17656,7 @@ self.addEventListener('message', async (e) => {
         'anyformer-deepseek-v41': { engine: 'anyformer_models.js', exportName: 'DeepSeekV41Flash', label: 'DeepSeek V4.1 Flash (IQ1_M + Engram, via anyformer)' },
         'anyformer-nemotron-diffusion': { engine: 'anyformer_models.js', exportName: 'NemotronDiffusion3B', label: 'Nemotron-Labs-Diffusion 3B (ONNX, via anyformer and kohra)' },
         'anyformer-bolt-e4b': { engine: 'anyformer_models.js', exportName: 'NemotronBoltE4B', label: 'Nemotron 3.5 Bolt E4B (q4f16 ONNX, via anyformer)' },
+        'anyformer-lfm3-omni': { engine: 'anyformer_models.js', exportName: 'Lfm3Omni2B', label: 'LFM3-Omni 2B (ONNX, via anyformer)' },
         'qwen3dense': { engine: 'qwen35_dense.js', exportName: 'Qwen3Dense', label: 'Qwen3 4B (Q8_0) + FlashMap' },
         'hyv3-ssd': { engine: 'hy_v3_moe_ssd.js', exportName: 'HyV3MoeSsd', label: 'Hy-Memory 30B-A3B (Q8_0)' },   // the memory writer only (WRITER_MODELS)
         'qwen35dense': { engine: 'qwen35_dense.js', exportName: 'Qwen35Dense', label: 'Underdog Saluki 27B (IQ2-mix)' },
@@ -19296,7 +19327,7 @@ self.addEventListener('message', async (e) => {
     const ENGINE_STORES = {
       'transformers': ['transformers-cache'], 'wllama': ['wllama'], 'lfm2-webgpu': ['gguf-v1'],
       'bonsai2-webgpu': ['gguf-cache-v1'], 'gemma4-webgpu': ['safetensors-cache-v1', 'bonsai-pipeline-v1'],
-      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-deepseek-v41': ['on disk (OPFS)'], 'anyformer-bolt-e4b': ['transformers-cache'], 'anyformer-nemotron-diffusion': ['kohra-models', 'transformers-cache'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'anyformer-flint': ['on disk (OPFS)'], 'anyformer-lfm25-24b': ['on disk (OPFS)'], 'anyformer-gemma26b': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
+      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-deepseek-v41': ['on disk (OPFS)'], 'anyformer-bolt-e4b': ['transformers-cache'], 'anyformer-lfm3-omni': ['diskformer-models'], 'anyformer-nemotron-diffusion': ['kohra-models', 'transformers-cache'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'anyformer-flint': ['on disk (OPFS)'], 'anyformer-lfm25-24b': ['on disk (OPFS)'], 'anyformer-gemma26b': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
     };
     function parseSizeBytes(size) {
       const m = /([\d.]+)\s*(GB|MB)/i.exec(String(size || ''));
@@ -23936,7 +23967,8 @@ self.addEventListener('message', async (e) => {
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.11/index.js';
+// 0.4.13 (LFM3-Omni-2B) is tagged but not yet on npm: the GitHub tag from jsDelivr until it is.
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.13/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
@@ -24089,6 +24121,25 @@ export class Lfm25_24B extends AnyformerModel {
   static repo = 'LiquidAI/LFM2.5-24B-A2B-GGUF';
   static budget = 7e9;
   static poolBytes = 4 * 2 ** 30;
+}
+
+// LiquidAI's LFM3-Omni-2B (LiquidAI/LFM3-Omni-2B-ONNX: q4f16 decoder, int8 vision encoder, fp32 audio encoder, 2.14 GB)
+// by anyformer's catalog entry, on diskformer's onnxruntime-web engine (lfm3_omni.js, gated 2026-10-30: 32 of 32
+// greedy tokens equal Liquid's CPU reference for text, image and speech in). transformers.js 4.3.2 has no lfm3_omni
+// class; when it adds one, anyformer moves the entry and LocalMind changes nothing. Text out only for now.
+// mediaParts: the SSD worker passes image parts as { type:'image', rgb, width, height } and audio parts as
+// { type:'audio', pcm } (16 kHz mono, at most 30 s); this class turns them into anyformer's content blocks.
+export class Lfm3Omni2B extends AnyformerModel {
+  static entry = 'LFM3_OMNI_2B';
+  get mediaParts() { return true; }
+  async *generate(messages, opts) {
+    const blocks = messages.map((m) => !Array.isArray(m.content) ? m : {
+      ...m,
+      content: m.content.map((b) => b.type === 'image' ? { type: 'image', image: { data: b.rgb, width: b.width, height: b.height, channels: 3 } }
+        : b.type === 'audio' ? { type: 'audio', audio: b.pcm } : b),
+    });
+    yield* super.generate(blocks, opts);
+  }
 }
 </script>
 <script type="text/plain" data-module="errors.js">/* errors.js — coded errors for the store, ingest and the engines. A host branches on `code`, never on the
@@ -32321,7 +32372,7 @@ const GGUF_FILE = 'LFM2.5-230M-Q4_0.gguf';
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy of
 // the LFM2.5 engine (Lfm2Mobile) and returns a session with the same generate / reset / dispose. Pinned to an exact
 // version; LocalMind's anyformer_models.js pins the same one.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.11/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.13/index.js';
 
 let anyformerLoad = null;
 let model = null;
