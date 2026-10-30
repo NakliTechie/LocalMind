@@ -16,8 +16,7 @@
  */
 const THINK_CLOSE = -2;
 
-// 0.4.13 (LFM3-Omni-2B) is tagged but not yet on npm: the GitHub tag from jsDelivr until it is.
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/gh/NakliTechie/anyformer.js@v0.4.13/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.13/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
