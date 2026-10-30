@@ -2502,7 +2502,7 @@
                 <li><strong>Artifact preview</strong> &mdash; <code>```html</code> / <code>```svg</code> / <code>```artifact</code> code blocks get a live sandboxed iframe below the code (<code>sandbox=&quot;allow-scripts&quot;</code>, no same-origin). Safe to run model-generated UI inline.</li>
                 <li><strong>Voice to text</strong> &mdash; 🗣 button left of the input records mic audio, decodes to 16 kHz mono PCM on-device, and runs Whisper-base via WebGPU to transcribe into the input. ~80 MB first-use download; nothing leaves the device.</li>
                 <li><strong>Read aloud</strong> &mdash; 🔊 button under any reply speaks it via Kokoro-82M (runs on WASM, so it never competes with the chat model). Streams sentence-by-sentence; English voices in Settings, and a Hindi reply uses the device&rsquo;s own Hindi voice when it has one. ~80 MB first-use download; nothing leaves the device.</li>
-                <li><strong>Voice mode</strong> &mdash; 🎙 chip opens a hands-free loop: hold the mic (or hold <strong>V</strong>) to talk, release to send. Moonshine transcribes on-device (English; other languages fall back to Whisper), the model answers, and Kokoro reads the reply back. Turn-based; the chat model stays loaded. ~180 MB first-use download. <strong>Omni voice</strong> (the switch in the Voice panel) swaps all three for LFM3-Omni 2B: it hears the recording itself (no transcription, so no misheard words in between) and answers in its own voice; it switches the chat model to LFM3-Omni and back when you turn it off.</li>
+                <li><strong>Voice mode</strong> &mdash; 🎙 chip opens a hands-free loop: hold the mic (or hold <strong>V</strong>) to talk, release to send. Moonshine transcribes on-device (English; other languages fall back to Whisper), the model answers, and Kokoro reads the reply back. Turn-based; the chat model stays loaded. ~180 MB first-use download. <strong>Omni voice</strong> (the switch in the Voice panel) swaps all three for LFM3-Omni 2B: it hears the recording itself (no transcription, so no misheard words in between) and answers in its own voice; it switches the chat model to LFM3-Omni and back when you turn it off. Tools work too: a quick text pass decides whether a tool is needed, then the answer is spoken.</li>
                 <li><strong>Python code tool</strong> (agent-capable models) &mdash; model can call <code>run_python</code> to execute Python in a sandboxed Pyodide worker. numpy / pandas / matplotlib auto-install on import. ~10 MB first-use download.</li>
                 <li><strong>Cache management</strong> &mdash; view/clear cached models in Settings</li>
                 <li><strong>Custom models</strong> &mdash; Settings &rarr; paste a Hugging Face ONNX repo id (causal LMs, runs on WebGPU) <em>or a direct GGUF URL</em> (runs via wllama, WebGPU when present / CPU otherwise). ONNX repos are probed via the HF API for the best quant; oversized models warn (but aren&rsquo;t blocked) so you can try on a capable GPU. GGUF URLs are sized via a HEAD request; point at the first shard of a split GGUF (&hellip;-00001-of-&hellip;) for files over wllama&rsquo;s 2 GB per-file / ~4 GB total limits.</li>
@@ -8711,9 +8711,21 @@ self.onmessage = async (e) => {
       // Speech out (LFM3-Omni, Voice mode's Omni toggle): the engine sets up Liquid's speech-to-speech prompt (its own
       // system line and <|mixed_start|>) only when there is no system turn. With LocalMind's system prompt (tool
       // instructions, ~1,900 tokens) in front, the first in-app run answered a spoken question about mountains with a
-      // refusal about weather tools (2026-10-30), so a spoken turn goes without it: no tools in Omni voice for now.
+      // refusal about weather tools (2026-10-30), so a spoken turn goes without it; tools are decided by a text pass first
+      // (omniTurnPhase 'decide' on the page), and this speech pass answers from their results.
       const speech = d.speech === true && model.mediaParts === true;
-      if (speech) while (msgs.length && msgs[0].role === 'system') msgs.shift();
+      const memories = typeof d.omniMemories === 'string' ? d.omniMemories : '';
+      if (speech) {
+        while (msgs.length && msgs[0].role === 'system') msgs.shift();
+        // A short system turn of the person's memories only, ending in Liquid's speech line (the engine adds that
+        // line itself only when there is no system turn).
+        if (memories) msgs.unshift({ role: 'system', content: memories + '\n\nRespond with interleaved text and audio.' });
+      }
+      // Omni voice's text pass decides tools only. Without this rule LFM3-Omni looked up Wikipedia for "tell me a short
+      // joke about cats" and answered about a comedian (2026-10-30).
+      if (d.omniDecide === true && msgs[0] && msgs[0].role === 'system' && typeof msgs[0].content === 'string') {
+        msgs[0] = { role: 'system', content: msgs[0].content + '\n\nCall a tool only when the question needs current or live information, a calculation, or something stored about this person. For greetings, jokes, opinions, stories and general knowledge, answer directly and call no tool.' + (memories ? '\n\n' + memories : '') };
+      }
       abortController = new AbortController();
       const open = model.thinkOpenTokenId, close = model.thinkCloseTokenId;
       // A reasoning-only model (LFM2.5 24B: alwaysThinks) opens <think> in every prompt, so its reply always starts as reasoning.
@@ -19065,7 +19077,7 @@ self.addEventListener('message', async (e) => {
           // Always accumulate so non-streaming callers (chat UI, non-streaming
           // API) still receive the full text via the 'complete' handler.
           currentAssistantText += data.token;
-          if (currentAssistantEl) {
+          if (currentAssistantEl && omniTurnPhase !== 'decide') {
             updateAssistantBubble(currentAssistantEl.bubble, streamDisplayText(currentAssistantText));
           }
           // Streaming consumer (window.localmind.chat.completions.create with
@@ -19873,7 +19885,9 @@ self.addEventListener('message', async (e) => {
           attachments: attData || null,
           enableThinking,
           generationConfig: genConfig,
-          speech: typeof omniVoiceActive === 'function' && omniVoiceActive(),
+          speech: typeof omniVoiceActive === 'function' && omniVoiceActive() && omniTurnPhase !== 'decide',
+          omniDecide: typeof omniVoiceActive === 'function' && omniVoiceActive() && omniTurnPhase === 'decide',
+          omniMemories: typeof omniVoiceActive === 'function' && omniVoiceActive() ? omniMemoryBlock : '',
         });
       });
     }
@@ -20744,9 +20758,9 @@ self.addEventListener('message', async (e) => {
         try {
           for await (const ev of LocalMind.runtime.chat({
             messages: turnMessages,
-            tools,
+            tools: omniTurnPhase === 'decide' && omniAnswerToolOn() ? [...tools, OMNI_ANSWER_TOOL] : tools,
             enableThinking: turnThinking,
-            maxTokens: genConfig && genConfig.max_new_tokens,
+            maxTokens: omniTurnPhase === 'decide' ? OMNI_DECIDE_TOKENS : genConfig && genConfig.max_new_tokens,
             temperature: genConfig && genConfig.temperature,
           })) {
             if (ev.type === 'token') {
@@ -20809,7 +20823,22 @@ self.addEventListener('message', async (e) => {
         // Disable thinking on follow-up iterations to avoid tool
         // calls inside thinking blocks.
         const iterThinking = iter === 0 ? enableThinking : false;
-        const turn = await runTurnMaybeEscalate(loopMessages, iterThinking);
+        const omniTools = iter === 0 && omniVoiceActive() && tools && tools.length > 0;
+        if (omniVoiceActive()) await omniRefreshMemories();   // a memory stored by the previous pass counts too
+        omniTurnPhase = !omniVoiceActive() ? null : omniTools ? 'decide' : 'speak';
+        let turn;
+        try {
+          turn = await runTurnMaybeEscalate(loopMessages, iterThinking);
+          // No tool call in the text pass (or only answer_directly): speak the turn from the start (the clip is still
+          // in loopMessages here).
+          if (omniTools) turn.toolCalls = turn.toolCalls.filter((tc) => tc.name !== OMNI_ANSWER_TOOL.name);
+          if (omniTools && generating && !turn.error && turn.toolCalls.length === 0) {
+            currentAssistantText = '';
+            if (currentAssistantEl) updateAssistantBubble(currentAssistantEl.bubble, '');
+            omniTurnPhase = 'speak';
+            turn = await runTurnMaybeEscalate(loopMessages, false);
+          }
+        } finally { if (omniTurnPhase === 'decide') omniTurnPhase = 'speak'; }
 
         // After the first iteration, scrub data from media blocks so
         // subsequent passes carry the chat-template position tokens
@@ -21445,6 +21474,29 @@ self.addEventListener('message', async (e) => {
     // (ttsStopAll) and leaving Voice mode stop it like a read-back. Kokoro does not read a reply the model spoke.
     const OMNI_VOICE_KEY = 'lm_omni_voice', OMNI_MODEL_KEY = 'lfm3-omni-2b-anyformer', OMNI_MAX_SECONDS = 30;
     let omniPrevModel = null;
+    // Tools in Omni voice (the text-pass route, naklios 2026-10-30): a spoken turn first runs as TEXT with LocalMind's
+    // system prompt and tools ('decide', not shown, at most OMNI_DECIDE_TOKENS); a tool call runs as usual and the next
+    // pass speaks the answer; with no tool call the turn is spoken from the start ('speak'). Speech passes go without
+    // the system prompt (the worker drops it), because a long one made the model answer about its tools.
+    let omniTurnPhase = null;   // null (not Omni voice) | 'decide' | 'speak'
+    const OMNI_DECIDE_TOKENS = 128;
+    // The text pass also offers answer_directly (naklios's idea, 2026-10-30): a small model that calls some tool for
+    // nearly every question (Wikipedia for "a joke about cats") can pick this one instead, and the turn goes straight
+    // to the spoken answer. lm_omni_answer_tool 'off' leaves it out (for comparison).
+    const OMNI_ANSWER_TOOL = { name: 'answer_directly', description: 'Use this when you can answer by yourself: greetings, chat, jokes, stories, opinions, advice and general knowledge. Call it with no arguments; you will then give the answer aloud.', parameters: { type: 'object', properties: {} } };
+    // What the person asked LocalMind to remember (facts, preferences, tasks; newest 30), for both passes of a spoken
+    // turn: the speech pass has no other system turn, so without it "who is my dentist" got "I don't have access to
+    // your personal records" (battery, 2026-10-30). Wording from naklios's assistant, which answered from it.
+    let omniMemoryBlock = '';
+    async function omniRefreshMemories() {
+      try {
+        const mine = (await getAllChunks()).filter((c) => ['fact', 'preference', 'task'].includes(c.category))
+          .sort((a, b) => b.timestamp - a.timestamp).slice(0, 30);
+        omniMemoryBlock = mine.length ? 'What the person asked you to remember (true, and about them personally). When a question is about one of these, answer from it directly and call no tool:\n'
+          + mine.map((c) => '- ' + String(c.text).replace(/\s+/g, ' ').slice(0, 200)).join('\n') : '';
+      } catch (_) { omniMemoryBlock = ''; }
+    }
+    function omniAnswerToolOn() { try { return localStorage.getItem('lm_omni_answer_tool') !== 'off'; } catch { return true; } }
     function omniVoiceOn() { try { return localStorage.getItem(OMNI_VOICE_KEY) === 'on'; } catch { return false; } }
     function omniVoiceActive() { return activeMode === 'voice' && omniVoiceOn() && activeModelKey === OMNI_MODEL_KEY && modelReady; }
     function omniVoiceLabel() {
@@ -21548,6 +21600,7 @@ self.addEventListener('message', async (e) => {
 
     function finishGeneration(response, sources, usedTools) {
       generating = false;
+      omniTurnPhase = null;
       if (response) {
         messages.push({ role: 'assistant', content: response });
         saveChat();
