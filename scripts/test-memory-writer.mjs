@@ -225,7 +225,7 @@ ok('wiring', () => {
   assert.match(html, /\{ id: 'memory\.write', title: 'Write memories from this chat', group: 'Data', run: \(\) => memoryWriteBtn\.click\(\)/);
   assert.ok(/SYNC_SETTINGS_KEYS = \[[^\]]*'lm_memory_writer_auto'/.test(html), 'switch is mirrored with the other settings');
   // After a reply: queued from finishGeneration; before a send: the writer yields.
-  const fin = html.slice(html.indexOf('function finishGeneration('), html.indexOf('function finishGeneration(') + 6000);
+  const fin = html.slice(html.indexOf('function finishGeneration('), html.indexOf('function finishGeneration(') + 7000);
   assert.match(fin, /queueMemoryWriterAfterReply\(/);
   const send = html.slice(html.indexOf('async function sendMessage()'), html.indexOf('async function sendMessage()') + 1500);
   assert.match(send, /await yieldMemoryWriter\(\)/);

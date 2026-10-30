@@ -866,6 +866,7 @@
       height: 64px;
     }
 
+    .voice-omni-toggle { margin-left: 10px; font-weight: 400; font-size: 0.78rem; cursor: pointer; white-space: nowrap; }
     .attachment-chip.audio-chip {
       width: 180px;
       height: 48px;
@@ -2501,7 +2502,7 @@
                 <li><strong>Artifact preview</strong> &mdash; <code>```html</code> / <code>```svg</code> / <code>```artifact</code> code blocks get a live sandboxed iframe below the code (<code>sandbox=&quot;allow-scripts&quot;</code>, no same-origin). Safe to run model-generated UI inline.</li>
                 <li><strong>Voice to text</strong> &mdash; 🗣 button left of the input records mic audio, decodes to 16 kHz mono PCM on-device, and runs Whisper-base via WebGPU to transcribe into the input. ~80 MB first-use download; nothing leaves the device.</li>
                 <li><strong>Read aloud</strong> &mdash; 🔊 button under any reply speaks it via Kokoro-82M (runs on WASM, so it never competes with the chat model). Streams sentence-by-sentence; English voices in Settings, and a Hindi reply uses the device&rsquo;s own Hindi voice when it has one. ~80 MB first-use download; nothing leaves the device.</li>
-                <li><strong>Voice mode</strong> &mdash; 🎙 chip opens a hands-free loop: hold the mic (or hold <strong>V</strong>) to talk, release to send. Moonshine transcribes on-device (English; other languages fall back to Whisper), the model answers, and Kokoro reads the reply back. Turn-based; the chat model stays loaded. ~180 MB first-use download.</li>
+                <li><strong>Voice mode</strong> &mdash; 🎙 chip opens a hands-free loop: hold the mic (or hold <strong>V</strong>) to talk, release to send. Moonshine transcribes on-device (English; other languages fall back to Whisper), the model answers, and Kokoro reads the reply back. Turn-based; the chat model stays loaded. ~180 MB first-use download. <strong>Omni voice</strong> (the switch in the Voice panel) swaps all three for LFM3-Omni 2B: it hears the recording itself (no transcription, so no misheard words in between) and answers in its own voice; it switches the chat model to LFM3-Omni and back when you turn it off.</li>
                 <li><strong>Python code tool</strong> (agent-capable models) &mdash; model can call <code>run_python</code> to execute Python in a sandboxed Pyodide worker. numpy / pandas / matplotlib auto-install on import. ~10 MB first-use download.</li>
                 <li><strong>Cache management</strong> &mdash; view/clear cached models in Settings</li>
                 <li><strong>Custom models</strong> &mdash; Settings &rarr; paste a Hugging Face ONNX repo id (causal LMs, runs on WebGPU) <em>or a direct GGUF URL</em> (runs via wllama, WebGPU when present / CPU otherwise). ONNX repos are probed via the HF API for the best quant; oversized models warn (but aren&rsquo;t blocked) so you can try on a capable GPU. GGUF URLs are sized via a HEAD request; point at the first shard of a split GGUF (&hellip;-00001-of-&hellip;) for files over wllama&rsquo;s 2 GB per-file / ~4 GB total limits.</li>
@@ -2680,7 +2681,7 @@
               <li><strong>Gemma 4 E2B &middot; WebGPU kernels</strong> (~2 GB) &mdash; text + agent. Google's Gemma 4 E2B (QAT mobile, int4) on a from-scratch WebGPU engine: hand-written WGSL for QAT int4 matmul, embed-gather-norm, RoPE/RMSNorm and GQA + sliding-window attention, reading the QAT-mobile weights directly. Ported from <em>webml-community/gemma-4-webgpu-kernels</em>. WebGPU-only. About 4&times; the ONNX Gemma 4 E2B&rsquo;s decode speed on the same Mac (171 vs 42 tok/s, M4 Pro); text-only.</li>
               <li><strong>Gemma 4 E4B &middot; WebGPU kernels</strong> (~3.6 GB) &mdash; text + agent. The larger Gemma 4 (QAT mobile) on the same hand-written WebGPU engine. Its per-layer embedding table can also live on disk (Settings &rarr; Models, below).</li>
               <li><strong>LFM3-VL 2B</strong> (~1.9 GB) &mdash; text and images, with reasoning. Liquid AI's LFM3-VL-2B (October 2026): the LFM3 language model with a new vision encoder, through Transformers.js on WebGPU. Attach an image and ask about it. Show reasoning turns its step-by-step thinking on.</li>
-              <li><strong>LFM3-Omni 2B</strong> (~2.1 GB) &mdash; text, images and speech in, with reasoning and tools. Liquid AI's LFM3-Omni-2B (October 2026), one model that reads text, pictures and spoken questions (up to 30 seconds a clip). Transformers.js does not run it yet, so it comes through anyformer on diskformer's own onnxruntime-web engine; the first load stores the files in this browser once. It answers in text for now; spoken answers come later.</li>
+              <li><strong>LFM3-Omni 2B</strong> (~2.1 GB) &mdash; text, images and speech in, with reasoning and tools. Liquid AI's LFM3-Omni-2B (October 2026), one model that reads text, pictures and spoken questions (up to 30 seconds a clip). Transformers.js does not run it yet, so it comes through anyformer on diskformer's own onnxruntime-web engine; the first load stores the files in this browser once. In chat it answers in text; in Voice mode, turn on <strong>Omni voice</strong> and it hears your recording directly and answers in its own voice (the speech part adds about 0.5 GB to the download).</li>
               <li><strong>Gemma 4 E2B</strong> (~1.5 GB) &mdash; multimodal (image + audio) + agent.</li>
               <li><strong>Gemma 4 E4B</strong> (~4.9 GB) &mdash; multimodal + agent, best quality.</li>
               <li><strong>LFM2.5 230M &middot; GGUF</strong> (~170 MB) &mdash; the same LFM2.5 230M through wllama (llama.cpp &rarr; WebAssembly), reading a Q5_K_M GGUF. WebGPU when your browser has it, CPU otherwise, so it also runs where WebGPU is missing.</li>
@@ -2850,6 +2851,10 @@
             <input type="checkbox" id="toolApprovalToggle" checked>
             Ask before running custom and MCP tools <span style="font-weight:400;color:var(--gray-500)">(they send the model's arguments to another server; also asks before weather and Wikipedia lookups)</span>
           </label>
+          <div class="toggle-row" id="toolAlwaysRow" style="display:none">
+            <span>Always allowed: <span id="toolAlwaysList"></span></span>
+            <button type="button" class="btn-icon" id="toolAlwaysForget">Forget</button>
+          </div>
           <label class="toggle-row" id="keylessWebRow">
             <input type="checkbox" id="keylessWebToggle" checked>
             Keyless web tools: weather and Wikipedia <span style="font-weight:400;color:var(--gray-500)">(agent-capable models; sends the place name to open-meteo.com or the topic to wikipedia.org, no key or account)</span>
@@ -3005,7 +3010,7 @@
           <option value="lfm3-1.7b">LFM3 1.7B &middot; Agent (~1.4 GB)</option>
           <option value="gemini-nano">Gemini Nano &middot; Built into Chrome (0 MB)</option>
           <option value="lfm3-vl-2b">LFM3-VL 2B &middot; Text and images (~1.9 GB)</option>
-          <option value="lfm3-omni-2b-anyformer">LFM3-Omni 2B &middot; Text, images and speech in (~2.1 GB)</option>
+          <option value="lfm3-omni-2b-anyformer">LFM3-Omni 2B &middot; Hears and speaks (~2.6 GB)</option>
           <option value="gemma4-e2b">Gemma 4 E2B &middot; Multimodal (~1.5 GB)</option>
           <option value="gemma4-e4b">Gemma 4 E4B &middot; Multimodal (~4.9 GB)</option>
           <option value="lfm2-230m-gguf">LFM2.5 230M &middot; GGUF (~170 MB)</option>
@@ -3170,7 +3175,11 @@
         </div>
       </div>
       <div class="mode-extra" id="voicePanel" role="region" aria-label="Voice conversation">
-        <div class="mode-extra-head">Voice &middot; <span class="memory-count">Moonshine STT + Kokoro TTS &middot; on-device</span></div>
+        <div class="mode-extra-head">Voice &middot; <span class="memory-count" id="voiceEngineLabel">Moonshine STT + Kokoro TTS &middot; on-device</span>
+          <label class="voice-omni-toggle" title="LFM3-Omni 2B hears your recording directly and answers in its own voice: no transcription step, no separate voice model. Switches the chat model to LFM3-Omni (~2.6 GB once); off switches back.">
+            <input type="checkbox" id="omniVoiceToggle"> Omni voice
+          </label>
+        </div>
         <div class="voice-stage">
           <button type="button" class="voice-mic" id="voiceMicBtn" aria-label="Hold to talk, release to send">
             <span class="voice-mic-icon" id="voiceMicIcon">&#127897;&#65039;</span>
@@ -8031,7 +8040,7 @@ const engineFetch = async (url, init = {}) => {
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy
 // of the engine (Gemma4Mobile) and, with ple, builds the OPFS per-layer-embedding table itself. The worker then drives
 // session.engine exactly as it drove its own engine. Pinned to the same anyformer as anyformer_models.js.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.13/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.14/index.js';
 
 let anyformerLoad = null;
 let session = null;
@@ -8176,7 +8185,7 @@ self.onmessage = async (e) => {
 // rolled-in module URLs (moduleUrl()).
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy of
 // the engine (TernaryBonsai2); the worker drives session.engine as before and attaches DFlash / MTP itself.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.13/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.14/index.js';
 const DFLASH_URL = '__TERNARY_BONSAI2_DFLASH_URL__';
 const MTP_URL = '__TERNARY_BONSAI2_MTP_URL__';
 // MTP speculative decoding (Settings → Models, default OFF; posted as `mtp` + `mtpDepth` on the
@@ -8699,6 +8708,12 @@ self.onmessage = async (e) => {
         try { model.reset(); } catch (_) {}
       }
       lastHistoryLen = msgs.length;
+      // Speech out (LFM3-Omni, Voice mode's Omni toggle): the engine sets up Liquid's speech-to-speech prompt (its own
+      // system line and <|mixed_start|>) only when there is no system turn. With LocalMind's system prompt (tool
+      // instructions, ~1,900 tokens) in front, the first in-app run answered a spoken question about mountains with a
+      // refusal about weather tools (2026-10-30), so a spoken turn goes without it: no tools in Omni voice for now.
+      const speech = d.speech === true && model.mediaParts === true;
+      if (speech) while (msgs.length && msgs[0].role === 'system') msgs.shift();
       abortController = new AbortController();
       const open = model.thinkOpenTokenId, close = model.thinkCloseTokenId;
       // A reasoning-only model (LFM2.5 24B: alwaysThinks) opens <think> in every prompt, so its reply always starts as reasoning.
@@ -8710,11 +8725,18 @@ self.onmessage = async (e) => {
           maxNewTokens: cfg.max_new_tokens || cfg.max_tokens || 1024,
           signal: abortController.signal,
           enableThinking: wantThink,
+          ...(speech ? { speech: true } : {}),
         });
+        let toolMarkup = false;
         for await (const out of stream) {
           if (stopFlag) break;
           const full = out && typeof out.text === 'string' ? out.text : '';
           last = full;
+          // The model's speech, until a tool call starts (the interleave writes its text before its sound, so the
+          // markup is never voiced); the page plays it.
+          if (speech && !toolMarkup && (full.includes('<tool_call>') || full.includes('<function='))) toolMarkup = true;
+          // A copy: out.audio may be a view of the engine's own buffer, which transferring would detach (2026-10-30).
+          if (speech && !toolMarkup && out.audio && out.audio.length) { const pcm = Float32Array.from(out.audio); self.postMessage({ type: 'speech', pcm, sampleRate: out.sampleRate || 24000 }, [pcm.buffer]); }
           // A multi-byte character split across tokens decodes as a trailing U+FFFD until its last byte
           // arrives. Hold the delta back until then: posting it sent '\uFFFD' and then cut the next delta
           // one code unit late, so 🍂 arrived as '\uFFFD\uDF42' (2026-10-14).
@@ -9488,7 +9510,7 @@ self.addEventListener('message', async (e) => {
         id: 'LiquidAI/LFM3-Omni-2B-ONNX',
         label: 'LFM3-Omni 2B',
         backend: 'anyformer-lfm3-omni',
-        size: '~2.1 GB',
+        size: '~2.6 GB',
         type: 'causal',
         multimodal: true,
         imageInput: true,
@@ -19035,6 +19057,10 @@ self.addEventListener('message', async (e) => {
           }
         }
 
+        else if (data.type === 'speech') {
+          if (generating && activeMode === 'voice') omniSpeechChunk(data.pcm, data.sampleRate);
+        }
+
         else if (data.type === 'token') {
           // Always accumulate so non-streaming callers (chat UI, non-streaming
           // API) still receive the full text via the 'complete' handler.
@@ -19847,6 +19873,7 @@ self.addEventListener('message', async (e) => {
           attachments: attData || null,
           enableThinking,
           generationConfig: genConfig,
+          speech: typeof omniVoiceActive === 'function' && omniVoiceActive(),
         });
       });
     }
@@ -20143,10 +20170,14 @@ self.addEventListener('message', async (e) => {
     // a flag for whether any tool was actually called.
     // TOOL-APPROVAL (Open Q#11): custom and MCP tools send the model's arguments to another server, so each call
     // waits for Allow / Always / Deny on a card in the chat, unless the gate is off (Settings → Tools) or the user
-    // chose "Always" for that tool this session. The keyless web built-ins (get_weather, wikipedia_lookup) carry an
-    // approvalHost and ask the same way; every other built-in runs without a card.
-    const TOOL_APPROVAL_KEY = 'lm_tool_approval';
-    const toolApprovedThisSession = new Set();
+    // chose "Always" for that tool. "Always" is stored (lm_tool_always, a JSON list of tool names), so it holds across
+    // chats and reloads until Settings → Tools → Forget. The keyless web built-ins (get_weather, wikipedia_lookup)
+    // carry an approvalHost and ask the same way; every other built-in runs without a card.
+    const TOOL_APPROVAL_KEY = 'lm_tool_approval', TOOL_ALWAYS_KEY = 'lm_tool_always';
+    function toolAlwaysLoad() { try { const a = JSON.parse(localStorage.getItem(TOOL_ALWAYS_KEY) || '[]'); return new Set(Array.isArray(a) ? a.filter((x) => typeof x === 'string') : []); } catch { return new Set(); } }
+    const toolAlwaysAllowed = toolAlwaysLoad();
+    function toolAlwaysAdd(name) { toolAlwaysAllowed.add(name); try { localStorage.setItem(TOOL_ALWAYS_KEY, JSON.stringify([...toolAlwaysAllowed])); } catch {} }
+    function toolAlwaysClear() { toolAlwaysAllowed.clear(); try { localStorage.removeItem(TOOL_ALWAYS_KEY); } catch {} }
     function toolApprovalOn() { try { return localStorage.getItem(TOOL_APPROVAL_KEY) !== 'off'; } catch { return true; } }
     function toolNeedsApproval(name, tool, gateOn, approved) {
       return !!(tool && (tool._custom || tool._mcp || tool.approvalHost)) && !!gateOn && !approved.has(name);
@@ -20159,6 +20190,14 @@ self.addEventListener('message', async (e) => {
       toolApprovalToggle.checked = toolApprovalOn();
       toolApprovalToggle.addEventListener('change', () => { try { localStorage.setItem(TOOL_APPROVAL_KEY, toolApprovalToggle.checked ? 'on' : 'off'); } catch {} });
     }
+    function renderToolAlways() {
+      const row = document.getElementById('toolAlwaysRow'), list = document.getElementById('toolAlwaysList');
+      if (!row || !list) return;
+      list.textContent = [...toolAlwaysAllowed].join(', ');
+      row.style.display = toolAlwaysAllowed.size ? '' : 'none';
+    }
+    renderToolAlways();
+    document.getElementById('toolAlwaysForget')?.addEventListener('click', () => { toolAlwaysClear(); renderToolAlways(); });
     const keylessWebToggle = document.getElementById('keylessWebToggle');
     if (keylessWebToggle) {
       keylessWebToggle.checked = keylessWebOn();
@@ -20237,7 +20276,7 @@ self.addEventListener('message', async (e) => {
           clearInterval(watch);
           card.classList.add('decided');
           card.replaceChildren(Object.assign(document.createElement('div'), {
-            textContent: v === 'deny' ? `Declined: ${name} did not run.` : `Allowed: ${name}${v === 'always' ? ' (for the rest of this session)' : ''}.`,
+            textContent: v === 'deny' ? `Declined: ${name} did not run.` : `Allowed: ${name}${v === 'always' ? ' (always; Settings → Tools forgets it)' : ''}.`,
           }));
           resolve(v);
         }
@@ -20245,9 +20284,9 @@ self.addEventListener('message', async (e) => {
       });
     }
     async function executeToolWithApproval(tc, tool, ctx) {
-      if (toolNeedsApproval(tc.name, tool, toolApprovalOn(), toolApprovedThisSession)) {
+      if (toolNeedsApproval(tc.name, tool, toolApprovalOn(), toolAlwaysAllowed)) {
         const v = await askToolApproval(tc.name, tool, tc.arguments);
-        if (v === 'always') toolApprovedThisSession.add(tc.name);
+        if (v === 'always') { toolAlwaysAdd(tc.name); renderToolAlways(); }
         if (v === 'deny') return toolDeclinedResult(tc.name);
       }
       return tool.execute(tc.arguments, ctx);
@@ -21336,11 +21375,14 @@ self.addEventListener('message', async (e) => {
 
     async function voiceStartRecording() {
       if (VM.recording || VM.state === 'thinking' || VM.state === 'speaking') return;
-      if (VM.needsDownload) { await voiceLoadModels(); return; }   // first tap = consent to download
+      const omni = omniVoiceActive();   // LFM3-Omni hears the clip itself: no Moonshine, no Kokoro
+      if (VM.needsDownload && !omni) { await voiceLoadModels(); return; }   // first tap = consent to download
       // Stop any read-back that's still playing (barge-in on a new turn is allowed pre-record).
       ttsStopAll();
-      try { await sttEnsureWorker(); }
-      catch (e) { voiceSetState('idle', 'Voice recognizer failed to load: ' + (e.message || e)); return; }
+      if (!omni) {
+        try { await sttEnsureWorker(); }
+        catch (e) { voiceSetState('idle', 'Voice recognizer failed to load: ' + (e.message || e)); return; }
+      }
       try { VM.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
       catch (e) { voiceSetState('idle', 'Mic access denied — you can still type below.'); return; }
       VM.chunks = [];
@@ -21351,7 +21393,7 @@ self.addEventListener('message', async (e) => {
       VM.recording = true;
       const t = voiceEl('voiceTranscript'); if (t) t.textContent = '';
       voiceSetState('listening', 'Listening… release to send.');
-      VM.partialTimer = setInterval(voiceDoPartial, 1200);
+      if (!omni) VM.partialTimer = setInterval(voiceDoPartial, 1200);
     }
 
     async function voiceDoPartial() {
@@ -21379,6 +21421,7 @@ self.addEventListener('message', async (e) => {
       const blob = new Blob(VM.chunks, { type: (VM.recorder && VM.recorder.mimeType) || 'audio/webm' });
       VM.recorder = null;
       if (!blob.size) { voiceSetState('idle', 'No audio captured — hold the mic and speak.'); return; }
+      if (omniVoiceActive()) { await omniVoiceSend(blob); return; }
       voiceSetState('thinking', 'Transcribing…');
       let text = '';
       try { const pcm = await decodeToWhisperPCM(blob); text = (await voiceTranscribe(pcm)).trim(); }
@@ -21396,8 +21439,96 @@ self.addEventListener('message', async (e) => {
       if (VM.state !== 'speaking') voiceSetState('idle', 'Ready — hold the mic to talk.');
     }
 
+    // ── Omni voice (2026-10-30): LFM3-Omni 2B hears the recording and answers in its own voice ──
+    // The clip goes to the model as an audio attachment (16 kHz, at most 30 s); the worker streams the model's 24 kHz
+    // speech as 'speech' messages, played through Kokoro's audio context and registered in TTS.sessions, so the mic
+    // (ttsStopAll) and leaving Voice mode stop it like a read-back. Kokoro does not read a reply the model spoke.
+    const OMNI_VOICE_KEY = 'lm_omni_voice', OMNI_MODEL_KEY = 'lfm3-omni-2b-anyformer', OMNI_MAX_SECONDS = 30;
+    let omniPrevModel = null;
+    function omniVoiceOn() { try { return localStorage.getItem(OMNI_VOICE_KEY) === 'on'; } catch { return false; } }
+    function omniVoiceActive() { return activeMode === 'voice' && omniVoiceOn() && activeModelKey === OMNI_MODEL_KEY && modelReady; }
+    function omniVoiceLabel() {
+      const l = voiceEl('voiceEngineLabel');
+      if (l) l.innerHTML = omniVoiceOn() ? 'LFM3-Omni 2B hears and speaks &middot; on-device' : 'Moonshine STT + Kokoro TTS &middot; on-device';
+      const t = voiceEl('omniVoiceToggle'); if (t) t.checked = omniVoiceOn();
+    }
+    function omniPickModel(key) {
+      if (!key || (key === activeModelKey && modelReady)) return;
+      if (generating) { setTimeout(() => omniPickModel(key), 500); return; }   // the switch waits for the reply in flight
+      modelSelect.value = key;
+      modelSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    function omniVoiceSet(on) {
+      try { localStorage.setItem(OMNI_VOICE_KEY, on ? 'on' : 'off'); } catch {}
+      omniVoiceLabel();
+      if (on && activeModelKey !== OMNI_MODEL_KEY) { omniPrevModel = activeModelKey; omniPickModel(OMNI_MODEL_KEY); }
+      else if (!on && activeModelKey === OMNI_MODEL_KEY && omniPrevModel) { const k = omniPrevModel; omniPrevModel = null; omniPickModel(k); }
+      if (activeMode === 'voice') voiceSetState('idle', on ? 'Hold the mic (or press and hold V) to talk. LFM3-Omni hears you and answers in its own voice.' : 'Ready — hold the mic to talk.');
+    }
+    voiceEl('omniVoiceToggle')?.addEventListener('change', (e) => omniVoiceSet(e.target.checked));
+    omniVoiceLabel();
+
+    async function omniVoiceSend(blob) {
+      let pcm;
+      try { pcm = await decodeToWhisperPCM(blob); }
+      catch (e) { voiceSetState('idle', 'Could not read the recording: ' + (e.message || e)); return; }
+      const secs = pcm.length / 16000;
+      if (secs > OMNI_MAX_SECONDS) { voiceSetState('idle', `That clip is ${secs.toFixed(0)} s; LFM3-Omni takes up to ${OMNI_MAX_SECONDS} s. Try a shorter question.`); return; }
+      const t = voiceEl('voiceTranscript'); if (t) t.textContent = `🎙 ${secs.toFixed(1)} s clip`;
+      addAttachment({ type: 'audio', blob, pcmData: pcm, thumb: URL.createObjectURL(blob), name: 'voice clip' });
+      chatInput.value = '';
+      voiceSetState('thinking', 'Listening to your clip…');
+      try { await sendMessage(); }
+      catch (e) { voiceSetState('idle', 'Send failed: ' + (e.message || e)); return; }
+      if (VM.state !== 'speaking') voiceSetState('idle', 'Ready — hold the mic to talk.');
+    }
+
+    // One playback session per reply: chunks scheduled back to back on Kokoro's audio context.
+    const OMNI_SPEECH = { session: null };
+    function omniSpeechChunk(pcm, sr) {
+      let sp = OMNI_SPEECH.session;
+      if (!sp) {
+        const ctx = ttsGetCtx();
+        try { if (ctx.state === 'suspended') { ctx.resume().catch(() => {}); ttsArmResumeOnGesture(ctx); } } catch (_) {}
+        const id = ++TTS.seq, sources = [];
+        let nextTime = 0, pending = 0, ended = false, done = false;
+        const finish = () => {
+          if (done) return; done = true;
+          TTS.sessions.delete(id); if (TTS.active && TTS.active.id === id) TTS.active = null;
+          if (OMNI_SPEECH.session === sp) OMNI_SPEECH.session = null;
+          if (activeMode === 'voice' && !generating) voiceSetState('idle', 'Ready — hold the mic to talk.');
+        };
+        sp = {
+          sawAudio: false,
+          onChunk(p, rate) {
+            if (done) return;
+            const buf = ctx.createBuffer(1, p.length, rate);
+            buf.copyToChannel(p, 0);
+            const node = ctx.createBufferSource();
+            node.buffer = buf; node.connect(ctx.destination);
+            const at = Math.max(ctx.currentTime + 0.02, nextTime);
+            node.start(at); nextTime = at + buf.duration;
+            pending++; sources.push(node); sp.sawAudio = true;
+            node.onended = () => { pending--; if (ended && pending <= 0) finish(); };
+            if (activeMode === 'voice') voiceSetState('speaking', 'Speaking…');
+          },
+          end() { ended = true; if (pending <= 0) finish(); },
+          stop() { sources.forEach((n) => { try { n.stop(); } catch (_) {} }); finish(); },
+        };
+        OMNI_SPEECH.session = sp;
+        TTS.sessions.set(id, sp); TTS.active = { id, session: sp, button: null };
+      }
+      sp.onChunk(pcm instanceof Float32Array ? pcm : new Float32Array(pcm), sr || 24000);
+    }
+
     async function onEnterVoiceMode() {
       voiceSetState('idle');
+      omniVoiceLabel();
+      if (omniVoiceOn()) {
+        if (activeModelKey !== OMNI_MODEL_KEY) { omniPrevModel = activeModelKey; omniPickModel(OMNI_MODEL_KEY); }
+        voiceSetState('idle', 'Hold the mic (or press and hold V) to talk. LFM3-Omni hears you and answers in its own voice.');
+        return;
+      }
       const [sttC, ttsC] = await Promise.all([sttModelCached(), ttsModelCached()]);
       VM.needsDownload = !(sttC && ttsC);
       if (VM.needsDownload) {
@@ -21512,7 +21643,11 @@ self.addEventListener('message', async (e) => {
         // Auto-read the reply: ALWAYS in Voice mode (v1.1), else only if the user
         // enabled auto-play. Skip (and reset the mic) if the language isn't voiced.
         const voiceReadback = (activeMode === 'voice');
-        if (response && response.trim() && ttsVoiceForText(response, 'af_heart') && (voiceReadback || ttsSettings().autoplay)) {
+        const omniSpoke = !!(OMNI_SPEECH.session && OMNI_SPEECH.session.sawAudio);
+        if (OMNI_SPEECH.session) OMNI_SPEECH.session.end();
+        if (omniSpoke) {
+          // LFM3-Omni already said it; the 🔊 button still reads the text with Kokoro on request.
+        } else if (response && response.trim() && ttsVoiceForText(response, 'af_heart') && (voiceReadback || ttsSettings().autoplay)) {
           const sb = bubble.querySelector('.speak-btn:not(:disabled)');
           if (sb) speakBubble(sb, response);
         } else if (voiceReadback) {
@@ -23967,7 +24102,7 @@ self.addEventListener('message', async (e) => {
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.13/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.14/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
@@ -23997,6 +24132,7 @@ export class AnyformerModel {
   static file = undefined;   // a GGUF in the repo; undefined lets anyformer pick (the file diskformer checked)
   static budget = 4e9;   // GPU bytes: the llama.cpp path plans its expert slots from it; for a hand engine, the fit check
   static poolBytes = undefined;   // a hand engine's expert cache (LocalMind's own engines ran with 4 GiB)
+  static speech = false;   // load the speech graphs too (LFM3-Omni: depth and codec decoders, 515 MB)
 
   static async load(_id, opts = {}) {
     const { load, MODELS } = await import(ANYFORMER_URL);
@@ -24005,6 +24141,7 @@ export class AnyformerModel {
     const session = await load(entry || this.repo, {
       ...(opts.budget || !entry ? { budget: opts.budget || this.budget } : {}), maxCtx: opts.maxCtx, signal: opts.signal, ...(this.file ? { file: this.file } : {}),
       ...(this.poolBytes ? { poolBytes: this.poolBytes } : {}), ...(opts.localFile ? { localFile: opts.localFile } : {}),
+      ...(this.speech ? { speech: true } : {}),
       onProgress: (e) => { const ev = toEngineProgress(e, files); if (ev && opts.onProgress) opts.onProgress(ev); },
     });
     return new this(session);
@@ -24025,20 +24162,22 @@ export class AnyformerModel {
 
   // A hand engine's chunks pass through. On the llama.cpp path: the reply text without its <think> / </think> tags; when
   // </think> first appears, the text up to it goes out, then the same text again with token THINK_CLOSE (an empty
-  // delta), so the worker closes the thought with no text lost.
-  async *generate(messages, { maxNewTokens = 1024, signal, enableThinking = false } = {}) {
+  // delta), so the worker closes the thought with no text lost. With speech (LFM3-Omni) a chunk also carries `audio`,
+  // the new 24 kHz PCM since the last chunk, and `sampleRate`.
+  async *generate(messages, { maxNewTokens = 1024, signal, enableThinking = false, speech = false } = {}) {
+    const opts = { maxNewTokens, signal, thinking: enableThinking, ...(speech ? { speech: true } : {}) };
     if (this.think) {
-      for await (const c of this.session.generate(messages, { maxNewTokens, signal, thinking: enableThinking })) yield c;
+      for await (const c of this.session.generate(messages, opts)) yield c;
       return;
     }
     let closed = false;
-    for await (const c of this.session.generate(messages, { maxNewTokens, signal, thinking: enableThinking })) {
+    for await (const c of this.session.generate(messages, opts)) {
       const raw = String(c.text || '').replace(/^\s*<think>\n?/, '');
       const at = raw.indexOf('</think>');
       // The worker posts no text on its close event, so the thought's last text goes out first.
       if (at >= 0 && !closed) { closed = true; yield { text: raw.slice(0, at) }; yield { text: raw.slice(0, at), token: THINK_CLOSE }; }
       const text = at >= 0 ? raw.slice(0, at) + raw.slice(at + '</think>'.length).replace(/^\n+/, '') : raw;
-      yield { text, tokens: c.tokens, tokPerSec: c.tokPerSec };
+      yield { text, tokens: c.tokens, tokPerSec: c.tokPerSec, ...(c.audio ? { audio: c.audio, sampleRate: c.sampleRate } : {}) };
     }
   }
 
@@ -24125,11 +24264,13 @@ export class Lfm25_24B extends AnyformerModel {
 // LiquidAI's LFM3-Omni-2B (LiquidAI/LFM3-Omni-2B-ONNX: q4f16 decoder, int8 vision encoder, fp32 audio encoder, 2.14 GB)
 // by anyformer's catalog entry, on diskformer's onnxruntime-web engine (lfm3_omni.js, gated 2026-10-30: 32 of 32
 // greedy tokens equal Liquid's CPU reference for text, image and speech in). transformers.js 4.3.2 has no lfm3_omni
-// class; when it adds one, anyformer moves the entry and LocalMind changes nothing. Text out only for now.
+// class; when it adds one, anyformer moves the entry and LocalMind changes nothing. Speech out from anyformer 0.4.14
+// (diskformer 0.6.12), used by Voice mode's Omni toggle; text chat stays text out.
 // mediaParts: the SSD worker passes image parts as { type:'image', rgb, width, height } and audio parts as
 // { type:'audio', pcm } (16 kHz mono, at most 30 s); this class turns them into anyformer's content blocks.
 export class Lfm3Omni2B extends AnyformerModel {
   static entry = 'LFM3_OMNI_2B';
+  static speech = true;   // Voice mode's Omni toggle speaks with it; the speech graphs load with the model (2.6 GB in all)
   get mediaParts() { return true; }
   async *generate(messages, opts) {
     const blocks = messages.map((m) => !Array.isArray(m.content) ? m : {
@@ -32371,7 +32512,7 @@ const GGUF_FILE = 'LFM2.5-230M-Q4_0.gguf';
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy of
 // the LFM2.5 engine (Lfm2Mobile) and returns a session with the same generate / reset / dispose. Pinned to an exact
 // version; LocalMind's anyformer_models.js pins the same one.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.13/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.14/index.js';
 
 let anyformerLoad = null;
 let model = null;

@@ -16,7 +16,7 @@
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.13/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.14/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
@@ -46,6 +46,7 @@ export class AnyformerModel {
   static file = undefined;   // a GGUF in the repo; undefined lets anyformer pick (the file diskformer checked)
   static budget = 4e9;   // GPU bytes: the llama.cpp path plans its expert slots from it; for a hand engine, the fit check
   static poolBytes = undefined;   // a hand engine's expert cache (LocalMind's own engines ran with 4 GiB)
+  static speech = false;   // load the speech graphs too (LFM3-Omni: depth and codec decoders, 515 MB)
 
   static async load(_id, opts = {}) {
     const { load, MODELS } = await import(ANYFORMER_URL);
@@ -54,6 +55,7 @@ export class AnyformerModel {
     const session = await load(entry || this.repo, {
       ...(opts.budget || !entry ? { budget: opts.budget || this.budget } : {}), maxCtx: opts.maxCtx, signal: opts.signal, ...(this.file ? { file: this.file } : {}),
       ...(this.poolBytes ? { poolBytes: this.poolBytes } : {}), ...(opts.localFile ? { localFile: opts.localFile } : {}),
+      ...(this.speech ? { speech: true } : {}),
       onProgress: (e) => { const ev = toEngineProgress(e, files); if (ev && opts.onProgress) opts.onProgress(ev); },
     });
     return new this(session);
@@ -74,20 +76,22 @@ export class AnyformerModel {
 
   // A hand engine's chunks pass through. On the llama.cpp path: the reply text without its <think> / </think> tags; when
   // </think> first appears, the text up to it goes out, then the same text again with token THINK_CLOSE (an empty
-  // delta), so the worker closes the thought with no text lost.
-  async *generate(messages, { maxNewTokens = 1024, signal, enableThinking = false } = {}) {
+  // delta), so the worker closes the thought with no text lost. With speech (LFM3-Omni) a chunk also carries `audio`,
+  // the new 24 kHz PCM since the last chunk, and `sampleRate`.
+  async *generate(messages, { maxNewTokens = 1024, signal, enableThinking = false, speech = false } = {}) {
+    const opts = { maxNewTokens, signal, thinking: enableThinking, ...(speech ? { speech: true } : {}) };
     if (this.think) {
-      for await (const c of this.session.generate(messages, { maxNewTokens, signal, thinking: enableThinking })) yield c;
+      for await (const c of this.session.generate(messages, opts)) yield c;
       return;
     }
     let closed = false;
-    for await (const c of this.session.generate(messages, { maxNewTokens, signal, thinking: enableThinking })) {
+    for await (const c of this.session.generate(messages, opts)) {
       const raw = String(c.text || '').replace(/^\s*<think>\n?/, '');
       const at = raw.indexOf('</think>');
       // The worker posts no text on its close event, so the thought's last text goes out first.
       if (at >= 0 && !closed) { closed = true; yield { text: raw.slice(0, at) }; yield { text: raw.slice(0, at), token: THINK_CLOSE }; }
       const text = at >= 0 ? raw.slice(0, at) + raw.slice(at + '</think>'.length).replace(/^\n+/, '') : raw;
-      yield { text, tokens: c.tokens, tokPerSec: c.tokPerSec };
+      yield { text, tokens: c.tokens, tokPerSec: c.tokPerSec, ...(c.audio ? { audio: c.audio, sampleRate: c.sampleRate } : {}) };
     }
   }
 
@@ -174,11 +178,13 @@ export class Lfm25_24B extends AnyformerModel {
 // LiquidAI's LFM3-Omni-2B (LiquidAI/LFM3-Omni-2B-ONNX: q4f16 decoder, int8 vision encoder, fp32 audio encoder, 2.14 GB)
 // by anyformer's catalog entry, on diskformer's onnxruntime-web engine (lfm3_omni.js, gated 2026-10-30: 32 of 32
 // greedy tokens equal Liquid's CPU reference for text, image and speech in). transformers.js 4.3.2 has no lfm3_omni
-// class; when it adds one, anyformer moves the entry and LocalMind changes nothing. Text out only for now.
+// class; when it adds one, anyformer moves the entry and LocalMind changes nothing. Speech out from anyformer 0.4.14
+// (diskformer 0.6.12), used by Voice mode's Omni toggle; text chat stays text out.
 // mediaParts: the SSD worker passes image parts as { type:'image', rgb, width, height } and audio parts as
 // { type:'audio', pcm } (16 kHz mono, at most 30 s); this class turns them into anyformer's content blocks.
 export class Lfm3Omni2B extends AnyformerModel {
   static entry = 'LFM3_OMNI_2B';
+  static speech = true;   // Voice mode's Omni toggle speaks with it; the speech graphs load with the model (2.6 GB in all)
   get mediaParts() { return true; }
   async *generate(messages, opts) {
     const blocks = messages.map((m) => !Array.isArray(m.content) ? m : {

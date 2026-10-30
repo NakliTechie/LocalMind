@@ -11,8 +11,8 @@ const src = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const block = /\/\/ TOOL-APPROVAL[\s\S]*?\/\/ END TOOL-APPROVAL/.exec(src);
 assert.ok(block, 'TOOL-APPROVAL block missing from index.html');
 const store = new Map();
-const localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) };
-const api = new Function('localStorage', block[0] + '\nreturn { toolApprovalOn, toolNeedsApproval, toolDeclinedResult, TOOL_APPROVAL_KEY };')(localStorage);
+const localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
+const api = new Function('localStorage', block[0] + '\nreturn { toolApprovalOn, toolNeedsApproval, toolDeclinedResult, TOOL_APPROVAL_KEY, toolAlwaysLoad, toolAlwaysAdd, toolAlwaysClear, toolAlwaysAllowed, TOOL_ALWAYS_KEY };')(localStorage);
 
 // 1. Which calls wait.
 const custom = { _custom: true, _endpoint: 'https://x.example/t' }, mcp = { _mcp: true, _mcpUrl: 'https://m.example' }, builtin = {};
@@ -31,6 +31,15 @@ assert.equal(api.toolApprovalOn(), true, 'no stored value: on');
 store.set(api.TOOL_APPROVAL_KEY, 'off'); assert.equal(api.toolApprovalOn(), false);
 store.set(api.TOOL_APPROVAL_KEY, 'on'); assert.equal(api.toolApprovalOn(), true);
 assert.match(src, /<input type="checkbox" id="toolApprovalToggle" checked>/);
+
+// 2b. "Always" is stored: it survives a reload (a fresh load of the stored list) and Forget clears it.
+api.toolAlwaysAdd('wikipedia_lookup');
+assert.deepEqual(JSON.parse(store.get(api.TOOL_ALWAYS_KEY)), ['wikipedia_lookup']);
+assert.equal(api.toolAlwaysLoad().has('wikipedia_lookup'), true, 'a reload keeps Always');
+assert.equal(api.toolNeedsApproval('wikipedia_lookup', { approvalHost: 'en.wikipedia.org' }, true, api.toolAlwaysLoad()), false);
+api.toolAlwaysClear();
+assert.equal(api.toolAlwaysLoad().size, 0, 'Forget clears it'); assert.equal(api.toolAlwaysAllowed.size, 0);
+store.set(api.TOOL_ALWAYS_KEY, 'not json'); assert.equal(api.toolAlwaysLoad().size, 0, 'a bad stored value is ignored');
 
 // 3. One choke point.
 assert.equal((src.match(/await executeToolWithApproval\(tc, tool, /g) || []).length, 2, 'both agent loops use the gate');
