@@ -181,7 +181,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'));
   const keys = [...registry.slice(0, registry.indexOf('\n    };')).matchAll(/^      '([^']+)': \{/gm)].map((m) => m[1]);
   assert.deepEqual([...options].sort(), [...keys].sort(), 'picker options and MODELS registry keys must match');
-  assert.equal(options.length, 27);   // 2026-10-30: LFM3-Omni 2B via anyformer in; 2026-10-29: LFM3-VL 2B in; 2026-10-24: DeepSeek V4.1 Flash, Nemotron-Labs-Diffusion 3B and Nemotron 3.5 Bolt E4B via anyformer in; 2026-10-23: Ling 3.0 Flash via anyformer in; 2026-10-22: GLM-4.7-Flash via anyformer in; earlier the same day Flint 40B-A2.5B and Qwen3 4B + FlashMap in (2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out)
+  assert.equal(options.length, 28);   // 2026-10-30: Clover 35B-A3B and LFM3-Omni 2B via anyformer in; 2026-10-29: LFM3-VL 2B in; 2026-10-24: DeepSeek V4.1 Flash, Nemotron-Labs-Diffusion 3B and Nemotron 3.5 Bolt E4B via anyformer in; 2026-10-23: Ling 3.0 Flash via anyformer in; 2026-10-22: GLM-4.7-Flash via anyformer in; earlier the same day Flint 40B-A2.5B and Qwen3 4B + FlashMap in (2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out)
 }
 // window.localmind.load() sets the select before loading, so the composer's picker names the loaded model.
 assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ modelSelect\.value = key; \} catch \{\}\s*loadModel\(key\);/);
@@ -194,6 +194,8 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   // Since 2026-10-23 through anyformer (diskformer's copy of the same engine).
   assert.match(indexSource, /'qwen36-35b-a3b-ssd': \{\s*id: 'unsloth\/Qwen3\.6-35B-A3B-GGUF',[^]*?backend: 'anyformer-qwen36'/);
   assert.match(indexSource, /'anyformer-qwen36': \{ engine: 'anyformer_models\.js', exportName: 'Qwen36'/);
+  assert.match(indexSource, /'clover-35b-a3b-anyformer': \{\s*id: 'Diffuspace\/Clover-35B-A3B-Preview-GGUF',[^]*?backend: 'anyformer-clover'/);
+  assert.match(indexSource, /'anyformer-clover': \{ engine: 'anyformer_models\.js', exportName: 'Clover35B'/);
   assert.match(indexSource, /'gemma4moe-ssd': \{ engine: 'gemma4_moe_ssd\.js', exportName: 'Gemma4MoeSsd'/);
   assert.match(indexSource, /'qwen35moe-ssd': \{ engine: 'qwen35_moe_ssd\.js', exportName: 'Qwen35MoeSsd'/);
   assert.match(indexSource, /'minicpm-v47-35b-a3b-ssd': \{\s*id: 'openbmb\/MiniCPM-V-4\.7-35B-A3B-gguf',[^]*?backend: 'minicpmv-ssd'/);

@@ -16,7 +16,7 @@
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.16/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.17/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
@@ -163,6 +163,13 @@ export class NemotronDiffusion3B extends AnyformerModel {
 // path: ISTA-DASLab's GSQ-RCO IQ1_M in four parts (120.7 GB) plus a separate 110.6 GB Engram file, 231.3 GB of browser
 // storage, an 8 GB GPU budget. A tech demo: about 0.4 tok/s natively with the weights on a USB SSD (diskformer,
 // 2026-10-24); one prompt checked in Chrome. Opt-in only.
+// Diffuspace's Clover-35B-A3B-Preview (block diffusion on Qwen3.6-35B-A3B) by anyformer's catalog entry (0.4.17): Q4_0
+// GGUF (19.6 GB) on diskformer's CloverMoeSsd (v0.6.15), kohra's denoise loop, a 4 GB GPU budget. generate() yields once
+// per committed 32-token block. Opt-in and experimental; speed unmeasured.
+export class Clover35B extends AnyformerModel {
+  static entry = 'CLOVER_35B_A3B';
+}
+
 export class DeepSeekV41Flash extends AnyformerModel {
   static entry = 'DEEPSEEK_V4_1_FLASH';
 }

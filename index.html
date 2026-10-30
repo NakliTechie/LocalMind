@@ -2694,6 +2694,7 @@
               <li><strong>Ling 3.0 Flash 124B-A5B &middot; via anyformer (experimental)</strong> (~81 GB) &mdash; text, reasoning. inclusionAI's Ling 3.0 Flash (released 2026-08-02, MIT): a 124B mixture-of-experts (512 experts, 8 active per token, about 5.1B parameters per token) whose layers mix linear attention (KDA) and latent attention (MLA), from inclusionAI's own 4-bit Q4_K_M GGUF (77 GB in two parts). anyformer loads it on diskformer's engine for it, which keeps the attention, routers and caches on the GPU (about 2.5 GB plus a 4 GB expert cache; it needs about 7 GB of GPU memory) and streams the 20,480 routed experts from on-device storage (OPFS). The first load copies the model into this browser's storage once (~81 GB of disk). About 5.5 tokens/s on an M4 Pro with 24 GB, and prompts are read at about 5 tokens/s. Flip <strong>Show reasoning</strong> for its thinking. Tools are off for now.</li>
               <li><strong>DeepSeek V4.1 Flash 763B &middot; tech demo, very slow, chat untested</strong> (~231 GB) &mdash; text. DeepSeek's 763B mixture-of-experts model, 6 of its 384 experts per token, from ISTA-DASLab's IQ1_M files plus a separate Engram file. anyformer runs it on diskformer's llama.cpp path: an 8 GB GPU budget, with the experts read from this browser's storage as each token needs them. It needs 231 GB of free browser storage and runs at under one token a second, so treat it as a demonstration, not a chat model. One plain prompt was checked in Chrome; chat through its template has not been run, so replies may come out wrong. Reasoning and tools are off.</li>
               <li><strong>Nemotron-Labs-Diffusion 3B &middot; experimental &middot; diffusion</strong> (~2.7 GB) &mdash; text. NVIDIA's Nemotron-Labs-Diffusion-3B writes by diffusion: it fills in whole blocks of words at once instead of one word at a time. It runs on kohra.js through anyformer, at about 12-16 tokens a second on an M4 Pro. Opt-in and experimental: only single-turn chats have been checked. Reasoning and tools are off.</li>
+              <li><strong>Clover 35B-A3B &middot; SSD-streamed, experimental &middot; diffusion</strong> (~19.6 GB) &mdash; text. Diffuspace's Clover-35B-A3B-Preview is Qwen3.6 35B-A3B retrained to write by diffusion: each block of 32 words is filled in over several passes, so replies appear a block at a time. It streams its experts from on-device storage through anyformer and diskformer, using about 4 GB of GPU memory. The first load copies a 19.6 GB file into browser storage. Opt-in and experimental: its speed has not been measured yet. Tools are off.</li>
               <li><strong>Nemotron 3.5 Bolt E4B &middot; via anyformer (experimental)</strong> (~4.9 GB) &mdash; text. NVIDIA's Nemotron 3.5 Bolt E4B, a dense model with about 4B effective parameters, post-trained from Google's Gemma 4 E4B. It runs on Transformers.js through anyformer, from a community 4-bit ONNX conversion (text only), at about 35 tokens a second on an M4 Pro. Reasoning and tools are off for now.</li>
               <li><strong>GLM-4.7-Flash 30B-A3B &middot; via anyformer (experimental)</strong> (~18 GB) &mdash; text, reasoning. Z.ai's GLM-4.7-Flash, a 30B mixture-of-experts with about 3B parameters per token, from unsloth's 4-bit GGUF (18.3 GB). LocalMind has no engine of its own for it: anyformer picks diskformer's llama.cpp path, which runs llama.cpp's WebGPU build in a worker and pages the experts in from on-device storage (OPFS). The first load copies the file into this browser's storage once. Flip <strong>Show reasoning</strong> for its thinking. Tools are off for now.</li>
               <li><strong>Qwen3 4B &middot; FlashMap speculative (experimental)</strong> (~5.2 GB) &mdash; text, reasoning. Qwen's Qwen3-4B (Q8_0 GGUF, 4.3 GB) with FlashMap, a speculative-decoding drafter by Shen et al. (arXiv:2610.24365; 0.95 GB) that proposes 16 tokens in one step for the model to check in one pass. You get exactly the tokens the model would write on its own, sooner: on an M4 Pro about 2.1&ndash;2.2&times; on maths and 1.2&ndash;1.5&times; on code. Chat text drafts poorly, so there it falls back to plain decoding (about 0.7&ndash;1.1&times;). With Show reasoning on, the gain is gone (about 1.0&times; on the same prompts), because its reasoning drafts poorly too; leave reasoning off for speed. Both files are copied into this browser's storage once. Tools are off for now.</li>
@@ -3026,6 +3027,7 @@
           <option value="ling-3-flash-anyformer">Ling 3.0 Flash 124B-A5B &middot; via anyformer, experimental (~81 GB)</option>
           <option value="nemotron-bolt-e4b-anyformer">Nemotron 3.5 Bolt E4B &middot; via anyformer, experimental (~4.9 GB)</option>
           <option value="nemotron-diffusion-3b-anyformer">Nemotron-Labs-Diffusion 3B &middot; experimental &middot; diffusion (~2.7 GB)</option>
+          <option value="clover-35b-a3b-anyformer">Clover 35B-A3B &middot; SSD-streamed, experimental &middot; diffusion (~19.6 GB)</option>
           <option value="deepseek-v41-flash-anyformer">DeepSeek V4.1 Flash 763B &middot; tech demo, very slow, chat untested (~231 GB)</option>
           <option value="glm-4.7-flash-anyformer">GLM-4.7-Flash 30B-A3B &middot; via anyformer, experimental (~18 GB)</option>
           <option value="qwen3-4b-flashmap">Qwen3 4B &middot; FlashMap speculative decoding, experimental (~5.2 GB)</option>
@@ -8040,7 +8042,7 @@ const engineFetch = async (url, init = {}) => {
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy
 // of the engine (Gemma4Mobile) and, with ple, builds the OPFS per-layer-embedding table itself. The worker then drives
 // session.engine exactly as it drove its own engine. Pinned to the same anyformer as anyformer_models.js.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.16/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.17/index.js';
 
 let anyformerLoad = null;
 let session = null;
@@ -8185,7 +8187,7 @@ self.onmessage = async (e) => {
 // rolled-in module URLs (moduleUrl()).
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy of
 // the engine (TernaryBonsai2); the worker drives session.engine as before and attaches DFlash / MTP itself.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.16/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.17/index.js';
 const DFLASH_URL = '__TERNARY_BONSAI2_DFLASH_URL__';
 const MTP_URL = '__TERNARY_BONSAI2_MTP_URL__';
 // MTP speculative decoding (Settings → Models, default OFF; posted as `mtp` + `mtpDepth` on the
@@ -9560,6 +9562,25 @@ self.addEventListener('message', async (e) => {
         contextSize: 4096,
         genConfig: { max_new_tokens: 512 },
       },
+      // backend:'anyformer-clover' → Diffuspace's Clover-35B-A3B-Preview (block diffusion on Qwen3.6-35B-A3B, Apache-2.0)
+      // through anyformer 0.4.17+, which sends it to diskformer's CloverMoeSsd (v0.6.15) with kohra's shared denoise loop:
+      // each 32-token block fills over several passes, so replies arrive in bursts. Q4_0 GGUF, 19.6 GB in OPFS, 4 GB GPU
+      // budget. Gated in diskformer (4-layer oracle, browser chat); speed unmeasured. Opt-in and experimental.
+      'clover-35b-a3b-anyformer': {
+        id: 'Diffuspace/Clover-35B-A3B-Preview-GGUF',
+        label: 'Clover 35B-A3B · SSD-streamed, experimental · diffusion',
+        backend: 'anyformer-clover',
+        size: '~19.6 GB',
+        // The pinned GGUF (CLOVER_35B_A3B in diskformer's clover_moe_ssd.js, rev 32e22a0): "Load .gguf from disk…" routes
+        // a file of exactly this size here and ingests it instead of downloading.
+        gguf: { file: 'Clover-35B-A3B-Preview-Q4_0.gguf', size: 19586909600 },
+        type: 'causal',
+        multimodal: false,
+        agentCapable: false,
+        thinking: true,   // Qwen3.6 template; Clover closes </think> by itself
+        contextSize: 4096,
+        genConfig: { max_new_tokens: 2048 },
+      },
       // backend:'anyformer-deepseek-v41' → DeepSeek V4.1 Flash through anyformer and diskformer's llama.cpp path, experts
       // paged from OPFS. 231 GB of browser storage; a tech demo, very slow.
       'deepseek-v41-flash-anyformer': {
@@ -10627,6 +10648,7 @@ self.addEventListener('message', async (e) => {
       'ternary-bonsai-2-27b-webgpu': 'qwen',
       'underdog-saluki-27b': 'qwen',
       'qwen36-35b-a3b-ssd': 'qwen',
+      'clover-35b-a3b-anyformer': 'qwen',
       'minicpm-v47-35b-a3b-ssd': 'qwen',
       'gemma4-26b-a4b-ssd': 'gemma',
       'ternary-bonsai-2-2b-webgpu': 'qwen',
@@ -17689,6 +17711,7 @@ self.addEventListener('message', async (e) => {
         'anyformer-glm47flash': { engine: 'anyformer_models.js', exportName: 'Glm47Flash', label: 'GLM-4.7-Flash (Q4_K_M, via anyformer)' },
         'anyformer-deepseek-v41': { engine: 'anyformer_models.js', exportName: 'DeepSeekV41Flash', label: 'DeepSeek V4.1 Flash (IQ1_M + Engram, via anyformer)' },
         'anyformer-nemotron-diffusion': { engine: 'anyformer_models.js', exportName: 'NemotronDiffusion3B', label: 'Nemotron-Labs-Diffusion 3B (ONNX, via anyformer and kohra)' },
+        'anyformer-clover': { engine: 'anyformer_models.js', exportName: 'Clover35B', label: 'Clover 35B-A3B (Q4_0, via anyformer, diskformer and kohra)' },
         'anyformer-bolt-e4b': { engine: 'anyformer_models.js', exportName: 'NemotronBoltE4B', label: 'Nemotron 3.5 Bolt E4B (q4f16 ONNX, via anyformer)' },
         'anyformer-lfm3-omni': { engine: 'anyformer_models.js', exportName: 'Lfm3Omni2B', label: 'LFM3-Omni 2B (ONNX, via anyformer)' },
         'qwen3dense': { engine: 'qwen35_dense.js', exportName: 'Qwen3Dense', label: 'Qwen3 4B (Q8_0) + FlashMap' },
@@ -19365,7 +19388,7 @@ self.addEventListener('message', async (e) => {
     const ENGINE_STORES = {
       'transformers': ['transformers-cache'], 'wllama': ['wllama'], 'lfm2-webgpu': ['gguf-v1'],
       'bonsai2-webgpu': ['gguf-cache-v1'], 'gemma4-webgpu': ['safetensors-cache-v1', 'bonsai-pipeline-v1'],
-      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-deepseek-v41': ['on disk (OPFS)'], 'anyformer-bolt-e4b': ['transformers-cache'], 'anyformer-lfm3-omni': ['diskformer-models'], 'anyformer-nemotron-diffusion': ['kohra-models', 'transformers-cache'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'anyformer-flint': ['on disk (OPFS)'], 'anyformer-lfm25-24b': ['on disk (OPFS)'], 'anyformer-gemma26b': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
+      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-deepseek-v41': ['on disk (OPFS)'], 'anyformer-bolt-e4b': ['transformers-cache'], 'anyformer-lfm3-omni': ['diskformer-models'], 'anyformer-nemotron-diffusion': ['kohra-models', 'transformers-cache'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'anyformer-clover': ['on disk (OPFS)'], 'anyformer-flint': ['on disk (OPFS)'], 'anyformer-lfm25-24b': ['on disk (OPFS)'], 'anyformer-gemma26b': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
     };
     function parseSizeBytes(size) {
       const m = /([\d.]+)\s*(GB|MB)/i.exec(String(size || ''));
@@ -24155,7 +24178,7 @@ self.addEventListener('message', async (e) => {
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.16/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.17/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
@@ -24302,6 +24325,13 @@ export class NemotronDiffusion3B extends AnyformerModel {
 // path: ISTA-DASLab's GSQ-RCO IQ1_M in four parts (120.7 GB) plus a separate 110.6 GB Engram file, 231.3 GB of browser
 // storage, an 8 GB GPU budget. A tech demo: about 0.4 tok/s natively with the weights on a USB SSD (diskformer,
 // 2026-10-24); one prompt checked in Chrome. Opt-in only.
+// Diffuspace's Clover-35B-A3B-Preview (block diffusion on Qwen3.6-35B-A3B) by anyformer's catalog entry (0.4.17): Q4_0
+// GGUF (19.6 GB) on diskformer's CloverMoeSsd (v0.6.15), kohra's denoise loop, a 4 GB GPU budget. generate() yields once
+// per committed 32-token block. Opt-in and experimental; speed unmeasured.
+export class Clover35B extends AnyformerModel {
+  static entry = 'CLOVER_35B_A3B';
+}
+
 export class DeepSeekV41Flash extends AnyformerModel {
   static entry = 'DEEPSEEK_V4_1_FLASH';
 }
@@ -32565,7 +32595,7 @@ const GGUF_FILE = 'LFM2.5-230M-Q4_0.gguf';
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy of
 // the LFM2.5 engine (Lfm2Mobile) and returns a session with the same generate / reset / dispose. Pinned to an exact
 // version; LocalMind's anyformer_models.js pins the same one.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.16/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.17/index.js';
 
 let anyformerLoad = null;
 let model = null;
