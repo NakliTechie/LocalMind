@@ -336,8 +336,17 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
   }
 
   // Kernel names for the matrix and expert weights: Q4_0 here; an engine reading a Q8_0 file (hy_v3_moe_ssd.js) swaps
-  // in the Q8_0 kernels, which take the same bindings and dispatch sizes.
-  get kq() { return { mm: 'matmulQ4', mmT: 'matmulQ4T', ex: 'expertQ4', exB: 'expertQ4B' }; }
+  // in the Q8_0 kernels, which take the same bindings and dispatch sizes. The dense matrices follow the file: a LoRA
+  // merged into the dense layers (llama-export-lora, then requantised to Q8_0 to keep the QAD base's quality) leaves
+  // them Q8_0 beside the unchanged Q4_0 experts.
+  get kq() {
+    return (this._kq ||= (() => {
+      const types = new Set(Object.values(this.manifest.dense.tensors).map((d) => d.type).filter((t) => t === 'q4' || t === 'q8'));
+      if (types.size > 1) throw new Error('dense matrices mix Q4_0 and Q8_0');
+      const q8 = types.has('q8');
+      return { mm: q8 ? 'matmulQ8' : 'matmulQ4', mmT: q8 ? 'matmulQ8T' : 'matmulQ4T', ex: 'expertQ4', exB: 'expertQ4B' };
+    })());
+  }
   // Attention kernel names (decode, then chunk); an engine with sinks or a window (flint_moe_ssd.js) rebinds its own.
   get attnK() { return { score: 'attnScore', soft: 'softmax', out: 'attnOut', scoreB: 'attnScoreB', softB: 'softmaxB', outB: 'attnOutB' }; }
 
@@ -353,6 +362,7 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
     return (this._kernels ||= {
       ...super.kernels, ...L2,
       ...(this.batchPrefill ? { ...Object.fromEntries(REUSED_B.map((k) => [k, QWEN35_BATCH_KERNELS[k]])), ...L2B } : {}),
+      ...(this.batchPrefill && this.kq.mmT === 'matmulQ8T' ? { matmulQ8T: QWEN35_BATCH_KERNELS.matmulQ8T } : {}),
     });
   }
 
