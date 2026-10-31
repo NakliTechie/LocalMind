@@ -13,7 +13,28 @@ const catalog = globalThis.LocalMindHostCatalog;
 assert.match(source, /localmind\.inference\.v1/);
 // LFM2.5 loads through anyformer (diskformer's copy of the engine), at an exact pinned version.
 assert.match(source, /const ANYFORMER_URL = 'https:\/\/cdn\.jsdelivr\.net\/(?:gh\/NakliTechie\/anyformer\.js@v|npm\/anyformer@)\d+\.\d+\.\d+\/index\.js';/);
-assert.match(source, /model = await anyformerLoad\(request\.modelId \|\| DEFAULT_MODEL_ID, \{/);
+assert.match(source, /model = await anyformerLoad\(entry \|\| request\.modelId \|\| DEFAULT_MODEL_ID, \{/);
+// anyformer catalog models by `entry`, tools in, parsed calls and reasoning out, and the run-time adapter switch.
+assert.match(source, /anyformerModels\.chat\[request\.entry\]/);
+assert.match(source, /\.\.\.\(tools \? \{ tools \} : \{\}\)/);
+assert.match(source, /if \(toolCalls\) post\(\{ type: 'tool_calls', toolCalls \}, id\);/);
+assert.match(source, /post\(\{ type: 'reasoning', token: r\.slice\(thought\.length\) \}, id\)/);
+assert.match(source, /role !== 'tool'\) role = 'user'/);
+assert.match(source, /request\.type === 'setAdapter'\) await setAdapter\(request\)/);
+assert.match(source, /adapter = request\.adapter === true; await model\.setAdapter\(adapter\);/);
+assert.match(protocol, /type: 'setAdapter'/);
+{
+  const pi = catalog.models.find((m) => m.key === 'lfm25-24b-pi');
+  assert.ok(pi, 'host catalog has lfm25-24b-pi');
+  assert.equal(pi.entry, 'LFM2_5_24B_PI');
+  assert.equal(pi.worker, 'inference-worker.js');
+  assert.equal(pi.experimental, true);
+  assert.equal(pi.optIn, true);
+  assert.equal(pi.tools, true);
+  assert.equal(pi.hasAdapter, true);
+  assert.equal(pi.sizeBytes, 13_578_190_880 + 37_437_888);
+  assert.notEqual(catalog.defaultKey, 'lfm25-24b-pi');
+}
 assert.match(source, /type: 'ready'/);
 assert.match(source, /type: 'token'/);
 assert.match(source, /type: 'complete'/);
@@ -193,7 +214,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   const registry = indexSource.slice(indexSource.indexOf('const MODELS = {'));
   const keys = [...registry.slice(0, registry.indexOf('\n    };')).matchAll(/^      '([^']+)': \{/gm)].map((m) => m[1]);
   assert.deepEqual([...options].sort(), [...keys].sort(), 'picker options and MODELS registry keys must match');
-  assert.equal(options.length, 29);   // 2026-10-31: LFM2.5 24B-A2B + Pi adapter via anyformer in; 2026-10-30: Clover 35B-A3B and LFM3-Omni 2B via anyformer in; 2026-10-29: LFM3-VL 2B in; 2026-10-24: DeepSeek V4.1 Flash, Nemotron-Labs-Diffusion 3B and Nemotron 3.5 Bolt E4B via anyformer in; 2026-10-23: Ling 3.0 Flash via anyformer in; 2026-10-22: GLM-4.7-Flash via anyformer in; earlier the same day Flint 40B-A2.5B and Qwen3 4B + FlashMap in (2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out)
+  assert.equal(options.length, 28);   // 2026-10-31: the LFM2.5 24B-A2B + Pi entry out again (the Pi adapter is now a switch on the base entry); earlier that day it came in; 2026-10-30: Clover 35B-A3B and LFM3-Omni 2B via anyformer in; 2026-10-29: LFM3-VL 2B in; 2026-10-24: DeepSeek V4.1 Flash, Nemotron-Labs-Diffusion 3B and Nemotron 3.5 Bolt E4B via anyformer in; 2026-10-23: Ling 3.0 Flash via anyformer in; 2026-10-22: GLM-4.7-Flash via anyformer in; earlier the same day Flint 40B-A2.5B and Qwen3 4B + FlashMap in (2026-10-16: Ternary Bonsai 2 2B + 4B in, first-generation Bonsai 4B out)
 }
 // window.localmind.load() sets the select before loading, so the composer's picker names the loaded model.
 assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ modelSelect\.value = key; \} catch \{\}\s*loadModel\(key\);/);
@@ -216,8 +237,14 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   // LFM2.5 24B-A2B (rung 2d) on the same worker; reasoning-only, so the worker marks every reply as reasoning.
   assert.match(indexSource, /'lfm25-24b-a2b-ssd': \{\s*id: 'LiquidAI\/LFM2\.5-24B-A2B-GGUF',[^]*?backend: 'anyformer-lfm25-24b'/);
   assert.match(indexSource, /'anyformer-lfm25-24b': \{ engine: 'anyformer_models\.js', exportName: 'Lfm25_24B'/);
-  assert.match(indexSource, /'lfm25-24b-pi-anyformer': \{\s*id: 'LiquidAI\/LFM2\.5-24B-A2B-GGUF',[^]*?backend: 'anyformer-lfm25-24b-pi'[^]*?agentCapable: false,/);
-  assert.match(indexSource, /'anyformer-lfm25-24b-pi': \{ engine: 'anyformer_models\.js', exportName: 'Lfm25_24bPi'/);
+  // The Pi adapter is a switch on the base 24B entry, not an entry of its own.
+  assert.doesNotMatch(indexSource, /lfm25-24b-pi|Lfm25_24bPi/);
+  assert.match(indexSource, /<label class="adapter-switch" id="adapterSwitch" hidden/);
+  assert.match(indexSource, /adapter: moeSsd \? adapterEnabled\(\) : false \}\);/);
+  assert.match(indexSource, /if \(typeof model\.setAdapter === 'function'\) \{ adapter = d\.adapter === true; await model\.setAdapter\(adapter\); \}\n\s*post\(\{ type: 'ready', backend: 'webgpu', adapter \}\);/);
+  assert.match(indexSource, /\} else if \(d\.type === 'setAdapter'\) \{/);
+  assert.match(indexSource, /modelReady = true;\n\s*showAdapterSwitch\(data\.adapter\);/);
+  assert.match(indexSource, /if \(w\) w\.postMessage\(\{ type: 'setAdapter', on: adapterToggle\.checked \}\);/);
   // anyformer models take tools through anyformer (0.4.20+) and return its parsed calls; Flint keeps LocalMind's parser.
   const afSrc = await readFile(new URL('../src/anyformer_models.js', import.meta.url), 'utf8');
   assert.match(afSrc, /tools = null \} = \{\}\) \{\n    const opts = \{[^\n]*\.\.\.\(tools && tools\.length \? \{ tools \} : \{\}\)/);
@@ -228,7 +255,10 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   assert.match(indexSource, /iter\.push\(\{ type: 'tool_call', id: c\.id \|\| [^\n]*native: true \}\);/);
   assert.equal((indexSource.match(/loopMessages\.push\(assistantTurnMessage\(turn\.fullText, turn\.toolCalls\)\);/g) || []).length, 2);
   assert.equal((indexSource.match(/\.\.\.\(tc\.native \? \{ tool_call_id: tc\.id \} : \{\}\)/g) || []).length, 2);
-  assert.match(await readFile(new URL('../src/anyformer_models.js', import.meta.url), 'utf8'), /export class Lfm25_24bPi extends AnyformerModel \{\s*static entry = 'LFM2_5_24B_PI';/);
+  assert.match(afSrc, /export class Lfm25_24B extends AnyformerModel \{\s*static repo = 'LiquidAI\/LFM2\.5-24B-A2B-GGUF';\s*static adapterEntry = 'LFM2_5_24B_PI';/);
+  assert.match(afSrc, /\.\.\.\(adapter \? \{ adapter \} : \{\}\),/);
+  assert.match(afSrc, /if \(session\.setAdapter\) this\.setAdapter = \(on\) => session\.setAdapter\(on === true\);/);
+  assert.doesNotMatch(afSrc, /Lfm25_24bPi/);
   assert.match(indexSource, /'lfm2moe-ssd': \{ engine: 'lfm2_moe_ssd\.js', exportName: 'Lfm2MoeSsd'/);
   // Tools on, decided by scripts/tool-battery.mjs (2026-10-14).
   assert.match(indexSource, /'lfm25-24b-a2b-ssd': \{(?:(?!genConfig)[^])*?agentCapable: true,/);
@@ -254,7 +284,7 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   assert.match(indexSource, /function modelToolCapable\(m\) \{\s*return !!\(m && m\.agentCapable && !\(m\.toolsOnPhone === false && isMobileDevice\(\)\)\);/);
   assert.doesNotMatch(indexSource, /toolCalling: !!m\.agentCapable/);
   // Every engine worker holds back a delta whose decoded text ends in U+FFFD (a character split across tokens).
-  assert.equal((indexSource.match(/endsWith\('\\uFFFD'\)/g) || []).length, 4);
+  assert.equal((indexSource.match(/endsWith\('\\uFFFD'\)/g) || []).length, 5);   // 5 since 2026-10-31: the host worker's reasoning deltas too
   // A failed turn's unanswered question is dropped before the retry is added.
   assert.match(indexSource, /if \(messages\.length && messages\[messages\.length - 1\]\.role === 'user'\) messages\.pop\(\);\s*const userMsg = \{ role: 'user', content: userContent \};\s*messages\.push\(userMsg\);/);
   // A worker swap ends the generation still waiting on the old worker.
@@ -351,7 +381,7 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
 assert.equal(catalog.defaultKey, 'lfm3-1.7b');
 assert.deepEqual(
   catalog.models.map((model) => model.key),
-  ['lfm3-1.7b', 'lfm2-230m-webgpu', 'gemma4-e2b', 'gemma4-e4b', 'qwen35-4b'],
+  ['lfm3-1.7b', 'lfm2-230m-webgpu', 'lfm25-24b-pi', 'gemma4-e2b', 'gemma4-e4b', 'qwen35-4b'],
 );
 // The host catalog's LFM3 entry is the app registry's: same repo and precision.
 assert.equal(catalog.get('lfm3-1.7b').id, 'LiquidAI/LFM3-1.7B-ONNX');

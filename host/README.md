@@ -10,5 +10,6 @@ hosts, chiefly NakliOS, which copies them into `vendor/localmind/` with their SH
 | `onnx-inference-worker.js` | LFM3 1.7B (the default), Gemma 4 and Qwen3.5 through Transformers.js 4.3.2 on WebGPU. |
 | `image-inference-worker.js` | The Bonsai FLUX.2-Klein image engine; generated from `index.html` by `scripts/extract-image-worker.mjs`. |
 
-The LFM2.5 230M worker is shared with the app, so it lives in `src/`: copy `src/inference-worker.js` and
-`src/lfm2_5.js` into the same directory as the files above. Protocols: [`docs/INFERENCE-PROTOCOL.md`](../docs/INFERENCE-PROTOCOL.md).
+The anyformer worker is shared with the app, so it lives in `src/`: copy `src/inference-worker.js` into the same
+directory as the files above. It serves LFM2.5 230M (`lfm2-230m-webgpu`) and anyformer catalog models such as LFM2.5
+24B-A2B with the Pi adapter (`lfm25-24b-pi`: load with `entry`, pass `tools`, switch the adapter with `setAdapter`). Protocols: [`docs/INFERENCE-PROTOCOL.md`](../docs/INFERENCE-PROTOCOL.md).

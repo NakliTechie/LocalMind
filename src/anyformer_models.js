@@ -16,7 +16,7 @@
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.20/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.21/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
@@ -47,15 +47,20 @@ export class AnyformerModel {
   static budget = 4e9;   // GPU bytes: the llama.cpp path plans its expert slots from it; for a hand engine, the fit check
   static poolBytes = undefined;   // a hand engine's expert cache (LocalMind's own engines ran with 4 GiB)
   static speech = false;   // load the speech graphs too (LFM3-Omni: depth and codec decoders, 515 MB)
+  // A key of anyformer's MODELS.chat whose `adapter` (a LoRA GGUF) loads beside the model; the session then switches it
+  // on and off with setAdapter(on), no reload (diskformer's run-time LoRA, anyformer 0.4.20+).
+  static adapterEntry = null;
 
   static async load(_id, opts = {}) {
     const { load, MODELS } = await import(ANYFORMER_URL);
     const entry = this.entry && MODELS.chat[this.entry], files = new Map();
     if (this.entry && !entry) throw new Error(`anyformer has no MODELS.chat.${this.entry}`);
+    const adapter = this.adapterEntry && MODELS.chat[this.adapterEntry] && MODELS.chat[this.adapterEntry].adapter;
+    if (this.adapterEntry && !adapter) throw new Error(`anyformer has no adapter on MODELS.chat.${this.adapterEntry}`);
     const session = await load(entry || this.repo, {
       ...(opts.budget || !entry ? { budget: opts.budget || this.budget } : {}), maxCtx: opts.maxCtx, signal: opts.signal, ...(this.file ? { file: this.file } : {}),
       ...(this.poolBytes ? { poolBytes: this.poolBytes } : {}), ...(opts.localFile ? { localFile: opts.localFile } : {}),
-      ...(this.speech ? { speech: true } : {}),
+      ...(this.speech ? { speech: true } : {}), ...(adapter ? { adapter } : {}),
       onProgress: (e) => { const ev = toEngineProgress(e, files); if (ev && opts.onProgress) opts.onProgress(ev); },
     });
     return new this(session);
@@ -66,6 +71,7 @@ export class AnyformerModel {
     // Present only where the engine has them (Qwen3.6: both), so the worker's own checks still work.
     if (session.prime) this.prime = (system) => session.prime(system);
     if (session.ensureVision) this.ensureVision = (o) => session.ensureVision(o);
+    if (session.setAdapter) this.setAdapter = (on) => session.setAdapter(on === true);
   }
 
   get thinkOpenTokenId() { return this.think ? this.think.openId : null; }
@@ -172,21 +178,17 @@ export class Clover35B extends AnyformerModel {
   static entry = 'CLOVER_35B_A3B';
 }
 
-// LFM2.5 24B-A2B with harness-hub's Pi coding-agent LoRA by anyformer's catalog entry: the QAD-Q4_0 GGUF plus a 37.4 MB
-// adapter applied at run time, on diskformer's Lfm2MoeSsd engine since anyformer 0.4.20 (diskformer 0.6.19). Opt-in and
-// experimental; licence lfm1.0.
-export class Lfm25_24bPi extends AnyformerModel {
-  static entry = 'LFM2_5_24B_PI';
-}
-
 export class DeepSeekV41Flash extends AnyformerModel {
   static entry = 'DEEPSEEK_V4_1_FLASH';
 }
 
 // LFM2.5 24B-A2B: Liquid AI's QAD-Q4_0 GGUF (13.6 GB) on diskformer's Lfm2MoeSsd hand engine (anyformer v0.4.2+). It
-// always reasons; session.think carries the markers. A 4 GiB expert cache as before.
+// always reasons; session.think carries the markers. A 4 GiB expert cache as before. harness-hub's Pi coding-agent LoRA
+// (37.4 MB, anyformer's MODELS.chat.LFM2_5_24B_PI adapter; licence lfm1.0) loads beside it and starts off; the page's
+// "Pi adapter" switch turns it on and off between replies with no reload.
 export class Lfm25_24B extends AnyformerModel {
   static repo = 'LiquidAI/LFM2.5-24B-A2B-GGUF';
+  static adapterEntry = 'LFM2_5_24B_PI';
   static budget = 7e9;
   static poolBytes = 4 * 2 ** 30;
 }

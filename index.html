@@ -310,6 +310,9 @@
       transition: background 0.4s, border-color 0.4s, color 0.4s;
     }
 
+    .adapter-switch { display: flex; align-items: center; gap: 4px; font-size: 0.75rem; color: var(--gray-500); cursor: pointer; white-space: nowrap; }
+    .adapter-switch[hidden] { display: none; }
+
     .status-badge.loading {
       background: var(--loading-bg);
       border: 1px solid var(--loading-border);
@@ -2539,6 +2542,9 @@
           <div class="spinner" id="statusSpinner"></div>
           <span id="statusText">Initializing...</span>
         </div>
+        <label class="adapter-switch" id="adapterSwitch" hidden title="harness-hub's Pi coding-agent LoRA (37 MB), applied over the loaded model. Switches between replies with no reload.">
+          <input type="checkbox" id="adapterToggle"> Pi adapter
+        </label>
       </div>
     </div>
 
@@ -2689,12 +2695,11 @@
               <li><strong>Qwen3.6 35B-A3B &middot; SSD-streamed (experimental)</strong> (~37 GB) &mdash; text, with reasoning. Alibaba's Qwen3.6-35B-A3B mixture-of-experts at Q8_0 (36.9 GB, more than most laptops' RAM) on a from-scratch WebGPU engine: the dense layers, router, KV cache and Gated-DeltaNet state stay on the GPU while the 10,240 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~37 GB of disk; a Hugging Face token in Settings speeds the download). About 9 tokens/s on an M4 Pro with 24 GB; prompts are read one token at a time for now. Greedy output matches llama.cpp. Flip <strong>Show reasoning</strong> for its chain-of-thought.</li>
               <li><strong>MiniCPM-V 4.7 35B-A3B &middot; SSD-streamed (experimental)</strong> (~20 GB) &mdash; text and images, with reasoning. OpenBMB's MiniCPM-V 4.7 (released 2026-10): a 35B mixture-of-experts (256 experts, 8 active per token, about 3B parameters per token) built on the same architecture as Qwen3.6 35B-A3B, from OpenBMB's own 4-bit (Q4_0) GGUF. Attention, the recurrent layers, routers and KV cache stay on the GPU while the routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~20 GB of disk). Attach an image and it reads it: the first image downloads the vision encoder (1.1 GB) into this browser's storage once. A large image is read as an overview plus up to 9 tiles of about 448 &times; 448 (up to about 650 image tokens), as the model was trained. It can use tools (calculator, time, memory, reminders): it called the right tool on 6 of 6 test prompts and answered 5 of 5 plain questions without one.</li>
               <li><strong>Gemma 4 26B-A4B &middot; SSD-streamed (experimental)</strong> (~14 GB) &mdash; text, with reasoning. Google's Gemma 4 26B-A4B mixture-of-experts (128 experts, 8 active per token) from its official 4-bit QAT GGUF (14.4 GB) on the same from-scratch WebGPU engine family: attention, the dense MLP, routers and KV cache stay on the GPU (~1.6 GB plus a 4 GB expert pool) while the 3,840 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~14 GB of disk; about 12 minutes on a fast connection). About 23 tokens/s on an M4 Pro with 24 GB, and prompts are read in chunks at about 55 tokens/s. Greedy output matches llama.cpp. Flip <strong>Show reasoning</strong> for its thinking.</li>
-              <li><strong>LFM2.5 24B-A2B &middot; SSD-streamed (experimental)</strong> (~13.6 GB) &mdash; text, reasoning-only. Liquid AI's LFM2.5-24B-A2B (released 2026-10-13): a 24B mixture-of-experts (64 experts, 4 active per token, about 2.4B parameters per token) with short-convolution and attention layers, from Liquid's own 4-bit GGUF. Short-convolution and attention layers, routers and KV cache stay on the GPU while the 2,432 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~13.6 GB of disk). About 16 tokens/s on an M4 Pro with 24 GB, and prompts are read in chunks at about 50 tokens/s. Greedy output matches llama.cpp (8 of 8 prompts). It always reasons before it answers, so every reply opens with its reasoning. It can use tools (calculator, time, memory, reminders): it called the right tool on 6 of 6 test prompts and answered 5 of 5 plain questions without one.</li>
+              <li><strong>LFM2.5 24B-A2B &middot; SSD-streamed (experimental)</strong> (~13.6 GB) &mdash; text, reasoning-only. Liquid AI's LFM2.5-24B-A2B (released 2026-10-13): a 24B mixture-of-experts (64 experts, 4 active per token, about 2.4B parameters per token) with short-convolution and attention layers, from Liquid's own 4-bit GGUF. Short-convolution and attention layers, routers and KV cache stay on the GPU while the 2,432 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~13.6 GB of disk). About 16 tokens/s on an M4 Pro with 24 GB, and prompts are read in chunks at about 50 tokens/s. Greedy output matches llama.cpp (8 of 8 prompts). It always reasons before it answers, so every reply opens with its reasoning. It can use tools (calculator, time, memory, reminders): it called the right tool on 6 of 6 test prompts and answered 5 of 5 plain questions without one. Its first load also fetches harness-hub's Pi coding-agent adapter (37 MB); the <strong>Pi adapter</strong> switch beside the status badge turns it on and off between replies with no reload (off by default). The adapter was trained inside the Pi coding agent, so outside it expect behaviour like the base model or worse. Licence lfm1.0 (model and adapter): royalty-free commercial use only below US$10M annual revenue.</li>
               <li><strong>Flint 40B-A2.5B &middot; SSD-streamed (experimental)</strong> (~26 GB) &mdash; text, coding, reasoning. Recursive's Flint (released 2026-10-21, Apache-2.0): a 39.8B mixture-of-experts coding model (256 experts, 6 active per token, about 2.5B parameters per token), from Recursive's own 4-bit (Q4_1) GGUF, whose card asks for 48 GB of memory under llama.cpp. Attention, routers, the token table and KV cache stay on the GPU while the 12,032 routed experts stream from on-device storage (OPFS) as the router picks them. The first load copies the model into this browser's storage once (~26 GB of disk). About 8.7 tokens/s on an M4 Pro with 24 GB, and prompts are read at about 27 tokens/s. Its output stays as close to llama.cpp's Metal backend as llama.cpp's own CPU backend does. It reasons before it answers, so replies open with its reasoning. It can use tools (calculator, time, memory, reminders, weather, Wikipedia, calendar): it called the right tool on 11 of 13 test prompts and answered 11 of 11 plain questions without one.</li>
               <li><strong>Ling 3.0 Flash 124B-A5B &middot; via anyformer (experimental)</strong> (~81 GB) &mdash; text, reasoning. inclusionAI's Ling 3.0 Flash (released 2026-08-02, MIT): a 124B mixture-of-experts (512 experts, 8 active per token, about 5.1B parameters per token) whose layers mix linear attention (KDA) and latent attention (MLA), from inclusionAI's own 4-bit Q4_K_M GGUF (77 GB in two parts). anyformer loads it on diskformer's engine for it, which keeps the attention, routers and caches on the GPU (about 2.5 GB plus a 4 GB expert cache; it needs about 7 GB of GPU memory) and streams the 20,480 routed experts from on-device storage (OPFS). The first load copies the model into this browser's storage once (~81 GB of disk). About 5.5 tokens/s on an M4 Pro with 24 GB, and prompts are read at about 5 tokens/s. Flip <strong>Show reasoning</strong> for its thinking. Tools are off for now.</li>
               <li><strong>DeepSeek V4.1 Flash 763B &middot; tech demo, very slow, chat untested</strong> (~231 GB) &mdash; text. DeepSeek's 763B mixture-of-experts model, 6 of its 384 experts per token, from ISTA-DASLab's IQ1_M files plus a separate Engram file. anyformer runs it on diskformer's llama.cpp path: an 8 GB GPU budget, with the experts read from this browser's storage as each token needs them. It needs 231 GB of free browser storage and runs at under one token a second, so treat it as a demonstration, not a chat model. One plain prompt was checked in Chrome; chat through its template has not been run, so replies may come out wrong. Reasoning and tools are off.</li>
               <li><strong>Nemotron-Labs-Diffusion 3B &middot; experimental &middot; diffusion</strong> (~2.7 GB) &mdash; text. NVIDIA's Nemotron-Labs-Diffusion-3B writes by diffusion: it fills in whole blocks of words at once instead of one word at a time. It runs on kohra.js through anyformer, at about 12-16 tokens a second on an M4 Pro. Opt-in and experimental: only single-turn chats have been checked. Reasoning and tools are off.</li>
-              <li><strong>LFM2.5 24B-A2B + Pi coding adapter &middot; experimental</strong> (~13.6 GB) &mdash; text. The LFM2.5 24B-A2B model above with harness-hub's Pi coding-agent adapter (37 MB) applied when it loads. The adapter was trained inside the Pi coding agent, so outside it expect behaviour like the base model or worse. It runs on the same in-tab engine as the base entry with experts read from on-device storage; its speed has not been measured here yet. Tools are off. Licence lfm1.0: royalty-free commercial use only below US$10M annual revenue.</li>
               <li><strong>Clover 35B-A3B &middot; SSD-streamed, experimental &middot; diffusion</strong> (~19.6 GB) &mdash; text. Diffuspace's Clover-35B-A3B-Preview is Qwen3.6 35B-A3B retrained to write by diffusion: each block of 32 words is filled in over several passes, so replies appear a block at a time. It streams its experts from on-device storage through anyformer and diskformer, using about 4 GB of GPU memory. The first load copies a 19.6 GB file into browser storage. Opt-in and experimental: its speed has not been measured yet. Tools are off.</li>
               <li><strong>Nemotron 3.5 Bolt E4B &middot; via anyformer (experimental)</strong> (~4.9 GB) &mdash; text. NVIDIA's Nemotron 3.5 Bolt E4B, a dense model with about 4B effective parameters, post-trained from Google's Gemma 4 E4B. It runs on Transformers.js through anyformer, from a community 4-bit ONNX conversion (text only), at about 35 tokens a second on an M4 Pro. Reasoning and tools are off for now.</li>
               <li><strong>GLM-4.7-Flash 30B-A3B &middot; via anyformer (experimental)</strong> (~18 GB) &mdash; text, reasoning. Z.ai's GLM-4.7-Flash, a 30B mixture-of-experts with about 3B parameters per token, from unsloth's 4-bit GGUF (18.3 GB). LocalMind has no engine of its own for it: anyformer picks diskformer's llama.cpp path, which runs llama.cpp's WebGPU build in a worker and pages the experts in from on-device storage (OPFS). The first load copies the file into this browser's storage once. Flip <strong>Show reasoning</strong> for its thinking. Tools are off for now.</li>
@@ -3024,7 +3029,6 @@
           <option value="minicpm-v47-35b-a3b-ssd">MiniCPM-V 4.7 35B-A3B &middot; SSD-streamed, experimental, text and images (~20 GB)</option>
           <option value="gemma4-26b-a4b-ssd">Gemma 4 26B-A4B &middot; SSD-streamed, experimental (~14 GB)</option>
           <option value="lfm25-24b-a2b-ssd">LFM2.5 24B-A2B &middot; SSD-streamed, experimental (~13.6 GB)</option>
-          <option value="lfm25-24b-pi-anyformer">LFM2.5 24B-A2B + Pi coding adapter &middot; experimental (~13.6 GB)</option>
           <option value="flint-40b-a2b-ssd">Flint 40B-A2.5B &middot; SSD-streamed, experimental, coding (~26 GB)</option>
           <option value="ling-3-flash-anyformer">Ling 3.0 Flash 124B-A5B &middot; via anyformer, experimental (~81 GB)</option>
           <option value="nemotron-bolt-e4b-anyformer">Nemotron 3.5 Bolt E4B &middot; via anyformer, experimental (~4.9 GB)</option>
@@ -8080,7 +8084,7 @@ const engineFetch = async (url, init = {}) => {
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy
 // of the engine (Gemma4Mobile) and, with ple, builds the OPFS per-layer-embedding table itself. The worker then drives
 // session.engine exactly as it drove its own engine. Pinned to the same anyformer as anyformer_models.js.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.20/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.21/index.js';
 
 let anyformerLoad = null;
 let session = null;
@@ -8225,7 +8229,7 @@ self.onmessage = async (e) => {
 // rolled-in module URLs (moduleUrl()).
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy of
 // the engine (TernaryBonsai2); the worker drives session.engine as before and attaches DFlash / MTP itself.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.20/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.21/index.js';
 const DFLASH_URL = '__TERNARY_BONSAI2_DFLASH_URL__';
 const MTP_URL = '__TERNARY_BONSAI2_MTP_URL__';
 // MTP speculative decoding (Settings → Models, default OFF; posted as `mtp` + `mtpDepth` on the
@@ -8693,7 +8697,16 @@ self.onmessage = async (e) => {
         },
       });
       lastHistoryLen = 0;
-      post({ type: 'ready', backend: 'webgpu' });
+      // A model with a run-time LoRA beside it (LFM2.5 24B-A2B: the Pi coding adapter) starts in the state the page asks
+      // for; 'ready' reports it, and null when the model has no adapter, so the page shows its switch only then.
+      let adapter = null;
+      if (typeof model.setAdapter === 'function') { adapter = d.adapter === true; await model.setAdapter(adapter); }
+      post({ type: 'ready', backend: 'webgpu', adapter });
+    } else if (d.type === 'setAdapter') {
+      // Takes effect from the next reply; the engine waits for a reply in progress to finish first.
+      if (!model || typeof model.setAdapter !== 'function') { post({ type: 'adapter', on: null }); return; }
+      await model.setAdapter(d.on === true);
+      post({ type: 'adapter', on: d.on === true });
     } else if (d.type === 'prime') {
       // The page sends the tool instructions after load; an engine with a checkpoint (qwen35_moe_ssd.js prime) reads
       // them now, so the first question does not wait for them. A question sent meanwhile waits on the engine's lock.
@@ -9524,26 +9537,6 @@ self.addEventListener('message', async (e) => {
         // Decided by scripts/tool-battery.mjs through the app (2026-10-14): 6/6 calls with right arguments,
         // 5/5 plain answers without a tool, and a live calculate round trip that used the result.
         agentCapable: true,
-        thinking: true,
-        contextSize: 4096,
-        genConfig: { max_new_tokens: 2048 },
-      },
-      // backend:'anyformer-lfm25-24b-pi' → anyformer's MODELS.chat.LFM2_5_24B_PI: the same QAD-Q4_0 GGUF with harness-hub's
-      // Pi coding-agent LoRA (37.4 MB, applied at run time, not merged). Since anyformer 0.4.20 (diskformer 0.6.19) it runs
-      // on diskformer's own Lfm2MoeSsd engine like the base entry, not on the llama.cpp path; speed there not measured
-      // here. anyformer's checks on 0.4.20: tool loop and 4-turn chat passed in Chrome. Shares the base
-      // entry's id, so resolveModelKey('LiquidAI/LFM2.5-24B-A2B-GGUF') still picks the base; this one is reached by key.
-      // Tools off until LocalMind's tool battery runs on it (the adapter was trained inside the Pi agent's own harness).
-      // Licence lfm1.0 (model and adapter).
-      'lfm25-24b-pi-anyformer': {
-        id: 'LiquidAI/LFM2.5-24B-A2B-GGUF',
-        label: 'LFM2.5 24B-A2B + Pi coding adapter · experimental',
-        backend: 'anyformer-lfm25-24b-pi',
-        size: '~13.6 GB',
-        gguf: { file: 'LFM2.5-24B-A2B-QAD-Q4_0.gguf', size: 13578190880 },
-        type: 'causal',
-        multimodal: false,
-        agentCapable: false,
         thinking: true,
         contextSize: 4096,
         genConfig: { max_new_tokens: 2048 },
@@ -14226,6 +14219,24 @@ self.addEventListener('message', async (e) => {
       gemma4PleToggle.checked = gemma4PleEnabled();
       gemma4PleToggle.addEventListener('change', () => { try { localStorage.setItem('lm_gemma4_ple', gemma4PleToggle.checked ? '1' : '0'); } catch {} });
     }
+    // The run-time LoRA beside a model that has one (LFM2.5 24B-A2B: harness-hub's Pi coding adapter). Off by default;
+    // sent with the load, and switched between replies with no reload. The switch shows only when 'ready' reports an
+    // adapter (adapter !== null).
+    function adapterEnabled() { try { return localStorage.getItem('lm_adapter') === '1'; } catch { return false; } }
+    const adapterSwitch = document.getElementById('adapterSwitch');
+    const adapterToggle = document.getElementById('adapterToggle');
+    function showAdapterSwitch(state) {
+      if (!adapterSwitch) return;
+      adapterSwitch.hidden = state == null;
+      if (state != null) adapterToggle.checked = state === true;
+    }
+    if (adapterToggle) {
+      adapterToggle.addEventListener('change', () => {
+        try { localStorage.setItem('lm_adapter', adapterToggle.checked ? '1' : '0'); } catch {}
+        const w = LocalMind.runtime._worker;
+        if (w) w.postMessage({ type: 'setAdapter', on: adapterToggle.checked });
+      });
+    }
     // Authorization header for huggingface.co requests made from the main thread
     // (the custom-model probe); empty when no token is set.
     function hfAuthHeaders() { const t = hfToken(); return t ? { 'Authorization': 'Bearer ' + t } : {}; }
@@ -16683,7 +16694,7 @@ self.addEventListener('message', async (e) => {
             // maxLength. The shared load message shape is harmless either way.
             // hfToken (Settings → Models) rides along for the three custom-WGSL
             // engines, which send it as Authorization: Bearer to huggingface.co.
-            w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0, localFile: (isWllama || moeSsd) ? (options.localFile || null) : null, hfToken: isWllama ? null : hfToken(), dflash: isBonsai2Webgpu && modelId === 'prism-ml/Ternary-Bonsai-2-27B-gguf' ? dflashEnabled() : false, mtp: isBonsai2Webgpu ? mtpEnabled() : false, mtpDepth: mtpDepth(), ple: isGemma4Webgpu ? gemma4PleEnabled() : false });
+            w.postMessage({ type: 'load', modelId, contextSize: options.contextSize || 0, localFile: (isWllama || moeSsd) ? (options.localFile || null) : null, hfToken: isWllama ? null : hfToken(), dflash: isBonsai2Webgpu && modelId === 'prism-ml/Ternary-Bonsai-2-27B-gguf' ? dflashEnabled() : false, mtp: isBonsai2Webgpu ? mtpEnabled() : false, mtpDepth: mtpDepth(), ple: isGemma4Webgpu ? gemma4PleEnabled() : false, adapter: moeSsd ? adapterEnabled() : false });
           } else {
             const resumable = localStorage.getItem('lm_resumable_downloads') !== '0';
             w.postMessage({ type: 'load', modelId, dtype, modelType, modelClass, resumable });
@@ -17811,7 +17822,6 @@ self.addEventListener('message', async (e) => {
         'anyformer-gemma26b': { engine: 'anyformer_models.js', exportName: 'Gemma4_26B', label: 'Gemma 4 26B-A4B (Q4_0, via anyformer)' },
         'anyformer-flint': { engine: 'anyformer_models.js', exportName: 'Flint40B', label: 'Flint 40B-A2.5B (Q4_1, via anyformer)' },
         'anyformer-lfm25-24b': { engine: 'anyformer_models.js', exportName: 'Lfm25_24B', label: 'LFM2.5 24B-A2B (Q4_0, via anyformer)' },
-        'anyformer-lfm25-24b-pi': { engine: 'anyformer_models.js', exportName: 'Lfm25_24bPi', label: 'LFM2.5 24B-A2B + Pi LoRA (Q4_0, via anyformer)' },
         'anyformer-qwen36': { engine: 'anyformer_models.js', exportName: 'Qwen36', label: 'Qwen3.6 35B-A3B (Q8_0, via anyformer)' },
         'anyformer-ling3flash': { engine: 'anyformer_models.js', exportName: 'Ling3Flash', label: 'Ling 3.0 Flash (Q4_K_M, via anyformer)' },
         'anyformer-glm47flash': { engine: 'anyformer_models.js', exportName: 'Glm47Flash', label: 'GLM-4.7-Flash (Q4_K_M, via anyformer)' },
@@ -19168,6 +19178,7 @@ self.addEventListener('message', async (e) => {
         else if (data.type === 'ready') {
           disarm();
           modelReady = true;
+          showAdapterSwitch(data.adapter);
           rememberModel(activeModelKey);
           progressSection.classList.remove('visible');
           statusBadge.className = 'status-badge ready';
@@ -19379,6 +19390,7 @@ self.addEventListener('message', async (e) => {
       statusBadge.className = 'status-badge loading';
       statusSpinner.style.display = '';
       statusText.textContent = 'Loading...';
+      showAdapterSwitch(null);
       progressFill.style.width = '0%';
       progressText.textContent = `Preparing to download ${m.label} (${m.size})...`;
       progressSection.classList.add('visible');
@@ -19501,7 +19513,7 @@ self.addEventListener('message', async (e) => {
     const ENGINE_STORES = {
       'transformers': ['transformers-cache'], 'wllama': ['wllama'], 'lfm2-webgpu': ['gguf-v1'],
       'bonsai2-webgpu': ['gguf-cache-v1'], 'gemma4-webgpu': ['safetensors-cache-v1', 'bonsai-pipeline-v1'],
-      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-deepseek-v41': ['on disk (OPFS)'], 'anyformer-bolt-e4b': ['transformers-cache'], 'anyformer-lfm3-omni': ['diskformer-models'], 'anyformer-nemotron-diffusion': ['kohra-models', 'transformers-cache'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'anyformer-clover': ['on disk (OPFS)'], 'anyformer-flint': ['on disk (OPFS)'], 'anyformer-lfm25-24b': ['on disk (OPFS)'], 'anyformer-lfm25-24b-pi': ['on disk (OPFS)'], 'anyformer-gemma26b': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
+      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-deepseek-v41': ['on disk (OPFS)'], 'anyformer-bolt-e4b': ['transformers-cache'], 'anyformer-lfm3-omni': ['diskformer-models'], 'anyformer-nemotron-diffusion': ['kohra-models', 'transformers-cache'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'anyformer-clover': ['on disk (OPFS)'], 'anyformer-flint': ['on disk (OPFS)'], 'anyformer-lfm25-24b': ['on disk (OPFS)'], 'anyformer-gemma26b': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
     };
     function parseSizeBytes(size) {
       const m = /([\d.]+)\s*(GB|MB)/i.exec(String(size || ''));
@@ -24291,7 +24303,7 @@ self.addEventListener('message', async (e) => {
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.20/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.21/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
@@ -24322,15 +24334,20 @@ export class AnyformerModel {
   static budget = 4e9;   // GPU bytes: the llama.cpp path plans its expert slots from it; for a hand engine, the fit check
   static poolBytes = undefined;   // a hand engine's expert cache (LocalMind's own engines ran with 4 GiB)
   static speech = false;   // load the speech graphs too (LFM3-Omni: depth and codec decoders, 515 MB)
+  // A key of anyformer's MODELS.chat whose `adapter` (a LoRA GGUF) loads beside the model; the session then switches it
+  // on and off with setAdapter(on), no reload (diskformer's run-time LoRA, anyformer 0.4.20+).
+  static adapterEntry = null;
 
   static async load(_id, opts = {}) {
     const { load, MODELS } = await import(ANYFORMER_URL);
     const entry = this.entry && MODELS.chat[this.entry], files = new Map();
     if (this.entry && !entry) throw new Error(`anyformer has no MODELS.chat.${this.entry}`);
+    const adapter = this.adapterEntry && MODELS.chat[this.adapterEntry] && MODELS.chat[this.adapterEntry].adapter;
+    if (this.adapterEntry && !adapter) throw new Error(`anyformer has no adapter on MODELS.chat.${this.adapterEntry}`);
     const session = await load(entry || this.repo, {
       ...(opts.budget || !entry ? { budget: opts.budget || this.budget } : {}), maxCtx: opts.maxCtx, signal: opts.signal, ...(this.file ? { file: this.file } : {}),
       ...(this.poolBytes ? { poolBytes: this.poolBytes } : {}), ...(opts.localFile ? { localFile: opts.localFile } : {}),
-      ...(this.speech ? { speech: true } : {}),
+      ...(this.speech ? { speech: true } : {}), ...(adapter ? { adapter } : {}),
       onProgress: (e) => { const ev = toEngineProgress(e, files); if (ev && opts.onProgress) opts.onProgress(ev); },
     });
     return new this(session);
@@ -24341,6 +24358,7 @@ export class AnyformerModel {
     // Present only where the engine has them (Qwen3.6: both), so the worker's own checks still work.
     if (session.prime) this.prime = (system) => session.prime(system);
     if (session.ensureVision) this.ensureVision = (o) => session.ensureVision(o);
+    if (session.setAdapter) this.setAdapter = (on) => session.setAdapter(on === true);
   }
 
   get thinkOpenTokenId() { return this.think ? this.think.openId : null; }
@@ -24447,21 +24465,17 @@ export class Clover35B extends AnyformerModel {
   static entry = 'CLOVER_35B_A3B';
 }
 
-// LFM2.5 24B-A2B with harness-hub's Pi coding-agent LoRA by anyformer's catalog entry: the QAD-Q4_0 GGUF plus a 37.4 MB
-// adapter applied at run time, on diskformer's Lfm2MoeSsd engine since anyformer 0.4.20 (diskformer 0.6.19). Opt-in and
-// experimental; licence lfm1.0.
-export class Lfm25_24bPi extends AnyformerModel {
-  static entry = 'LFM2_5_24B_PI';
-}
-
 export class DeepSeekV41Flash extends AnyformerModel {
   static entry = 'DEEPSEEK_V4_1_FLASH';
 }
 
 // LFM2.5 24B-A2B: Liquid AI's QAD-Q4_0 GGUF (13.6 GB) on diskformer's Lfm2MoeSsd hand engine (anyformer v0.4.2+). It
-// always reasons; session.think carries the markers. A 4 GiB expert cache as before.
+// always reasons; session.think carries the markers. A 4 GiB expert cache as before. harness-hub's Pi coding-agent LoRA
+// (37.4 MB, anyformer's MODELS.chat.LFM2_5_24B_PI adapter; licence lfm1.0) loads beside it and starts off; the page's
+// "Pi adapter" switch turns it on and off between replies with no reload.
 export class Lfm25_24B extends AnyformerModel {
   static repo = 'LiquidAI/LFM2.5-24B-A2B-GGUF';
+  static adapterEntry = 'LFM2_5_24B_PI';
   static budget = 7e9;
   static poolBytes = 4 * 2 ** 30;
 }
@@ -32701,12 +32715,21 @@ export class HyV3MoeSsd extends Lfm2MoeSsd {
  * shared, vendorable runtime entry point used by LocalMind and NakliOS.
  *
  * Protocol:
- *   -> { type: "load", id?, modelId?, hfToken? }
- *   <- progress*; ready
- *   -> { type: "generate", id, messages, generationConfig? }
- *   <- token*; complete
+ *   -> { type: "load", id?, modelId?, entry?, maxCtx?, adapter?, hfToken? }
+ *   <- progress*; ready { adapter }
+ *   -> { type: "generate", id, messages, tools?, generationConfig? }
+ *   <- (token | reasoning)*; tool_calls?; complete
+ *   -> { type: "setAdapter", id?, on }
+ *   <- adapter { on }
  *   -> { type: "stop", id? }
  *   -> { type: "unload", id? }
+ *
+ * `entry` names a model in anyformer's catalog (MODELS.chat, e.g. LFM2_5_24B_PI), which brings its repo, GPU budget and
+ * any run-time LoRA adapter; without it `modelId` (a Hub repo) loads, LFM2.5 230M by default. `ready.adapter` is the
+ * adapter's state (true / false), or null when the model has none. `tools` are OpenAI function tools; anyformer writes
+ * them into the prompt in the model's own format and parses the calls, which arrive as one `tool_calls` message
+ * (OpenAI tool_calls, ids call_<n>) before `complete`. Messages may carry role "tool" (with tool_call_id) and assistant
+ * `tool_calls`. A model that reasons before answering streams the reasoning as `reasoning` deltas, apart from `token`.
  *
  * Every response echoes the request id when one was provided. Older LocalMind
  * callers omit ids, which remains supported.
@@ -32718,9 +32741,11 @@ const GGUF_FILE = 'LFM2.5-230M-Q4_0.gguf';
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy of
 // the LFM2.5 engine (Lfm2Mobile) and returns a session with the same generate / reset / dispose. Pinned to an exact
 // version; LocalMind's anyformer_models.js pins the same one.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.20/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.21/index.js';
 
 let anyformerLoad = null;
+let anyformerModels = null;
+let weightsLabel = GGUF_FILE;
 let model = null;
 let abortController = null;
 let stopFlag = false;
@@ -32880,7 +32905,7 @@ const post = (message, id = activeRequestId) => {
 const normaliseMessages = (messages) => (Array.isArray(messages) ? messages : [])
   .map((message) => {
     let role = message && message.role;
-    if (role !== 'system' && role !== 'user' && role !== 'assistant') role = 'user';
+    if (role !== 'system' && role !== 'user' && role !== 'assistant' && role !== 'tool') role = 'user';
     const raw = message && message.content;
     const content = typeof raw === 'string'
       ? raw
@@ -32889,22 +32914,32 @@ const normaliseMessages = (messages) => (Array.isArray(messages) ? messages : []
           .map((block) => block.text || '')
           .join('\n')
         : String(raw == null ? '' : raw);
-    return { role, content };
+    // Tool traffic passes through for anyformer to write in the model's format.
+    const out = { role, content };
+    if (role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length) out.tool_calls = message.tool_calls;
+    if (role === 'tool' && message.tool_call_id != null) out.tool_call_id = message.tool_call_id;
+    if (role === 'tool' && typeof message.name === 'string') out.name = message.name;
+    return out;
   });
 
 const loadModel = async (request) => {
   const id = request.id;
   activeRequestId = id == null ? null : id;
   if (model) {
-    post({ type: 'ready', backend: 'webgpu', model: request.modelId || DEFAULT_MODEL_ID }, id);
+    post({ type: 'ready', backend: 'webgpu', model: request.entry || request.modelId || DEFAULT_MODEL_ID, adapter: null }, id);
     return;
   }
-  if (!anyformerLoad) ({ load: anyformerLoad } = await import(ANYFORMER_URL));
+  if (!anyformerLoad) ({ load: anyformerLoad, MODELS: anyformerModels } = await import(ANYFORMER_URL));
   hfToken = (typeof request.hfToken === 'string' && request.hfToken.trim()) || null;
-  post({ type: 'progress', data: { status: 'initiate', file: GGUF_FILE } }, id);
-  model = await anyformerLoad(request.modelId || DEFAULT_MODEL_ID, {
+  const entry = typeof request.entry === 'string' && request.entry ? anyformerModels.chat[request.entry] : null;
+  if (request.entry && !entry) throw new Error(`anyformer has no model ${request.entry}`);
+  weightsLabel = entry ? `${entry.repo.split('/').pop()} into on-device storage` : GGUF_FILE;
+  post({ type: 'progress', data: { status: 'initiate', file: weightsLabel } }, id);
+  const maxCtx = request.maxCtx > 0 ? request.maxCtx : undefined;
+  model = await anyformerLoad(entry || request.modelId || DEFAULT_MODEL_ID, {
     // Range reads stream + resume and carry the optional HF token (prelude).
     fetch: engineFetch,
+    ...(maxCtx ? { maxCtx } : {}),
     onProgress: (event) => {
       if (!event) return;
       if (event.status === 'weights' && event.kind === 'tensors') {
@@ -32927,14 +32962,14 @@ const loadModel = async (request) => {
         if (loaded != null && total != null && total > 0) {
           post({
             type: 'progress',
-            data: { status: 'progress_total', file: GGUF_FILE, loaded, total },
+            data: { status: 'progress_total', file: weightsLabel, loaded, total },
           }, id);
         } else if (typeof event.fraction === 'number') {
           post({
             type: 'progress',
             data: {
               status: 'progress_total',
-              file: GGUF_FILE,
+              file: weightsLabel,
               loaded: Math.round(event.fraction * 1000),
               total: 1000,
             },
@@ -32953,10 +32988,14 @@ const loadModel = async (request) => {
   } catch (_) {
     // Warmup is an optimisation. A usable model must not be rejected for it.
   }
+  // A run-time adapter starts in the state the host asks for (off unless adapter: true).
+  let adapter = null;
+  if (typeof model.setAdapter === 'function') { adapter = request.adapter === true; await model.setAdapter(adapter); }
   post({
     type: 'ready',
     backend: 'webgpu',
-    model: request.modelId || DEFAULT_MODEL_ID,
+    model: request.entry || request.modelId || DEFAULT_MODEL_ID,
+    adapter,
   }, id);
 };
 
@@ -32978,16 +33017,25 @@ const generate = async (request) => {
   }
   lastHistoryLen = messages.length;
   abortController = new AbortController();
-  let previous = '', latest = '';
+  let previous = '', latest = '', thought = '', toolCalls = null;
+  const tools = Array.isArray(request.tools) && request.tools.length ? request.tools : null;
 
   try {
     const stream = model.generate(messages, {
       maxNewTokens: config.max_new_tokens || config.max_tokens || 1024,
       signal: abortController.signal,
+      ...(tools ? { tools } : {}),
+      ...(config.enable_thinking === true ? { thinking: true } : {}),
     });
     for await (const output of stream) {
       if (stopFlag) break;
-      const full = output && typeof output.text === 'string' ? output.text : '';
+      // Reasoning (a model that always thinks first, with thinking off: LFM2.5 24B-A2B) arrives as its own text.
+      const r = output && typeof output.reasoning === 'string' ? output.reasoning : '';
+      if (r.length > thought.length && !r.endsWith('\uFFFD')) { post({ type: 'reasoning', token: r.slice(thought.length) }, id); thought = r; }
+      if (output && Array.isArray(output.toolCalls) && output.toolCalls.length) toolCalls = output.toolCalls;
+      let full = output && typeof output.text === 'string' ? output.text : '';
+      // Call markup is held back while a call is being written: anyformer returns it parsed once it is complete.
+      if (tools) { const at = full.indexOf('<|tool_call_start|>'); if (at >= 0) full = full.slice(0, at); }
       latest = full;
       // A character split across tokens decodes with a trailing U+FFFD until its last byte arrives: hold the delta
       // until then, or the stream carries U+FFFD and the next delta starts a code unit late (2026-10-14).
@@ -32997,14 +33045,21 @@ const generate = async (request) => {
       }
     }
     if (latest.length > previous.length) post({ type: 'token', token: latest.slice(previous.length) }, id);
+    if (toolCalls) post({ type: 'tool_calls', toolCalls }, id);
   } catch (error) {
     const message = String((error && error.message) || error);
     if (!(stopFlag || message.toLowerCase().includes('abort'))) throw error;
   } finally {
     abortController = null;
   }
-  post({ type: 'complete', finishReason: stopFlag ? 'cancelled' : 'stop' }, id);
+  post({ type: 'complete', finishReason: stopFlag ? 'cancelled' : toolCalls ? 'tool_calls' : 'stop' }, id);
   activeRequestId = null;
+};
+
+const setAdapter = async (request) => {
+  if (!model || typeof model.setAdapter !== 'function') { post({ type: 'adapter', on: null }, request.id); return; }
+  await model.setAdapter(request.on === true);
+  post({ type: 'adapter', on: request.on === true }, request.id);
 };
 
 const stop = (request) => {
@@ -33038,6 +33093,7 @@ self.onmessage = async (event) => {
     if (request.type === 'load') await loadModel(request);
     else if (request.type === 'generate') await generate(request);
     else if (request.type === 'stop') stop(request);
+    else if (request.type === 'setAdapter') await setAdapter(request);
     else if (request.type === 'unload') await unload();
     else post({ type: 'error', message: `Unknown request type: ${String(request.type || '')}` }, request.id);
   } catch (error) {

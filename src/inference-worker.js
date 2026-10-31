@@ -5,12 +5,21 @@
  * shared, vendorable runtime entry point used by LocalMind and NakliOS.
  *
  * Protocol:
- *   -> { type: "load", id?, modelId?, hfToken? }
- *   <- progress*; ready
- *   -> { type: "generate", id, messages, generationConfig? }
- *   <- token*; complete
+ *   -> { type: "load", id?, modelId?, entry?, maxCtx?, adapter?, hfToken? }
+ *   <- progress*; ready { adapter }
+ *   -> { type: "generate", id, messages, tools?, generationConfig? }
+ *   <- (token | reasoning)*; tool_calls?; complete
+ *   -> { type: "setAdapter", id?, on }
+ *   <- adapter { on }
  *   -> { type: "stop", id? }
  *   -> { type: "unload", id? }
+ *
+ * `entry` names a model in anyformer's catalog (MODELS.chat, e.g. LFM2_5_24B_PI), which brings its repo, GPU budget and
+ * any run-time LoRA adapter; without it `modelId` (a Hub repo) loads, LFM2.5 230M by default. `ready.adapter` is the
+ * adapter's state (true / false), or null when the model has none. `tools` are OpenAI function tools; anyformer writes
+ * them into the prompt in the model's own format and parses the calls, which arrive as one `tool_calls` message
+ * (OpenAI tool_calls, ids call_<n>) before `complete`. Messages may carry role "tool" (with tool_call_id) and assistant
+ * `tool_calls`. A model that reasons before answering streams the reasoning as `reasoning` deltas, apart from `token`.
  *
  * Every response echoes the request id when one was provided. Older LocalMind
  * callers omit ids, which remains supported.
@@ -22,9 +31,11 @@ const GGUF_FILE = 'LFM2.5-230M-Q4_0.gguf';
 // The model loads through anyformer (convergence plan, 2026-10-22): anyformer resolves the repo to diskformer's copy of
 // the LFM2.5 engine (Lfm2Mobile) and returns a session with the same generate / reset / dispose. Pinned to an exact
 // version; LocalMind's anyformer_models.js pins the same one.
-const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.20/index.js';
+const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.21/index.js';
 
 let anyformerLoad = null;
+let anyformerModels = null;
+let weightsLabel = GGUF_FILE;
 let model = null;
 let abortController = null;
 let stopFlag = false;
@@ -184,7 +195,7 @@ const post = (message, id = activeRequestId) => {
 const normaliseMessages = (messages) => (Array.isArray(messages) ? messages : [])
   .map((message) => {
     let role = message && message.role;
-    if (role !== 'system' && role !== 'user' && role !== 'assistant') role = 'user';
+    if (role !== 'system' && role !== 'user' && role !== 'assistant' && role !== 'tool') role = 'user';
     const raw = message && message.content;
     const content = typeof raw === 'string'
       ? raw
@@ -193,22 +204,32 @@ const normaliseMessages = (messages) => (Array.isArray(messages) ? messages : []
           .map((block) => block.text || '')
           .join('\n')
         : String(raw == null ? '' : raw);
-    return { role, content };
+    // Tool traffic passes through for anyformer to write in the model's format.
+    const out = { role, content };
+    if (role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length) out.tool_calls = message.tool_calls;
+    if (role === 'tool' && message.tool_call_id != null) out.tool_call_id = message.tool_call_id;
+    if (role === 'tool' && typeof message.name === 'string') out.name = message.name;
+    return out;
   });
 
 const loadModel = async (request) => {
   const id = request.id;
   activeRequestId = id == null ? null : id;
   if (model) {
-    post({ type: 'ready', backend: 'webgpu', model: request.modelId || DEFAULT_MODEL_ID }, id);
+    post({ type: 'ready', backend: 'webgpu', model: request.entry || request.modelId || DEFAULT_MODEL_ID, adapter: null }, id);
     return;
   }
-  if (!anyformerLoad) ({ load: anyformerLoad } = await import(ANYFORMER_URL));
+  if (!anyformerLoad) ({ load: anyformerLoad, MODELS: anyformerModels } = await import(ANYFORMER_URL));
   hfToken = (typeof request.hfToken === 'string' && request.hfToken.trim()) || null;
-  post({ type: 'progress', data: { status: 'initiate', file: GGUF_FILE } }, id);
-  model = await anyformerLoad(request.modelId || DEFAULT_MODEL_ID, {
+  const entry = typeof request.entry === 'string' && request.entry ? anyformerModels.chat[request.entry] : null;
+  if (request.entry && !entry) throw new Error(`anyformer has no model ${request.entry}`);
+  weightsLabel = entry ? `${entry.repo.split('/').pop()} into on-device storage` : GGUF_FILE;
+  post({ type: 'progress', data: { status: 'initiate', file: weightsLabel } }, id);
+  const maxCtx = request.maxCtx > 0 ? request.maxCtx : undefined;
+  model = await anyformerLoad(entry || request.modelId || DEFAULT_MODEL_ID, {
     // Range reads stream + resume and carry the optional HF token (prelude).
     fetch: engineFetch,
+    ...(maxCtx ? { maxCtx } : {}),
     onProgress: (event) => {
       if (!event) return;
       if (event.status === 'weights' && event.kind === 'tensors') {
@@ -231,14 +252,14 @@ const loadModel = async (request) => {
         if (loaded != null && total != null && total > 0) {
           post({
             type: 'progress',
-            data: { status: 'progress_total', file: GGUF_FILE, loaded, total },
+            data: { status: 'progress_total', file: weightsLabel, loaded, total },
           }, id);
         } else if (typeof event.fraction === 'number') {
           post({
             type: 'progress',
             data: {
               status: 'progress_total',
-              file: GGUF_FILE,
+              file: weightsLabel,
               loaded: Math.round(event.fraction * 1000),
               total: 1000,
             },
@@ -257,10 +278,14 @@ const loadModel = async (request) => {
   } catch (_) {
     // Warmup is an optimisation. A usable model must not be rejected for it.
   }
+  // A run-time adapter starts in the state the host asks for (off unless adapter: true).
+  let adapter = null;
+  if (typeof model.setAdapter === 'function') { adapter = request.adapter === true; await model.setAdapter(adapter); }
   post({
     type: 'ready',
     backend: 'webgpu',
-    model: request.modelId || DEFAULT_MODEL_ID,
+    model: request.entry || request.modelId || DEFAULT_MODEL_ID,
+    adapter,
   }, id);
 };
 
@@ -282,16 +307,25 @@ const generate = async (request) => {
   }
   lastHistoryLen = messages.length;
   abortController = new AbortController();
-  let previous = '', latest = '';
+  let previous = '', latest = '', thought = '', toolCalls = null;
+  const tools = Array.isArray(request.tools) && request.tools.length ? request.tools : null;
 
   try {
     const stream = model.generate(messages, {
       maxNewTokens: config.max_new_tokens || config.max_tokens || 1024,
       signal: abortController.signal,
+      ...(tools ? { tools } : {}),
+      ...(config.enable_thinking === true ? { thinking: true } : {}),
     });
     for await (const output of stream) {
       if (stopFlag) break;
-      const full = output && typeof output.text === 'string' ? output.text : '';
+      // Reasoning (a model that always thinks first, with thinking off: LFM2.5 24B-A2B) arrives as its own text.
+      const r = output && typeof output.reasoning === 'string' ? output.reasoning : '';
+      if (r.length > thought.length && !r.endsWith('\uFFFD')) { post({ type: 'reasoning', token: r.slice(thought.length) }, id); thought = r; }
+      if (output && Array.isArray(output.toolCalls) && output.toolCalls.length) toolCalls = output.toolCalls;
+      let full = output && typeof output.text === 'string' ? output.text : '';
+      // Call markup is held back while a call is being written: anyformer returns it parsed once it is complete.
+      if (tools) { const at = full.indexOf('<|tool_call_start|>'); if (at >= 0) full = full.slice(0, at); }
       latest = full;
       // A character split across tokens decodes with a trailing U+FFFD until its last byte arrives: hold the delta
       // until then, or the stream carries U+FFFD and the next delta starts a code unit late (2026-10-14).
@@ -301,14 +335,21 @@ const generate = async (request) => {
       }
     }
     if (latest.length > previous.length) post({ type: 'token', token: latest.slice(previous.length) }, id);
+    if (toolCalls) post({ type: 'tool_calls', toolCalls }, id);
   } catch (error) {
     const message = String((error && error.message) || error);
     if (!(stopFlag || message.toLowerCase().includes('abort'))) throw error;
   } finally {
     abortController = null;
   }
-  post({ type: 'complete', finishReason: stopFlag ? 'cancelled' : 'stop' }, id);
+  post({ type: 'complete', finishReason: stopFlag ? 'cancelled' : toolCalls ? 'tool_calls' : 'stop' }, id);
   activeRequestId = null;
+};
+
+const setAdapter = async (request) => {
+  if (!model || typeof model.setAdapter !== 'function') { post({ type: 'adapter', on: null }, request.id); return; }
+  await model.setAdapter(request.on === true);
+  post({ type: 'adapter', on: request.on === true }, request.id);
 };
 
 const stop = (request) => {
@@ -342,6 +383,7 @@ self.onmessage = async (event) => {
     if (request.type === 'load') await loadModel(request);
     else if (request.type === 'generate') await generate(request);
     else if (request.type === 'stop') stop(request);
+    else if (request.type === 'setAdapter') await setAdapter(request);
     else if (request.type === 'unload') await unload();
     else post({ type: 'error', message: `Unknown request type: ${String(request.type || '')}` }, request.id);
   } catch (error) {

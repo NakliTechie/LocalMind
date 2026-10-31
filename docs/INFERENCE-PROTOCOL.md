@@ -105,9 +105,43 @@ Unload and release GPU resources:
 worker.postMessage({ type: 'unload' });
 ```
 
+### anyformer catalog models, tools and adapters (`inference-worker.js`)
+
+`inference-worker.js` also loads a model from anyformer's catalog by name. The
+host catalog's `entry` field goes on the load message; `maxCtx` sizes the KV
+cache, and `adapter: true` starts a run-time LoRA switched on:
+
+```js
+worker.postMessage({
+  type: 'load',
+  id: 'load-pi',
+  entry: 'LFM2_5_24B_PI',   // host catalog key 'lfm25-24b-pi'
+  maxCtx: 4096,
+  adapter: true,
+});
+```
+
+`ready.adapter` is the adapter's state (`true` / `false`), or `null` when the
+model has none. Switch it between replies with no reload:
+
+```js
+worker.postMessage({ type: 'setAdapter', id: 'a1', on: false });
+// <- { type: 'adapter', id: 'a1', on: false }
+```
+
+A `generate` request may carry `tools` (OpenAI function tools). Messages may
+hold `role: 'tool'` results (with `tool_call_id`) and assistant turns with
+`tool_calls`. anyformer writes them into the prompt in the model's own format
+and parses the model's calls; the worker sends them as one
+`{ type: 'tool_calls', toolCalls }` message (OpenAI `tool_calls`, ids
+`call_<n>`) before `complete`, whose `finishReason` is then `'tool_calls'`.
+Call markup is not streamed as `token` text. A model that reasons before it
+answers (LFM2.5 24B-A2B always does) streams its reasoning as `reasoning`
+deltas, apart from the answer's `token` deltas.
+
 Only one generation can be active in a worker. Multi-app queuing, permissions,
-history, and tool access are intentionally outside this protocol; those are
-host responsibilities.
+history, and running the tools are intentionally outside this protocol; those
+are host responsibilities.
 
 ## Image protocol
 
