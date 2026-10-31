@@ -63,7 +63,7 @@ const LOCALMIND_HOST_MODELS = Object.freeze([
     dtype: 'q4_0',
     size: '~13.6 GB',
     sizeBytes: 13_578_190_880 + 37_437_888,
-    contextTokens: 4_096,
+    contextTokens: 16_384,   // 4,096 overflowed Dish's 31-tool prompt (~36k chars); 16,384 adds ~335 MB of KV (NakliOS, 2026-10-31)
     modelType: 'causal',
     experimental: true,
     optIn: true,
