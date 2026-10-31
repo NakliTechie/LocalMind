@@ -63406,13 +63406,39 @@ function _adapterInferToolFromArgs(args, toolDefs) {
 // — into a JS object. Strings may be single- or double-quoted; bare numbers
 // and booleans/None are coerced. Splits on top-level commas only (quotes and
 // nested brackets are respected so commas inside values don't split).
+// Split the body of a native LFM2 call block into its calls: "[a(x=1), b(y='p, q')]" → [{ name: 'a', args: 'x=1' },
+// { name: 'b', args: "y='p, q'" }]. Quote-aware (with backslash escapes) and bracket-aware; an unclosed last call keeps
+// what it has (a reply cut at max_tokens).
+function _adapterSplitPythonicCalls(s) {
+  const calls = [];
+  const body = String(s || '').trim().replace(/^\[/, '').replace(/\]\s*$/, '');
+  let i = 0;
+  while (i < body.length) {
+    const head = /^[\s,]*([a-zA-Z_][\w.-]*)\s*\(/.exec(body.slice(i));
+    if (!head) break;
+    let j = i + head[0].length, depth = 1, q = null;
+    const start = j;
+    for (; j < body.length && depth > 0; j++) {
+      const ch = body[j];
+      if (q) { if (ch === '\\') { j++; continue; } if (ch === q) q = null; continue; }
+      if (ch === '"' || ch === "'") q = ch;
+      else if (ch === '(' || ch === '[' || ch === '{') depth++;
+      else if (ch === ')' || ch === ']' || ch === '}') depth--;
+    }
+    calls.push({ name: head[1], args: body.slice(start, depth === 0 ? j - 1 : j) });
+    i = j;
+  }
+  return calls;
+}
+
 function _adapterParsePythonicArgs(s) {
   const out = {};
   if (!s || !s.trim()) return out;
   const parts = [];
   let depth = 0, cur = '', q = null;
-  for (const ch of s) {
-    if (q) { cur += ch; if (ch === q) q = null; continue; }
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (q) { cur += ch; if (ch === '\\' && i + 1 < s.length) { cur += s[++i]; continue; } if (ch === q) q = null; continue; }
     if (ch === '"' || ch === "'") { q = ch; cur += ch; continue; }
     if (ch === '(' || ch === '[' || ch === '{') depth++;
     else if (ch === ')' || ch === ']' || ch === '}') depth--;
@@ -63427,7 +63453,7 @@ function _adapterParsePythonicArgs(s) {
     let v = p.slice(eq + 1).trim();
     if (!k) continue;
     if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-      v = v.slice(1, -1);
+      v = v.slice(1, -1).replace(/\\(.)/g, (_, c) => (c === 'n' ? '\n' : c === 't' ? '\t' : c));
     } else if (/^-?\d+(\.\d+)?$/.test(v)) {
       v = Number(v);
     } else if (v === 'true' || v === 'True') { v = true; }
@@ -63692,17 +63718,15 @@ function _adapterParseToolCalls(text, knownToolNames, toolDefs) {
   // shown raw. Parse it here. Gated on the distinctive start marker AND a known
   // tool name, so models that matched above never reach this and a hallucinated
   // tool name (e.g. a nonexistent "translate") is ignored rather than executed.
+  // Every block, and every call in a block's list ("[a(x=1), b(y=2)]", as LFM2.5-24B's Pi adapter writes them).
   if (toolCalls.length === 0 && text.indexOf('<|tool_call_start|>') !== -1) {
-    const seg = text.split('<|tool_call_start|>')[1] || '';
-    const callStr = seg.split('<|tool_call_end|>')[0];
-    const m = callStr.match(/([a-zA-Z_]\w*)\s*\(([\s\S]*?)\)\s*\]?\s*$/) || callStr.match(/([a-zA-Z_]\w*)\s*\(([\s\S]*)/);
-    if (m) {
-      const name = _adapterResolveToolName(m[1], knownToolNames);
-      if (name != null) {
-        toolCalls.push({ name, arguments: _adapterParsePythonicArgs(m[2]) });
-        cleanText = cleanText.replace(/<\|tool_call_start\|>[\s\S]*?(<\|tool_call_end\|>|$)/, '').trim();
+    for (const seg of text.split('<|tool_call_start|>').slice(1)) {
+      for (const c of _adapterSplitPythonicCalls(seg.split('<|tool_call_end|>')[0])) {
+        const name = _adapterResolveToolName(c.name, knownToolNames);
+        if (name != null) toolCalls.push({ name, arguments: _adapterParsePythonicArgs(c.args) });
       }
     }
+    if (toolCalls.length) cleanText = cleanText.replace(/<\|tool_call_start\|>[\s\S]*?(<\|tool_call_end\|>|$)/g, '').trim();
   }
 
   // 5. Native MiniCPM5-style call: <function name="fn"><param …>v</param></function>
@@ -63804,6 +63828,7 @@ export {
   _adapterParseArgKeyCalls,
   _adapterInferToolFromArgs,
   _adapterParsePythonicArgs,
+  _adapterSplitPythonicCalls,
   _adapterCoerceXmlParam,
   _adapterParseXmlFunctionCalls,
   _adapterExtractBalancedObject,

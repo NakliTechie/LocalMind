@@ -326,6 +326,12 @@ const reset = () => { requests.length = 0; harness.reset(); for (const k of Obje
     [{ name: 'calculate', arguments: { expression: '2+2' } }]);
   assert.deepEqual(parse('<|tool_call_start|>[bash(command="pwd")]<|tool_call_end|>', known, tools).toolCalls,
     [{ name: 'Bash', arguments: { command: 'pwd' } }]);
+  // LFM2 lists (LFM2.5-24B's Pi adapter): every call in a block and every block, escaped quotes, commas inside quotes.
+  assert.deepEqual(parse("<|tool_call_start|>[bash(command='ls'), calculate(expression=\"1, 2\")]<|tool_call_end|>", known, tools).toolCalls,
+    [{ name: 'Bash', arguments: { command: 'ls' } }, { name: 'calculate', arguments: { expression: '1, 2' } }]);
+  assert.deepEqual(parse("a<|tool_call_start|>[bash(command='echo it\\'s')]<|tool_call_end|>b<|tool_call_start|>[bash(command='pwd')]<|tool_call_end|>", known, tools),
+    { toolCalls: [{ name: 'Bash', arguments: { command: "echo it's" } }, { name: 'Bash', arguments: { command: 'pwd' } }], cleanText: 'ab' });
+  assert.deepEqual(parse("<|tool_call_start|>[bash_exec(command='rm -rf /')]<|tool_call_end|>", known, tools).toolCalls, [], 'an unknown name in a list never runs');
   assert.deepEqual(parse('<function name="BASH"><param name="command">date</param></function>', known, tools).toolCalls.map((c) => c.name), ['Bash']);
   assert.deepEqual(parse('<tool_call>\n<function=bash_exec>\n</function>\n</tool_call>', known, tools).toolCalls, [], 'an unknown name still never runs');
   console.log('tool names match case-insensitively when one tool fits: ok');
