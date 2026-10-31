@@ -170,6 +170,13 @@ export class Clover35B extends AnyformerModel {
   static entry = 'CLOVER_35B_A3B';
 }
 
+// LFM2.5 24B-A2B with harness-hub's Pi coding-agent LoRA by anyformer's catalog entry (0.4.18+; 0.4.19 closes the
+// always-open <think> when thinking is off): the QAD-Q4_0 GGUF plus a 37.4 MB adapter applied at load, on diskformer's
+// llama.cpp path with paged experts, a 4 GB budget. Opt-in and experimental; licence lfm1.0.
+export class Lfm25_24bPi extends AnyformerModel {
+  static entry = 'LFM2_5_24B_PI';
+}
+
 export class DeepSeekV41Flash extends AnyformerModel {
   static entry = 'DEEPSEEK_V4_1_FLASH';
 }

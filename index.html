@@ -2694,6 +2694,7 @@
               <li><strong>Ling 3.0 Flash 124B-A5B &middot; via anyformer (experimental)</strong> (~81 GB) &mdash; text, reasoning. inclusionAI's Ling 3.0 Flash (released 2026-08-02, MIT): a 124B mixture-of-experts (512 experts, 8 active per token, about 5.1B parameters per token) whose layers mix linear attention (KDA) and latent attention (MLA), from inclusionAI's own 4-bit Q4_K_M GGUF (77 GB in two parts). anyformer loads it on diskformer's engine for it, which keeps the attention, routers and caches on the GPU (about 2.5 GB plus a 4 GB expert cache; it needs about 7 GB of GPU memory) and streams the 20,480 routed experts from on-device storage (OPFS). The first load copies the model into this browser's storage once (~81 GB of disk). About 5.5 tokens/s on an M4 Pro with 24 GB, and prompts are read at about 5 tokens/s. Flip <strong>Show reasoning</strong> for its thinking. Tools are off for now.</li>
               <li><strong>DeepSeek V4.1 Flash 763B &middot; tech demo, very slow, chat untested</strong> (~231 GB) &mdash; text. DeepSeek's 763B mixture-of-experts model, 6 of its 384 experts per token, from ISTA-DASLab's IQ1_M files plus a separate Engram file. anyformer runs it on diskformer's llama.cpp path: an 8 GB GPU budget, with the experts read from this browser's storage as each token needs them. It needs 231 GB of free browser storage and runs at under one token a second, so treat it as a demonstration, not a chat model. One plain prompt was checked in Chrome; chat through its template has not been run, so replies may come out wrong. Reasoning and tools are off.</li>
               <li><strong>Nemotron-Labs-Diffusion 3B &middot; experimental &middot; diffusion</strong> (~2.7 GB) &mdash; text. NVIDIA's Nemotron-Labs-Diffusion-3B writes by diffusion: it fills in whole blocks of words at once instead of one word at a time. It runs on kohra.js through anyformer, at about 12-16 tokens a second on an M4 Pro. Opt-in and experimental: only single-turn chats have been checked. Reasoning and tools are off.</li>
+              <li><strong>LFM2.5 24B-A2B + Pi coding adapter &middot; experimental</strong> (~13.6 GB) &mdash; text. The LFM2.5 24B-A2B model above with harness-hub's Pi coding-agent adapter (37 MB) applied when it loads. The adapter was trained inside the Pi coding agent, so outside it expect behaviour like the base model or worse. It runs on llama.cpp in the tab with experts read from on-device storage, about 4 GB of GPU memory, and is slower than the base entry (about 3 tokens a second on an M4 Pro). Tools are off. Licence lfm1.0: royalty-free commercial use only below US$10M annual revenue.</li>
               <li><strong>Clover 35B-A3B &middot; SSD-streamed, experimental &middot; diffusion</strong> (~19.6 GB) &mdash; text. Diffuspace's Clover-35B-A3B-Preview is Qwen3.6 35B-A3B retrained to write by diffusion: each block of 32 words is filled in over several passes, so replies appear a block at a time. It streams its experts from on-device storage through anyformer and diskformer, using about 4 GB of GPU memory. The first load copies a 19.6 GB file into browser storage. Opt-in and experimental: its speed has not been measured yet. Tools are off.</li>
               <li><strong>Nemotron 3.5 Bolt E4B &middot; via anyformer (experimental)</strong> (~4.9 GB) &mdash; text. NVIDIA's Nemotron 3.5 Bolt E4B, a dense model with about 4B effective parameters, post-trained from Google's Gemma 4 E4B. It runs on Transformers.js through anyformer, from a community 4-bit ONNX conversion (text only), at about 35 tokens a second on an M4 Pro. Reasoning and tools are off for now.</li>
               <li><strong>GLM-4.7-Flash 30B-A3B &middot; via anyformer (experimental)</strong> (~18 GB) &mdash; text, reasoning. Z.ai's GLM-4.7-Flash, a 30B mixture-of-experts with about 3B parameters per token, from unsloth's 4-bit GGUF (18.3 GB). LocalMind has no engine of its own for it: anyformer picks diskformer's llama.cpp path, which runs llama.cpp's WebGPU build in a worker and pages the experts in from on-device storage (OPFS). The first load copies the file into this browser's storage once. Flip <strong>Show reasoning</strong> for its thinking. Tools are off for now.</li>
@@ -3023,6 +3024,7 @@
           <option value="minicpm-v47-35b-a3b-ssd">MiniCPM-V 4.7 35B-A3B &middot; SSD-streamed, experimental, text and images (~20 GB)</option>
           <option value="gemma4-26b-a4b-ssd">Gemma 4 26B-A4B &middot; SSD-streamed, experimental (~14 GB)</option>
           <option value="lfm25-24b-a2b-ssd">LFM2.5 24B-A2B &middot; SSD-streamed, experimental (~13.6 GB)</option>
+          <option value="lfm25-24b-pi-anyformer">LFM2.5 24B-A2B + Pi coding adapter &middot; experimental (~13.6 GB)</option>
           <option value="flint-40b-a2b-ssd">Flint 40B-A2.5B &middot; SSD-streamed, experimental, coding (~26 GB)</option>
           <option value="ling-3-flash-anyformer">Ling 3.0 Flash 124B-A5B &middot; via anyformer, experimental (~81 GB)</option>
           <option value="nemotron-bolt-e4b-anyformer">Nemotron 3.5 Bolt E4B &middot; via anyformer, experimental (~4.9 GB)</option>
@@ -9515,6 +9517,26 @@ self.addEventListener('message', async (e) => {
         // Decided by scripts/tool-battery.mjs through the app (2026-10-14): 6/6 calls with right arguments,
         // 5/5 plain answers without a tool, and a live calculate round trip that used the result.
         agentCapable: true,
+        thinking: true,
+        contextSize: 4096,
+        genConfig: { max_new_tokens: 2048 },
+      },
+      // backend:'anyformer-lfm25-24b-pi' → anyformer's MODELS.chat.LFM2_5_24B_PI (0.4.18+): the same QAD-Q4_0 GGUF with
+      // harness-hub's Pi coding-agent LoRA (37.4 MB, applied at load, not merged) on diskformer's llama.cpp path with paged
+      // experts, a 4 GB GPU budget. anyformer 0.4.19 (diskformer 0.6.18) closes the template's always-open <think> when
+      // thinking is off. anyformer's check: 4/4 turns on topic, 2.6-3.1 tok/s, Chrome 156 on an M4 Pro. Shares the base
+      // entry's id, so resolveModelKey('LiquidAI/LFM2.5-24B-A2B-GGUF') still picks the base; this one is reached by key.
+      // Tools off until LocalMind's tool battery runs on it (the adapter was trained inside the Pi agent's own harness).
+      // Licence lfm1.0 (model and adapter).
+      'lfm25-24b-pi-anyformer': {
+        id: 'LiquidAI/LFM2.5-24B-A2B-GGUF',
+        label: 'LFM2.5 24B-A2B + Pi coding adapter · experimental',
+        backend: 'anyformer-lfm25-24b-pi',
+        size: '~13.6 GB',
+        gguf: { file: 'LFM2.5-24B-A2B-QAD-Q4_0.gguf', size: 13578190880 },
+        type: 'causal',
+        multimodal: false,
+        agentCapable: false,
         thinking: true,
         contextSize: 4096,
         genConfig: { max_new_tokens: 2048 },
@@ -17747,6 +17769,7 @@ self.addEventListener('message', async (e) => {
         'anyformer-gemma26b': { engine: 'anyformer_models.js', exportName: 'Gemma4_26B', label: 'Gemma 4 26B-A4B (Q4_0, via anyformer)' },
         'anyformer-flint': { engine: 'anyformer_models.js', exportName: 'Flint40B', label: 'Flint 40B-A2.5B (Q4_1, via anyformer)' },
         'anyformer-lfm25-24b': { engine: 'anyformer_models.js', exportName: 'Lfm25_24B', label: 'LFM2.5 24B-A2B (Q4_0, via anyformer)' },
+        'anyformer-lfm25-24b-pi': { engine: 'anyformer_models.js', exportName: 'Lfm25_24bPi', label: 'LFM2.5 24B-A2B + Pi LoRA (Q4_0, via anyformer and diskformer llama.cpp)' },
         'anyformer-qwen36': { engine: 'anyformer_models.js', exportName: 'Qwen36', label: 'Qwen3.6 35B-A3B (Q8_0, via anyformer)' },
         'anyformer-ling3flash': { engine: 'anyformer_models.js', exportName: 'Ling3Flash', label: 'Ling 3.0 Flash (Q4_K_M, via anyformer)' },
         'anyformer-glm47flash': { engine: 'anyformer_models.js', exportName: 'Glm47Flash', label: 'GLM-4.7-Flash (Q4_K_M, via anyformer)' },
@@ -19429,7 +19452,7 @@ self.addEventListener('message', async (e) => {
     const ENGINE_STORES = {
       'transformers': ['transformers-cache'], 'wllama': ['wllama'], 'lfm2-webgpu': ['gguf-v1'],
       'bonsai2-webgpu': ['gguf-cache-v1'], 'gemma4-webgpu': ['safetensors-cache-v1', 'bonsai-pipeline-v1'],
-      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-deepseek-v41': ['on disk (OPFS)'], 'anyformer-bolt-e4b': ['transformers-cache'], 'anyformer-lfm3-omni': ['diskformer-models'], 'anyformer-nemotron-diffusion': ['kohra-models', 'transformers-cache'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'anyformer-clover': ['on disk (OPFS)'], 'anyformer-flint': ['on disk (OPFS)'], 'anyformer-lfm25-24b': ['on disk (OPFS)'], 'anyformer-gemma26b': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
+      'qwen35moe-ssd': ['on disk (OPFS)'], 'minicpmv-ssd': ['on disk (OPFS)'], 'gemma4moe-ssd': ['on disk (OPFS)'], 'lfm2moe-ssd': ['on disk (OPFS)'], 'flint-ssd': ['on disk (OPFS)'], 'anyformer-glm47flash': ['on disk (OPFS)'], 'anyformer-deepseek-v41': ['on disk (OPFS)'], 'anyformer-bolt-e4b': ['transformers-cache'], 'anyformer-lfm3-omni': ['diskformer-models'], 'anyformer-nemotron-diffusion': ['kohra-models', 'transformers-cache'], 'anyformer-ling3flash': ['on disk (OPFS)'], 'anyformer-qwen36': ['on disk (OPFS)'], 'anyformer-clover': ['on disk (OPFS)'], 'anyformer-flint': ['on disk (OPFS)'], 'anyformer-lfm25-24b': ['on disk (OPFS)'], 'anyformer-lfm25-24b-pi': ['on disk (OPFS)'], 'anyformer-gemma26b': ['on disk (OPFS)'], 'qwen3dense': ['on disk (OPFS)'], 'qwen35dense': ['on disk (OPFS)'],
     };
     function parseSizeBytes(size) {
       const m = /([\d.]+)\s*(GB|MB)/i.exec(String(size || ''));
@@ -24371,6 +24394,13 @@ export class NemotronDiffusion3B extends AnyformerModel {
 // per committed 32-token block. Opt-in and experimental; speed unmeasured.
 export class Clover35B extends AnyformerModel {
   static entry = 'CLOVER_35B_A3B';
+}
+
+// LFM2.5 24B-A2B with harness-hub's Pi coding-agent LoRA by anyformer's catalog entry (0.4.18+; 0.4.19 closes the
+// always-open <think> when thinking is off): the QAD-Q4_0 GGUF plus a 37.4 MB adapter applied at load, on diskformer's
+// llama.cpp path with paged experts, a 4 GB budget. Opt-in and experimental; licence lfm1.0.
+export class Lfm25_24bPi extends AnyformerModel {
+  static entry = 'LFM2_5_24B_PI';
 }
 
 export class DeepSeekV41Flash extends AnyformerModel {
