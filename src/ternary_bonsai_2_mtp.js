@@ -50,6 +50,42 @@ const MTP_HEAD = {
 };
 const MCFG = { H: 5120, I: 17408, NH: 24, NKV: 4, HD: 256, ROT: 64, THETA: 1e7, EPS: 1e-6, VOCAB: 248320, MAXM: 8 };
 
+// Ternary Bonsai 2 4B: PrismML's own MTP file (Apache-2.0), the PQ2_0 trunk with the head appended as blk.32
+// (nextn_predict_layers 1); the head is the file's last 128.2 MB and output_norm comes from the same file. Offsets read
+// from its GGUF header (plan/2026-10-31-mtp-bench/gguf-header-parse.py). LocalMind's 4B trunk is the PTQ1_0 file of
+// the same weights, whose lm_head is tied to the rotated embedding.
+const MTP_HEAD_4B = {
+  url: 'https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf/resolve/8d6557168168f91ea6697a4a49ed2ef622b53adb/Ternary-Bonsai-2-4B-PQ2_0-MTP-Q8_0.gguf',
+  fileSize: 1274642176,
+  ranges: [[11038464, 10240], [1146466048, 128176128]],
+  bytes: 10240 + 128176128,
+  tensors: {
+    output_norm: [11038464, 0, 2560, 1],
+    eh_proj: [1260674816, 8, 5120, 2560],
+    attn_norm: [1149252352, 0, 2560, 1],
+    ffn_down: [1185472256, 8, 9216, 2560],
+    ffn_gate: [1210539776, 8, 2560, 9216],
+    ffn_up: [1235607296, 8, 2560, 9216],
+    post_attention_norm: [1274631936, 0, 2560, 1],
+    attn_k_norm: [1149251328, 0, 256, 1],
+    attn_k: [1146466048, 8, 2560, 1024],
+    attn_output: [1149262592, 8, 4096, 2560],
+    attn_q_norm: [1182685952, 0, 256, 1],
+    attn_q: [1160403712, 8, 2560, 8192],
+    attn_v: [1182686976, 8, 2560, 1024],
+    shared_head_norm: [1274621696, 0, 2560, 1],
+    enorm: [1274601216, 0, 2560, 1],
+    hnorm: [1274611456, 0, 2560, 1],
+  },
+};
+const MCFG_4B = { ...MCFG, H: 2560, I: 9216, NH: 16 };
+
+// Model id (as the picker sends it) -> its head file and sizes.
+const MTP_HEADS = {
+  'prism-ml/Ternary-Bonsai-2-27B-gguf': { spec: MTP_HEAD, cfg: MCFG },
+  'https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf/resolve/main/Ternary-Bonsai-2-4B-PTQ1_0.gguf': { spec: MTP_HEAD_4B, cfg: MCFG_4B },
+};
+
 // ---------------- WGSL ----------------
 // Y[m, n] (+)= sum_k X[m, k] * W[n, k]; W is Q8_0 repacked at load: 32 int8 per block as 8 u32 (two vec4<u32>), the
 // block scales as f16 pairs. 256 threads = 8 output rows x 32 lanes striding over the K blocks; M rows of X per call.
@@ -118,8 +154,8 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid:
 }`;
 
 // Per-head q/k RMS norm + NEOX RoPE (pairs i, i+32 over the first 64 dims, freq theta^(-2i/64), position pos0+m), and
-// the K/V cache write at that position. Workgroup (m, j): j < 24 a q head, 24..27 a k head, 28..31 a v head.
-const WG_QKPREP = /* wgsl */`
+// the K/V cache write at that position. Workgroup (m, j): j < NH a q head, the next 4 a k head, the last 4 a v head.
+const WG_QKPREP = (NH) => /* wgsl */`
 struct P { pos0: u32, pad0: u32, pad1: u32, pad2: u32, theta: f32, eps: f32, pad3: f32, pad4: f32 };
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> Qf: array<f32>;
@@ -135,9 +171,9 @@ var<workgroup> sh: array<f32, 256>;
 @compute @workgroup_size(256)
 fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
   let m = wg.x; let j = wg.y; let tid = lid.x; let pos = p.pos0 + m;
-  if (j >= 28u) { Vc[pos * 1024u + (j - 28u) * 256u + tid] = Vt[m * 1024u + (j - 28u) * 256u + tid]; return; }
+  if (j >= ${NH + 4}u) { Vc[pos * 1024u + (j - ${NH + 4}u) * 256u + tid] = Vt[m * 1024u + (j - ${NH + 4}u) * 256u + tid]; return; }
   var x = 0.0; var w = 0.0;
-  if (j < 24u) { x = Qf[m * 12288u + j * 512u + tid]; w = QN[tid]; } else { x = Kt[m * 1024u + (j - 24u) * 256u + tid]; w = KN[tid]; }
+  if (j < ${NH}u) { x = Qf[m * ${NH * 512}u + j * 512u + tid]; w = QN[tid]; } else { x = Kt[m * 1024u + (j - ${NH}u) * 256u + tid]; w = KN[tid]; }
   red[tid] = x * x; workgroupBarrier();
   for (var o = 128u; o > 0u; o >>= 1u) { if (tid < o) { red[tid] += red[tid + o]; } workgroupBarrier(); }
   let y = x * inverseSqrt(red[0] / 256.0 + p.eps) * w;
@@ -149,12 +185,12 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid:
     let c = cos(ang); let s = sin(ang);
     if (tid < 32u) { outv = y * c - sh[tid + 32u] * s; } else { outv = sh[tid - 32u] * s + y * c; }
   }
-  if (j < 24u) { Q[(m * 24u + j) * 256u + tid] = outv; } else { Kc[pos * 1024u + (j - 24u) * 256u + tid] = outv; }
+  if (j < ${NH}u) { Q[(m * ${NH}u + j) * 256u + tid] = outv; } else { Kc[pos * 1024u + (j - ${NH}u) * 256u + tid] = outv; }
 }`;
 
 // Causal attention over the head's own KV cache, keys kvLo..pos0+m, online softmax in 256-key tiles; output gated by
 // sigmoid(gate) (the second half of each q head's 512-wide slice). Workgroup (m, h), thread = output dim.
-const WG_ATTN = /* wgsl */`
+const WG_ATTN = (NH, NKV) => /* wgsl */`
 struct P { pos0: u32, kvLo: u32, pad0: u32, pad1: u32, scale: f32, pad2: f32, pad3: f32, pad4: f32 };
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> Q: array<vec4<f32>>;
@@ -167,8 +203,8 @@ var<workgroup> sc: array<f32, 256>;
 var<workgroup> red: array<f32, 256>;
 @compute @workgroup_size(256)
 fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-  let m = wg.x; let h = wg.y; let tid = lid.x; let kvh = h / 6u; let qpos = p.pos0 + m;
-  if (tid < 64u) { q[tid] = Q[(m * 24u + h) * 64u + tid]; }
+  let m = wg.x; let h = wg.y; let tid = lid.x; let kvh = h / ${NH / NKV}u; let qpos = p.pos0 + m;
+  if (tid < 64u) { q[tid] = Q[(m * ${NH}u + h) * 64u + tid]; }
   workgroupBarrier();
   var mx = -1e30; var l = 0.0; var acc = 0.0;
   for (var t0 = p.kvLo; t0 <= qpos; t0 += 256u) {
@@ -193,8 +229,8 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid:
     mx = nm;
     workgroupBarrier();
   }
-  let g = Qf[m * 12288u + h * 512u + 256u + tid];
-  O[m * 6144u + h * 256u + tid] = acc / l * (1.0 / (1.0 + exp(-g)));
+  let g = Qf[m * ${NH * 512}u + h * 512u + 256u + tid];
+  O[m * ${NH * 256}u + h * 256u + tid] = acc / l * (1.0 / (1.0 + exp(-g)));
 }`;
 
 const WG_SILU_MUL = /* wgsl */`
@@ -213,15 +249,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 class MTPHead {
   constructor(dev, opts = {}) {
     this.dev = dev; this.log = opts.log || (() => {});
+    this.cfg = opts.cfg || MCFG; this.spec = opts.spec || MTP_HEAD;
     this.stats = { weightBytes: 0, passes: 0, rows: 0 };
     this.buf = {}; this.w = {}; this.uni = []; this.pipes = {};
   }
 
-  // source(absOffset, length) -> Promise<Uint8Array>: bytes of the grafted GGUF (or of any file with MTP_HEAD's layout)
+  // source(absOffset, length) -> Promise<Uint8Array>: bytes of the head's GGUF (any file with this.spec's layout)
   async loadWeights(source, onProgress = () => {}) {
     const { dev } = this; const S = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
-    let done = 0; const total = MTP_HEAD.bytes;
-    for (const [name, [off, type, K, N]] of Object.entries(MTP_HEAD.tensors)) {
+    let done = 0; const total = this.spec.bytes;
+    for (const [name, [off, type, K, N]] of Object.entries(this.spec.tensors)) {
       if (type === 0) {
         const raw = await source(off, K * 4); if (raw.byteLength !== K * 4) throw new Error(`MTP head: short read for ${name}`);
         const b = dev.createBuffer({ size: K * 4, usage: S, label: 'mtp.' + name }); dev.queue.writeBuffer(b, 0, raw); this.w[name] = b; done += K * 4;
@@ -247,11 +284,11 @@ class MTPHead {
 
   // Activation buffers + pipelines; kvCap = cache rows (positions) the head's KV cache holds.
   async init(kvCap) {
-    const { dev } = this; const { H, I, MAXM } = MCFG;
+    const { dev } = this; const { H, I, NH, NKV, MAXM } = this.cfg;
     const S = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
     const mk = (name, floats) => { this.buf[name] = dev.createBuffer({ size: floats * 4, usage: S, label: 'mtp.' + name }); };
     mk('E', MAXM * H); mk('Hn', MAXM * H); mk('Hraw', MAXM * H); mk('Xc', MAXM * 2 * H); mk('X', MAXM * H); mk('A', MAXM * H);
-    mk('Qf', MAXM * 12288); mk('Kt', MAXM * 1024); mk('Vt', MAXM * 1024); mk('Q', MAXM * 6144); mk('O', MAXM * 6144);
+    mk('Qf', MAXM * NH * 512); mk('Kt', MAXM * 1024); mk('Vt', MAXM * 1024); mk('Q', MAXM * NH * 256); mk('O', MAXM * NH * 256);
     mk('F1', MAXM * I); mk('F2', MAXM * I); mk('Hout', MAXM * H); mk('Hlast', H); mk('zero', H);
     const maxBind = dev.limits.maxStorageBufferBindingSize;
     this.kvCap = Math.min(kvCap, Math.floor(maxBind / 4096));
@@ -264,8 +301,8 @@ class MTPHead {
     };
     for (let M = 1; M <= MAXM; ++M) this.pipes['q8_' + M] = await compile(WG_Q8(M), 'q8_' + M);
     this.pipes.norm = await compile(WG_NORM, 'norm');
-    this.pipes.qk = await compile(WG_QKPREP, 'qkprep');
-    this.pipes.attn = await compile(WG_ATTN, 'attn');
+    this.pipes.qk = await compile(WG_QKPREP(NH), 'qkprep');
+    this.pipes.attn = await compile(WG_ATTN(NH, NKV), 'attn');
     this.pipes.silu = await compile(WG_SILU_MUL, 'silu');
     this.uniPool = []; this.uniUsed = 0;
   }
@@ -278,7 +315,7 @@ class MTPHead {
   #dispatch(pass, pipe, bufs, x, y = 1) { pass.setPipeline(pipe); pass.setBindGroup(0, this.#bind(pipe, bufs)); pass.dispatchWorkgroups(x, y); }
 
   #norm(pass, rows, D, X, is, io, W, Y, os, oo) {
-    const u = new ArrayBuffer(32); const v = new Uint32Array(u); v.set([D, is, io, os, oo]); new Float32Array(u)[5] = MCFG.EPS;
+    const u = new ArrayBuffer(32); const v = new Uint32Array(u); v.set([D, is, io, os, oo]); new Float32Array(u)[5] = this.cfg.EPS;
     this.#dispatch(pass, this.pipes.norm, [this.#uniform(u), X, W, Y], rows);
   }
   #q8(pass, M, wname, X, Y, acc = 0) {
@@ -288,7 +325,7 @@ class MTPHead {
 
   // Normalize M raw trunk rows (src buffer region) with output_norm into Hn rows [dst, dst+M).
   normTrunkRows(src, srcOffset, M, dst) {
-    const { dev, buf } = this; const H = MCFG.H; this.uniUsed = 0;
+    const { dev, buf } = this; const H = this.cfg.H; this.uniUsed = 0;
     const e = dev.createCommandEncoder();
     e.copyBufferToBuffer(src, srcOffset, buf.Hraw, 0, M * H * 4);
     const pass = e.beginComputePass();
@@ -297,18 +334,18 @@ class MTPHead {
   }
   // Copy one normed row into Hn[dst] (from Hlast, Hout[row] or zero).
   setHnRow(dst, srcBuf, srcRow = 0) {
-    const e = this.dev.createCommandEncoder(); e.copyBufferToBuffer(srcBuf, srcRow * MCFG.H * 4, this.buf.Hn, dst * MCFG.H * 4, MCFG.H * 4); this.dev.queue.submit([e.finish()]);
+    const H = this.cfg.H; const e = this.dev.createCommandEncoder(); e.copyBufferToBuffer(srcBuf, srcRow * H * 4, this.buf.Hn, dst * H * 4, H * 4); this.dev.queue.submit([e.finish()]);
   }
   saveLast(srcBuf, srcRow) {
-    const e = this.dev.createCommandEncoder(); e.copyBufferToBuffer(srcBuf, srcRow * MCFG.H * 4, this.buf.Hlast, 0, MCFG.H * 4); this.dev.queue.submit([e.finish()]);
+    const H = this.cfg.H; const e = this.dev.createCommandEncoder(); e.copyBufferToBuffer(srcBuf, srcRow * H * 4, this.buf.Hlast, 0, H * 4); this.dev.queue.submit([e.finish()]);
   }
 
   // One forward over M rows at positions pos0..pos0+M-1. Inputs: embeddings of the M tokens at embed (GPU buffer,
   // row-major [>=M, H]) and Hn[0..M) (normed trunk/head h of each row's previous position). Writes KV rows, leaves
   // shared_head_norm(x) in Hout[0..M).
   forward(embed, embedOffset, M, pos0, kvLo) {
-    const { dev, buf, w } = this; const { H, I } = MCFG;
-    if (M < 1 || M > MCFG.MAXM) throw new Error(`MTP forward: ${M} rows`);
+    const { dev, buf, w } = this; const { H, I, NH } = this.cfg;
+    if (M < 1 || M > this.cfg.MAXM) throw new Error(`MTP forward: ${M} rows`);
     if (pos0 + M > this.kvCap) throw new Error(`MTP forward: position ${pos0 + M} beyond the head's KV cache (${this.kvCap})`);
     this.uniUsed = 0;
     const e = dev.createCommandEncoder();
@@ -319,10 +356,10 @@ class MTPHead {
     this.#q8(pass, M, 'eh_proj', buf.Xc, buf.X);
     this.#norm(pass, M, H, buf.X, H, 0, w.attn_norm, buf.A, H, 0);
     this.#q8(pass, M, 'attn_q', buf.A, buf.Qf); this.#q8(pass, M, 'attn_k', buf.A, buf.Kt); this.#q8(pass, M, 'attn_v', buf.A, buf.Vt);
-    const qu = new ArrayBuffer(32); new Uint32Array(qu)[0] = pos0; const qf = new Float32Array(qu); qf[4] = MCFG.THETA; qf[5] = MCFG.EPS;
-    this.#dispatch(pass, this.pipes.qk, [this.#uniform(qu), buf.Qf, buf.Kt, buf.Vt, w.attn_q_norm, w.attn_k_norm, buf.Q, buf.Kc, buf.Vc], M, 32);
-    const au = new ArrayBuffer(32); new Uint32Array(au).set([pos0, kvLo]); new Float32Array(au)[4] = 1 / Math.sqrt(MCFG.HD);
-    this.#dispatch(pass, this.pipes.attn, [this.#uniform(au), buf.Q, buf.Kc, buf.Vc, buf.Qf, buf.O], M, 24);
+    const qu = new ArrayBuffer(32); new Uint32Array(qu)[0] = pos0; const qf = new Float32Array(qu); qf[4] = this.cfg.THETA; qf[5] = this.cfg.EPS;
+    this.#dispatch(pass, this.pipes.qk, [this.#uniform(qu), buf.Qf, buf.Kt, buf.Vt, w.attn_q_norm, w.attn_k_norm, buf.Q, buf.Kc, buf.Vc], M, NH + 8);
+    const au = new ArrayBuffer(32); new Uint32Array(au).set([pos0, kvLo]); new Float32Array(au)[4] = 1 / Math.sqrt(this.cfg.HD);
+    this.#dispatch(pass, this.pipes.attn, [this.#uniform(au), buf.Q, buf.Kc, buf.Vc, buf.Qf, buf.O], M, NH);
     this.#q8(pass, M, 'attn_output', buf.O, buf.X, 1);
     this.#norm(pass, M, H, buf.X, H, 0, w.post_attention_norm, buf.A, H, 0);
     this.#q8(pass, M, 'ffn_gate', buf.A, buf.F1); this.#q8(pass, M, 'ffn_up', buf.A, buf.F2);
@@ -357,8 +394,9 @@ class MTPRunner {
     this.engine = engine; this.inner = engine.model; this.rt = this.inner.runtime; this.dev = this.rt.host.device; this.cfg = this.inner.config;
     this.I = engine.constructor.__dflashInternals;
     if (!this.I || !this.I.lh || !this.I.ch || !this.I.RewindSession) throw new Error('MTPRunner: engine is missing the dflash internals hook (regenerate ternary_bonsai_2_27b.js)');
+    this.mc = opts.cfg || MCFG; this.spec = opts.spec || MTP_HEAD;
     this.depth = opts.depth ?? 2;
-    if (!(this.depth >= 1 && this.depth <= MCFG.MAXM - 1)) throw new Error(`MTPRunner: depth must be 1..${MCFG.MAXM - 1}`);
+    if (!(this.depth >= 1 && this.depth <= this.mc.MAXM - 1)) throw new Error(`MTPRunner: depth must be 1..${this.mc.MAXM - 1}`);
     this.window = opts.window ?? 1024;   // prompt rows (the tail of each prefill) fed to the head's KV cache
     // Adaptive depth (up to `depth`): keep a running estimate of how often the draft at each position is accepted
     // (given the earlier ones were), and before each cycle pick the depth with the most expected tokens per unit of
@@ -371,7 +409,7 @@ class MTPRunner {
     this.smallM = opts.smallM === 'off' ? undefined : { precision: opts.smallM ?? 'f16' };
     this.log = opts.log || (() => {});
     this.H = this.cfg.hidden_size; this.VOC = this.cfg.vocab_size;
-    if (this.H !== MCFG.H || this.VOC !== MCFG.VOCAB) throw new Error(`MTPRunner: target H/V ${this.H}/${this.VOC} != head ${MCFG.H}/${MCFG.VOCAB}`);
+    if (this.H !== this.mc.H || this.VOC !== this.mc.VOCAB) throw new Error(`MTPRunner: target H/V ${this.H}/${this.VOC} != head ${this.mc.H}/${this.mc.VOCAB}`);
     this.res = new Map();
     this.stats = { cycles: 0, tokens: 0, accepted: 0, drafted: 0, generations: 0, plainTokens: 0, depthChanges: 0 };
     this.disposed = false;
@@ -379,7 +417,7 @@ class MTPRunner {
 
   async #init(opts) {
     const { I, inner, H, VOC } = this;
-    this.head = new MTPHead(this.dev, { log: this.log });
+    this.head = new MTPHead(this.dev, { log: this.log, cfg: this.mc, spec: this.spec });
     await this.head.loadWeights(opts.head, opts.onProgress || (() => {}));
     class Micro extends I.f0 { constructor(emit) { super(inner, null, 8); this._emit = emit; } buildEmission() { return this._emit(); } }
     const micro = async (name, emit) => { const s = new Micro(() => { const S = new I.ba(); const b = I._i(S); const t = emit(S, b); return { graph: S.finish({ name }), weights: b.boundWeights, states: b.states, ...t }; }); await s.build(); return s; };
@@ -429,7 +467,7 @@ class MTPRunner {
 
   // Change the draft depth; per-cache sessions (sized depth + 1) are rebuilt on the next generate.
   setDepth(depth, adaptive = this.adaptive) {
-    if (!(depth >= 1 && depth <= MCFG.MAXM - 1)) throw new Error(`MTPRunner: depth must be 1..${MCFG.MAXM - 1}`);
+    if (!(depth >= 1 && depth <= this.mc.MAXM - 1)) throw new Error(`MTPRunner: depth must be 1..${this.mc.MAXM - 1}`);
     if (depth === this.depth && !!adaptive === this.adaptive) return;
     for (const cache of [...this.res.keys()]) this.release(cache);
     this.depth = depth; this.adaptive = !!adaptive;
@@ -528,8 +566,8 @@ class MTPRunner {
       const remaining = ids.length - i; const T = MTP_PREFILL_BLOCKS.find((b) => b >= remaining) ?? MTP_PREFILL_BLOCKS[MTP_PREFILL_BLOCKS.length - 1];
       const chunk = ids.slice(i, i + T); const run = await this.#runBlock(r, await r.prefill(T), chunk); anchor = run.next;
       // head rows for this chunk: local rows a..b-1 (absolute positions run.pos + a ...), h from the previous row
-      for (let a = Math.max(0, firstKept - i); a < chunk.length; a += MCFG.MAXM) {
-        const b = Math.min(chunk.length, a + MCFG.MAXM), M = b - a;
+      for (let a = Math.max(0, firstKept - i); a < chunk.length; a += this.mc.MAXM) {
+        const b = Math.min(chunk.length, a + this.mc.MAXM), M = b - a;
         // Hn[0] = h at position run.pos + a - 1: the previous row of this chunk, or the carried-over last row
         if (a > 0) head.normTrunkRows(run.hidden.buffer, run.hidden.offset + (a - 1) * H * 4, M, 0);
         else {
@@ -640,4 +678,4 @@ class MTPRunner {
   }
 }
 
-export { MTPRunner, MTPHead, MTP_HEAD, MCFG };
+export { MTPRunner, MTPHead, MTP_HEAD, MCFG, MTP_HEADS };

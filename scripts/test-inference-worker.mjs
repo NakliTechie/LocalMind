@@ -139,7 +139,7 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   assert.doesNotMatch(dflashModule, /^import\s/m);
   assert.match(indexSource, /moduleUrl\('ternary_bonsai_2_dflash\.js'\)/);
   assert.match(indexSource, /const DRAFTER_URL = 'https:\/\/huggingface\.co\/naklitechie\/Qwen3\.8-27B-DFlash2-ternary-bonsai2\/resolve\/main\/Qwen3\.8-27B-DFlash2-r3-Q4_K_M\.gguf'/);
-  assert.match(indexSource, /post\(\{ type: 'ready', backend: 'webgpu' \}\);\s*if \(d\.mtp === true\) attachMTP\(d\.mtpDepth\)[^\n]*\n\s*else if \(d\.dflash !== false\) attachDFlash\(\)/);
+  assert.match(indexSource, /post\(\{ type: 'ready', backend: 'webgpu' \}\);\s*if \(d\.mtp === true\) attachMTP\(d\.mtpDepth, d\.modelId\)[^\n]*\n\s*else if \(d\.dflash !== false\) attachDFlash\(\)/);
   assert.match(indexSource, /target\.model\.dflashRunner = runner;/);
   assert.match(indexSource, /id="dflashToggle"/);
   assert.match(indexSource, /dflash: isBonsai2Webgpu && modelId === 'prism-ml\/Ternary-Bonsai-2-27B-gguf' \? dflashEnabled\(\) : false/);   // the drafter is the 27B's only
@@ -155,23 +155,35 @@ assert.doesNotMatch(indexSource, /bonsai_27b\.js|Bonsai27bMobile|bonsai27b-webgp
   const reached = new Set([...mtpModule.matchAll(/\bI\.([\w$]+)/g)].map((m) => m[1]));
   assert.ok(reached.has('r2') && reached.has('RewindSession'), 'MTP runner internals scan found ' + [...reached]);
   for (const name of reached) assert.ok(internals.has(name), `MTP runner uses I.${name}, the engine's __dflashInternals does not export it`);
-  assert.match(mtpModule, /^export \{ MTPRunner, MTPHead, MTP_HEAD, MCFG \};$/m);
+  assert.match(mtpModule, /^export \{ MTPRunner, MTPHead, MTP_HEAD, MCFG, MTP_HEADS \};$/m);
   assert.match(mtpModule, /async \*generate\(tokenIds, cache, generationArgs, beginDecode, eosTokenId\)/);
   assert.doesNotMatch(mtpModule, /^import\s/m);
-  // the pinned head ranges: output_norm (20 KB) + the head block to the end of the 6,397,970,272-byte file
-  const { MTP_HEAD } = await import(new URL('../src/ternary_bonsai_2_mtp.js', import.meta.url));
-  const [, [hs, hl]] = MTP_HEAD.ranges;
-  assert.equal(hs + hl, MTP_HEAD.fileSize);
-  assert.equal(MTP_HEAD.bytes, MTP_HEAD.ranges.reduce((s, [, l]) => s + l, 0));
-  for (const [name, [off, type, K, N]] of Object.entries(MTP_HEAD.tensors)) {
-    const size = type === 0 ? K * 4 : (K / 32) * 34 * N;
-    assert.ok(MTP_HEAD.ranges.some(([s, l]) => off >= s && off + size <= s + l), `${name} lies outside the downloaded ranges`);
+  // the pinned head ranges, per model: output_norm + the head block to the end of its file, every tensor inside them
+  const { MTP_HEAD, MCFG, MTP_HEADS } = await import(new URL('../src/ternary_bonsai_2_mtp.js', import.meta.url));
+  assert.deepEqual(MTP_HEADS['prism-ml/Ternary-Bonsai-2-27B-gguf'], { spec: MTP_HEAD, cfg: MCFG });
+  for (const [id, { spec, cfg }] of Object.entries(MTP_HEADS)) {
+    const [, [hs, hl]] = spec.ranges;
+    assert.equal(hs + hl, spec.fileSize, id);
+    assert.equal(spec.bytes, spec.ranges.reduce((s, [, l]) => s + l, 0), id);
+    for (const [name, [off, type, K, N]] of Object.entries(spec.tensors)) {
+      const size = type === 0 ? K * 4 : (K / 32) * 34 * N;
+      assert.ok(spec.ranges.some(([s, l]) => off >= s && off + size <= s + l), `${id}: ${name} lies outside the downloaded ranges`);
+    }
+    // shapes follow the size config: eh_proj [2H x H], attn_q [H x NH*512], attn_output [NH*256 x H], ffn_down [I x H]
+    assert.deepEqual(spec.tensors.eh_proj.slice(2), [2 * cfg.H, cfg.H], id);
+    assert.deepEqual(spec.tensors.attn_q.slice(2), [cfg.H, cfg.NH * 512], id);
+    assert.deepEqual(spec.tensors.attn_output.slice(2), [cfg.NH * 256, cfg.H], id);
+    assert.deepEqual(spec.tensors.ffn_down.slice(2), [cfg.I, cfg.H], id);
+    assert.equal(cfg.NH % cfg.NKV, 0, id);
+    assert.match(spec.url, /^https:\/\/huggingface\.co\/[^/]+\/[^/]+\/resolve\/[0-9a-f]{40}\//, id);
+    assert.ok(indexSource.includes(`id: '${id}',`), `MTP head for ${id}, which is not a picker model id`);
   }
   assert.match(MTP_HEAD.url, /^https:\/\/huggingface\.co\/CaryPalmer\/Ternary-Bonsai-2-27B-262k-GGUF\/resolve\/[0-9a-f]{40}\//);
   assert.match(indexSource, /moduleUrl\('ternary_bonsai_2_mtp\.js'\)/);
   assert.match(indexSource, /id="mtpToggle"/);
   assert.match(indexSource, /function mtpEnabled\(\) \{ try \{ return localStorage\.getItem\('lm_mtp'\) === '1'; \}/);
-  assert.match(indexSource, /mtp: isBonsai2Webgpu && modelId === 'prism-ml\/Ternary-Bonsai-2-27B-gguf' \? mtpEnabled\(\) : false, mtpDepth: mtpDepth\(\)/);
+  assert.match(indexSource, /mtp: isBonsai2Webgpu \? mtpEnabled\(\) : false, mtpDepth: mtpDepth\(\)/);
+  assert.match(indexSource, /const entry = MTP_HEADS\[modelId\];\s*if \(!entry\) return;/);
 }
 // Picker ↔ registry parity: every <option> in #modelSelect has a MODELS entry and vice versa.
 {
