@@ -73,8 +73,9 @@ const LOCALMIND_HOST_MODELS = Object.freeze([
       'Opt-in, experimental. A 24B mixture-of-experts model whose experts ' +
       'stream from on-device storage (OPFS): the first load copies 13.6 GB ' +
       'into browser storage, and it uses about 4 GB of GPU memory. Always ' +
-      'reasons first. The Pi coding-agent adapter (37 MB) starts off; switch ' +
-      'it on with setAdapter. Licence lfm1.0: royalty-free commercial use ' +
+      'reasons first. Includes the Pi coding-agent adapter (37 MB), which ' +
+      'the host can switch on or off between replies. Licence lfm1.0: ' +
+      'royalty-free commercial use ' +
       'only below US$10M annual revenue.',
     generationConfig: Object.freeze({
       max_new_tokens: 2048,
