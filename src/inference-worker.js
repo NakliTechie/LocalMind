@@ -265,6 +265,11 @@ const loadModel = async (request) => {
             },
           }, id);
         }
+      } else if (event.status === 'adapter') {
+        // A run-time LoRA's own file (anyformer 0.4.22+), apart from the model's weights.
+        if (typeof event.loaded === 'number' && event.total > 0) {
+          post({ type: 'progress', data: { status: 'progress_total', file: 'adapter into browser storage', loaded: event.loaded, total: event.total } }, id);
+        }
       } else if (event.status === 'tokenizer') {
         post({ type: 'progress', data: { status: 'loading', file: 'tokenizer' } }, id);
       } else if (event.status === 'init') {

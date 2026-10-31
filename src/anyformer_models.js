@@ -34,6 +34,8 @@ function toEngineProgress(e, files) {
     return { status: 'weights', loaded, total };
   }
   if (e.status === 'weights') return { status: 'weights', kind: e.kind, loaded: e.loaded, total: e.total };
+  // A run-time LoRA's own file (anyformer 0.4.22+: Cache Storage, bytes every 250 ms; one cached: true event on a hit).
+  if (e.status === 'adapter') return { status: 'adapter-download', loaded: e.loaded, total: e.total };
   if (e.status === 'load' || e.status === 'plan' || e.status === 'init') return { status: 'init' };
   return null;
 }

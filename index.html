@@ -8689,6 +8689,8 @@ self.onmessage = async (e) => {
             if (loaded != null && total) post({ type: 'progress', data: { status: 'loading', file: `weights to GPU (${loaded} of ${total} tensors)` } });
           } else if (ev.status === 'weights') {
             if (typeof ev.loaded === 'number' && ev.total > 0) post({ type: 'progress', data: { status: 'progress_total', file: WEIGHTS_LABEL, loaded: ev.loaded, total: ev.total } });
+          } else if (ev.status === 'adapter-download') {   // a run-time LoRA's own file (LFM2.5 24B-A2B: the Pi adapter)
+            if (typeof ev.loaded === 'number' && ev.total > 0) post({ type: 'progress', data: { status: 'progress_total', file: 'Pi adapter into browser storage', loaded: ev.loaded, total: ev.total } });
           } else if (ev.status === 'drafter-download') {   // a speculative drafter's own file (Qwen3Dense + FlashMap)
             post({ type: 'progress', data: { status: 'progress_total', file: 'FlashMap drafter into on-device storage', loaded: ev.loaded, total: ev.total } });
           } else if (ev.status === 'init') {
@@ -24321,6 +24323,8 @@ function toEngineProgress(e, files) {
     return { status: 'weights', loaded, total };
   }
   if (e.status === 'weights') return { status: 'weights', kind: e.kind, loaded: e.loaded, total: e.total };
+  // A run-time LoRA's own file (anyformer 0.4.22+: Cache Storage, bytes every 250 ms; one cached: true event on a hit).
+  if (e.status === 'adapter') return { status: 'adapter-download', loaded: e.loaded, total: e.total };
   if (e.status === 'load' || e.status === 'plan' || e.status === 'init') return { status: 'init' };
   return null;
 }
@@ -32974,6 +32978,11 @@ const loadModel = async (request) => {
               total: 1000,
             },
           }, id);
+        }
+      } else if (event.status === 'adapter') {
+        // A run-time LoRA's own file (anyformer 0.4.22+), apart from the model's weights.
+        if (typeof event.loaded === 'number' && event.total > 0) {
+          post({ type: 'progress', data: { status: 'progress_total', file: 'adapter into browser storage', loaded: event.loaded, total: event.total } }, id);
         }
       } else if (event.status === 'tokenizer') {
         post({ type: 'progress', data: { status: 'loading', file: 'tokenizer' } }, id);
