@@ -26,6 +26,7 @@ import { ExpertStreamer } from './moe-expert-stream.js';
 import { GGML, Q8_BLOCK, Q4_BLOCK, Q6K_BLOCK, parseGguf, tensorBytes } from './gguf.js';
 import { ingestGguf as ingestStore, ingestProgress, fileFetch, storeKey, readStore, removeStore } from './ingest.js';
 import { DiskformerError, isDiskformerError, codedError } from './errors.js';
+import './subgroup-matrix-guard.js'; // qwen35_dense.js and iq_quants.js build mixed f16/f32 subgroup-matrix kernels on this device
 export { GGML, Q4_BLOCK, Q6K_BLOCK, parseGguf, tensorBytes, splitQ4 } from './gguf.js';
 export { ingestProgress } from './ingest.js';
 

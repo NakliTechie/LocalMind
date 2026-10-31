@@ -125,7 +125,7 @@ export function extractTernaryBonsai2Engine(html) {
     '   Upstream ships NO explicit license; vendored consistent with LocalMind\'s other\n' +
     '   webml-community engines (lfm2_5.js).\n' +
     '   Boot scene + Space UI (token gate / chat panel) stripped; exports kept verbatim;\n' +
-    '   FOUR patches: (1) system-prefix priming (#m): when the chat template refuses a\n' +
+    '   FIVE patches (the fifth: the subgroup-matrix-guard.js import below the header, Chrome 156); the first four: (1) system-prefix priming (#m): when the chat template refuses a\n' +
     '   system-only render (Qwen3.8: "No user query found in messages."), the prefix is the\n' +
     '   token prefix shared by two renders with different user turns; any other template\n' +
     '   error skips priming; (2) download byteBudget 96 MB -> 256 MB (~10 range streams in flight\n' +
@@ -137,6 +137,7 @@ export function extractTernaryBonsai2Engine(html) {
     `   DEFAULT_MODEL_ID is upstream's own ungated ${UPSTREAM_MODEL_ID} (${UPSTREAM_GGUF_FILE}).\n` +
     '   Model weights are Apache-2.0 (prism-ml Ternary Bonsai 2, Qwen3.8-27B backbone).\n' +
     '   Regenerate with scripts/extract-ternary-bonsai-2-27b.mjs. */\n' +
+    "import './subgroup-matrix-guard.js'; // Chrome 156 rejects the mixed f16/f32 subgroup-matrix kernels on Apple; see that file.\n" +
     engine.trimStart() + '\n'
   );
 }

@@ -46,6 +46,42 @@ let activeRequestId = null;
 // a multi-GB load moving in the background; nothing on the worker path needs real
 // frame timing. Must be installed before the engine is imported.
 self.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 0);
+// Chrome 156's Dawn rejects subgroup-matrix multiplies with f16 operands and an f32 result on Apple GPUs ("Mixed
+// precision subgroup matrix multiply is not supported by the device"). Apple reports only f16-f16 and f32-f32
+// configurations; older Dawn compiled the mixed pair anyway, and the Bonsai 2, Gemma 4, LFM2.5 and IQ prefill kernels
+// rely on it. So the first adapter request compiles one tiny mixed kernel on a separate adapter (an adapter gives out
+// one device); if that fails, the adapter handed to the engine hides the subgroup-matrix feature and each engine takes
+// its non-matrix prefill path. Must be installed before the engine is imported.
+(() => {
+  const gpu = self.navigator && self.navigator.gpu;
+  if (!gpu || typeof gpu.requestAdapter !== 'function') return;
+  const SGM = 'chromium-experimental-subgroup-matrix';
+  const realRequest = gpu.requestAdapter.bind(gpu);
+  const MIXED = 'enable f16; enable chromium_experimental_subgroup_matrix; '
+    + '@group(0) @binding(0) var<storage, read_write> o: array<f32>; @group(0) @binding(1) var<storage, read> x: array<f16>; '
+    + '@compute @workgroup_size(32) fn main() { let a = subgroupMatrixLoad<subgroup_matrix_left<f16, 8, 8>>(&x, 0, false, 8); '
+    + 'let b = subgroupMatrixLoad<subgroup_matrix_right<f16, 8, 8>>(&x, 0, false, 8); var c = subgroup_matrix_result<f32, 8, 8>(); '
+    + 'c = subgroupMatrixMultiplyAccumulate(a, b, c); subgroupMatrixStore(&o, 0, c, false, 8); }';
+  let mixedOk = null;
+  const probe = async (opts) => {
+    let dev = null;
+    try {
+      const a = await realRequest(opts);
+      if (!a || !a.features.has('shader-f16') || !a.features.has('subgroups')) return false;
+      dev = await a.requestDevice({ requiredFeatures: ['shader-f16', 'subgroups', SGM] });
+      await dev.createComputePipelineAsync({ layout: 'auto', compute: { module: dev.createShaderModule({ code: MIXED }), entryPoint: 'main' } });
+      return true;
+    } catch (e) { return false; } finally { if (dev) dev.destroy(); }
+  };
+  gpu.requestAdapter = async (opts) => {
+    const adapter = await realRequest(opts);
+    if (!adapter || !adapter.features.has(SGM)) return adapter;
+    if (mixedOk === null) mixedOk = probe(opts);
+    if (await mixedOk) return adapter;
+    const features = new Set([...adapter.features].filter((f) => f !== SGM));
+    return new Proxy(adapter, { get(t, p) { if (p === 'features') return features; const v = Reflect.get(t, p, t); return typeof v === 'function' ? v.bind(t) : v; } });
+  };
+})();
 
 // The engines read each weight range exactly once, so a single dropped
 // connection aborts the whole load (one 'Failed to fetch' at 70% of Bonsai 2's

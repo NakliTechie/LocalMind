@@ -43,7 +43,8 @@ export function applyGemmaPatches(src, helpers) {
     '// Gemma-4 E2B (QAT mobile) WebGPU chat bundle. Import { Gemma4Mobile } from this file.\n',
     '// Gemma-4 E2B (QAT mobile) WebGPU chat bundle. Import { Gemma4Mobile } from this file.\n' +
       `// Built by LocalMind scripts/build-gemma-4-e2b.mjs from webml-community/gemma-4-webgpu-kernels@${UPSTREAM_REV.slice(0, 7)}:\n` +
-      '// adds load(id, { ple }) to serve the per-layer embedding table from OPFS (see ple-opfs.js).\n',
+      '// adds load(id, { ple }) to serve the per-layer embedding table from OPFS (see ple-opfs.js).\n' +
+      "import './subgroup-matrix-guard.js'; // Chrome 156 rejects the mixed f16/f32 subgroup-matrix kernels on Apple; see that file.\n",
     'header line',
   );
 
