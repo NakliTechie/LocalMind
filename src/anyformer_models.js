@@ -16,7 +16,7 @@
  */
 const THINK_CLOSE = -2;
 
-export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.19/index.js';
+export const ANYFORMER_URL = 'https://cdn.jsdelivr.net/npm/anyformer@0.4.20/index.js';
 
 // anyformer's progress events → the engine events the SSD worker posts. The llama.cpp path reports 'download' (bytes
 // into OPFS) and 'load' / 'plan'; a hand engine (diskformer back end) reports its own engine events, 'weights' with
@@ -170,9 +170,9 @@ export class Clover35B extends AnyformerModel {
   static entry = 'CLOVER_35B_A3B';
 }
 
-// LFM2.5 24B-A2B with harness-hub's Pi coding-agent LoRA by anyformer's catalog entry (0.4.18+; 0.4.19 closes the
-// always-open <think> when thinking is off): the QAD-Q4_0 GGUF plus a 37.4 MB adapter applied at load, on diskformer's
-// llama.cpp path with paged experts, a 4 GB budget. Opt-in and experimental; licence lfm1.0.
+// LFM2.5 24B-A2B with harness-hub's Pi coding-agent LoRA by anyformer's catalog entry: the QAD-Q4_0 GGUF plus a 37.4 MB
+// adapter applied at run time, on diskformer's Lfm2MoeSsd engine since anyformer 0.4.20 (diskformer 0.6.19). Opt-in and
+// experimental; licence lfm1.0.
 export class Lfm25_24bPi extends AnyformerModel {
   static entry = 'LFM2_5_24B_PI';
 }

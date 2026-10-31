@@ -23,7 +23,7 @@
 
 import { Qwen3MoeSsd, BpeTokenizer, GGML, Q4_BLOCK, tensorBytes, TOK, STORAGE, COPY_SRC, COPY_DST, MAP_READ } from './qwen3_moe_ssd.js';
 import { Gemma4MoeSsd } from './gemma4_moe_ssd.js';
-import { Q8_BLOCK } from './gguf.js';
+import { Q8_BLOCK, parseGguf } from './gguf.js';
 import { QWEN35_BATCH_KERNELS } from './qwen35_moe_ssd.js';
 
 export function configFromGgufLfm2Moe(kv) {
@@ -226,6 +226,34 @@ struct P { H: u32 }
   y[i] = bcx[p.H + i] * conv;
   st[2u * i] = s1; st[2u * i + 1u] = bx;
 }`,
+  // Run-time LoRA, first half: t = A·x, A [R × N] f16 (a GGUF `lora_a`), one workgroup per rank row.
+  loraA: `enable f16;
+struct P { R: u32, N: u32 }
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read> a: array<f16>;
+@group(0) @binding(2) var<storage, read_write> t: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+var<workgroup> red: array<f32, 256>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let r = wg.x; let i = l.x; var acc = 0.0;
+  for (var k = i; k < p.N; k += 256u) { acc += f32(a[r * p.N + k]) * x[k]; }
+  red[i] = acc; workgroupBarrier();
+  for (var s = 128u; s > 0u; s >>= 1u) { if (i < s) { red[i] += red[i + s]; } workgroupBarrier(); }
+  if (i == 0u) { t[r] = red[0]; }
+}`,
+  // Second half: y += scale · B·t, B [M × R] f16 (a GGUF `lora_b`), one thread per output row.
+  loraB: `enable f16;
+struct P { M: u32, R: u32, s: f32 }
+@group(0) @binding(0) var<storage, read> t: array<f32>;
+@group(0) @binding(1) var<storage, read> b: array<f16>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let m = g.x; if (m >= p.M) { return; }
+  var acc = 0.0;
+  for (var j = 0u; j < p.R; j++) { acc += f32(b[m * p.R + j]) * t[j]; }
+  y[m] = y[m] + p.s * acc;
+}`,
   // Debug capture: y[off + i] = x[i].
   copyAt: `
 struct P { n: u32, off: u32 }
@@ -263,6 +291,39 @@ ${QB}
     s0 = s1; s1 = bx;
   }
   st[2u * i] = s0; st[2u * i + 1u] = s1;
+}`,
+  // Run-time LoRA over the chunk: t[tok] = A·x[tok], one workgroup per (rank row, token).
+  loraAT: `enable f16;
+struct P { R: u32, N: u32 }
+${QB}
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read> a: array<f16>;
+@group(0) @binding(2) var<storage, read_write> t: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+@group(0) @binding(4) var<uniform> qd: Q;
+var<workgroup> red: array<f32, 256>;
+@compute @workgroup_size(256) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+  let r = wg.x; let tok = wg.y; let i = l.x; if (tok >= qd.T) { return; }
+  let xb = tok * p.N; var acc = 0.0;
+  for (var k = i; k < p.N; k += 256u) { acc += f32(a[r * p.N + k]) * x[xb + k]; }
+  red[i] = acc; workgroupBarrier();
+  for (var s = 128u; s > 0u; s >>= 1u) { if (i < s) { red[i] += red[i + s]; } workgroupBarrier(); }
+  if (i == 0u) { t[tok * p.R + r] = red[0]; }
+}`,
+  // y[tok] += scale · B·t[tok], one thread per (output row, token).
+  loraBT: `enable f16;
+struct P { M: u32, R: u32, s: f32 }
+${QB}
+@group(0) @binding(0) var<storage, read> t: array<f32>;
+@group(0) @binding(1) var<storage, read> b: array<f16>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+@group(0) @binding(4) var<uniform> qd: Q;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let m = g.x; let tok = g.y; if (m >= p.M || tok >= qd.T) { return; }
+  var acc = 0.0;
+  for (var j = 0u; j < p.R; j++) { acc += f32(b[m * p.R + j]) * t[tok * p.R + j]; }
+  y[tok * p.M + m] = y[tok * p.M + m] + p.s * acc;
 }`,
   // act = SiLU(g) · u over T × n (the dense FFN's separate gate and up).
   siluSplitB: `
@@ -333,6 +394,7 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
   constructor(device, manifest, gguf, opts) {
     super(device, manifest, gguf, opts);
     this.lookahead = Math.max(1, Math.floor(opts.lookahead ?? 1));
+    this.arch = gguf.kv['general.architecture'];  // a LoRA must be for the same architecture (loadAdapter)
   }
 
   // Kernel names for the matrix and expert weights: Q4_0 here; an engine reading a Q8_0 file (hy_v3_moe_ssd.js) swaps
@@ -569,6 +631,7 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
     d('rmsnorm', g.rmsA, 1);
     if (g.attn) {
       d(this.kq.mm, g.q, Math.ceil(QN / 4)); d(this.kq.mm, g.k, Math.ceil(KVN / 4)); d(this.kq.mm, g.v, Math.ceil(KVN / 4));
+      this.encodeLora(pass, L, 'q'); this.encodeLora(pass, L, 'k'); this.encodeLora(pass, L, 'v');
       d('qkNormRope', g.ropeQ, c.heads); d('qkNormRope', g.ropeK, c.kvHeadsAttn);
       d('kvStore', g.kv, Math.ceil(KVN / 256));
       const ak = this.attnK;
@@ -576,17 +639,22 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
       d(ak.soft, g.soft, c.heads);
       d(ak.out, g.attOut, Math.ceil(QN / 256));
       d(this.kq.mm, g.o, Math.ceil(H / 4));
+      this.encodeLora(pass, L, 'o');
     } else {
       d(this.kq.mm, g.inProj, Math.ceil(3 * H / 4));
+      this.encodeLora(pass, L, 'inProj');
       d('shortConv', g.conv, Math.ceil(H / 256));
       d(this.kq.mm, g.o, Math.ceil(H / 4));
+      this.encodeLora(pass, L, 'o');
     }
     d('addInPlace', g.addO, Math.ceil(H / 256));
     d('rmsnorm', g.rmsF, 1);
     if (L < c.lead) {
       d(this.kq.mm, g.mg, Math.ceil(c.denseFf / 4)); d(this.kq.mm, g.mu, Math.ceil(c.denseFf / 4));
+      this.encodeLora(pass, L, 'mg'); this.encodeLora(pass, L, 'mu');
       d('siluMulMoe', g.mact, Math.ceil(c.denseFf / 256));
       d(this.kq.mm, g.md, Math.ceil(H / 4));
+      this.encodeLora(pass, L, 'md');
       d('addInPlace', g.addO, Math.ceil(H / 256));
       if (g.cap) d('copyAt', g.cap, Math.ceil(H / 256));
     }
@@ -630,6 +698,7 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
     d('rmsnormB', g.rmsA, T);
     if (this.mlayers[L].attn) {
       d(this.kq.mmT, g.q, mm(QN), tt); d(this.kq.mmT, g.k, mm(KVN), tt); d(this.kq.mmT, g.v, mm(KVN), tt);
+      this.encodeLoraB(pass, L, 'q', T); this.encodeLoraB(pass, L, 'k', T); this.encodeLoraB(pass, L, 'v', T);
       d('qkNormRopeB', g.ropeQ, c.heads, T); d('qkNormRopeB', g.ropeK, c.kvHeadsAttn, T);
       d('kvStoreB', g.kv, Math.ceil(KVN / 256), T);
       const ak = this.attnK;
@@ -637,17 +706,22 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
       d(ak.softB, g.soft, c.heads * T);
       d(ak.outB, g.attOut, Math.ceil(QN / 256), T);
       d(this.kq.mmT, g.o, mm(H), tt);
+      this.encodeLoraB(pass, L, 'o', T);
     } else {
       d(this.kq.mmT, g.inProj, mm(3 * H), tt);
+      this.encodeLoraB(pass, L, 'inProj', T);
       d('shortConvB', g.conv, Math.ceil(H / 256));
       d(this.kq.mmT, g.o, mm(H), tt);
+      this.encodeLoraB(pass, L, 'o', T);
     }
     d('addInPlaceB', g.addO, Math.ceil(H / 256), T);
     d('rmsnormB', g.rmsF, T);
     if (L < c.lead) {
       d(this.kq.mmT, g.mg, mm(c.denseFf), tt); d(this.kq.mmT, g.mu, mm(c.denseFf), tt);
+      this.encodeLoraB(pass, L, 'mg', T); this.encodeLoraB(pass, L, 'mu', T);
       d('siluSplitB', g.mact, Math.ceil(c.denseFf / 256), T);
       d(this.kq.mmT, g.md, mm(H), tt);
+      this.encodeLoraB(pass, L, 'md', T);
       d('addInPlaceB', g.addO, Math.ceil(H / 256), T);
     }
   }
@@ -671,6 +745,82 @@ export class Lfm2MoeSsd extends Gemma4MoeSsd {
       d(this.kq.mmT, s.d, mm(c.hidden), tt);
       d('addInPlaceB', s.add, Math.ceil(c.hidden / 256), T);
     }
+  }
+
+  // ── Run-time LoRA ──
+  // A LoRA GGUF (llama.cpp's convert_lora_to_gguf.py: per adapted matrix W, `W.lora_a` [N → R] and `W.lora_b` [R → M],
+  // F16), applied as y += scale · B(A·x) right after W's matmul, with scale = alpha / R (as llama.cpp's --lora) times
+  // `scale`. The weights stay as loaded: setAdapter() switches between adapters, or back to none, with no reload.
+  // Adapters on the experts are refused (the paged experts have no hook).
+  async loadAdapter(source, { scale = 1 } = {}) {
+    // a URL, a Blob (a File from OPFS or a picker), an ArrayBuffer or a Uint8Array
+    const bytes = source instanceof Uint8Array ? source : new Uint8Array(typeof source === 'string'
+      ? await (await fetch(source)).arrayBuffer() : source instanceof Blob ? await source.arrayBuffer() : source);
+    const gguf = parseGguf(bytes), kv = gguf.kv;
+    if (kv['adapter.type'] !== 'lora') throw new Error(`not a LoRA GGUF (adapter.type ${kv['adapter.type']})`);
+    if (kv['general.architecture'] !== this.arch) throw new Error(`adapter for ${kv['general.architecture']}, model is ${this.arch}`);
+    const SITES = { attn_q: 'q', attn_k: 'k', attn_v: 'v', attn_output: 'o', 'shortconv.in_proj': 'inProj', 'shortconv.out_proj': 'o', ffn_gate: 'mg', ffn_up: 'mu', ffn_down: 'md' };
+    const byName = new Map(gguf.tensors.map((t) => [t.name, t]));
+    const sites = Array.from({ length: this.cfg.modelLayers }, () => ({}));
+    const STO = 0x80 | COPY_DST, a = this.a, b = this.b, qb = this.qb, gateBytes = this.cfg.denseFf * 4;
+    let R = 0, bytesOnGpu = 0;
+    const upload = (t) => {
+      if (t.type !== GGML.F16) throw new Error(`${t.name}: type ${t.type}, LoRA tensors must be F16`);
+      const n = t.dims.reduce((x, y) => x * y, 1), buf = this.buffer(n * 2, STO, 'adapter');
+      this.device.queue.writeBuffer(buf, 0, bytes, gguf.dataStart + t.offset, n * 2);
+      bytesOnGpu += buf.size;
+      return buf;
+    };
+    for (const ta of gguf.tensors) {
+      const m = /^blk\.(\d+)\.(.+)\.weight\.lora_a$/.exec(ta.name);
+      if (!m) continue;
+      const L = Number(m[1]), site = SITES[m[2]], tb = byName.get(ta.name.replace(/lora_a$/, 'lora_b')), w = this.w[`blk.${L}.${m[2]}.weight`];
+      if (!site || !tb || !w) throw new Error(`${ta.name}: no matching matrix in this model (adapters on the experts are not supported)`);
+      const [N, r] = ta.dims, [r2, M] = tb.dims;
+      if (r !== r2 || N !== w.cols || M !== w.rows) throw new Error(`${ta.name}: shape ${N}×${r} / ${r2}×${M} does not fit ${w.cols}×${w.rows}`);
+      R = Math.max(R, r);
+      sites[L][site] = { r, N, M, A: upload(ta), B: upload(tb) };
+    }
+    if (!R) throw new Error('the adapter has no lora_a / lora_b pairs');
+    const s = (kv['adapter.lora.alpha'] ?? R) / R * scale;
+    // One t buffer per adapter (R floats per token); binds against the engine's activations.
+    const lt = this.buffer(R * 4, 0x80 | COPY_SRC | COPY_DST, 'adapter'), ltB = b ? this.buffer(this.chunkTokens * R * 4, 0x80 | COPY_SRC | COPY_DST, 'adapter') : null;
+    const io = (L, site) => {
+      const attn = this.cfg.attn[L];
+      const d = { q: [a.xn, a.q], k: [a.xn, a.k], v: [a.xn, a.v], o: attn ? [a.att, a.o] : [a.y, a.o], inProj: [a.xn, a.bcx],
+        mg: [a.xn, { buffer: a.mgu, offset: 0, size: gateBytes }], mu: [a.xn, { buffer: a.mgu, offset: gateBytes, size: gateBytes }], md: [a.ma, a.o] }[site];
+      const bt = b && { q: [b.xn, b.q], k: [b.xn, b.k], v: [b.xn, b.v], o: attn ? [b.att, b.o] : [b.y, b.o], inProj: [b.xn, b.bcx],
+        mg: [b.xn, b.mg], mu: [b.xn, b.mu], md: [b.ma, b.o] }[site];
+      return { d, bt };
+    };
+    sites.forEach((ss, L) => {
+      for (const [site, e] of Object.entries(ss)) {
+        const { d, bt } = io(L, site), uA = this.uniform([e.r, e.N]), uB = this.uniform([e.M, e.r, { f: s }]);
+        e.a = this.bind('loraA', [d[0], e.A, lt, uA]);
+        e.b = this.bindR('loraB', [lt, e.B, d[1], uB]);
+        if (bt) { e.aB = this.bind('loraAT', [bt[0], e.A, ltB, uA, qb]); e.bB = this.bind('loraBT', [ltB, e.B, bt[1], uB, qb]); }
+      }
+    });
+    const n = sites.reduce((x, ss) => x + Object.keys(ss).length, 0);
+    return { name: kv['general.name'] || 'lora', rank: R, scale: s, matrices: n, bytes: bytesOnGpu, sites };
+  }
+  // The adapter for the next turns (null: the plain model). The cached prompt was computed with the old weights, so
+  // the next turn starts from token 0.
+  async setAdapter(adapter) {
+    const release = await this.acquire();
+    try { this.adapter = adapter || null; this.reset(); } finally { release(); }
+  }
+  encodeLora(pass, L, site) {
+    const e = this.adapter && this.adapter.sites[L][site];
+    if (!e) return;
+    this.dispatch(pass, 'loraA', e.a, e.r);
+    this.dispatch(pass, 'loraB', e.b, Math.ceil(e.M / 256));
+  }
+  encodeLoraB(pass, L, site, T) {
+    const e = this.adapter && this.adapter.sites[L][site];
+    if (!e) return;
+    this.dispatch(pass, 'loraAT', e.aB, e.r, T);
+    this.dispatch(pass, 'loraBT', e.bB, Math.ceil(e.M / 256), T);
   }
 
   // The conv state cannot rewind, so any change before the cached end restarts from token 0.
