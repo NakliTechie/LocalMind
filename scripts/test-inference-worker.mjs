@@ -218,6 +218,16 @@ assert.match(indexSource, /function loadModelViaApi\(idOrKey\) \{[^]*?try \{ mod
   assert.match(indexSource, /'anyformer-lfm25-24b': \{ engine: 'anyformer_models\.js', exportName: 'Lfm25_24B'/);
   assert.match(indexSource, /'lfm25-24b-pi-anyformer': \{\s*id: 'LiquidAI\/LFM2\.5-24B-A2B-GGUF',[^]*?backend: 'anyformer-lfm25-24b-pi'[^]*?agentCapable: false,/);
   assert.match(indexSource, /'anyformer-lfm25-24b-pi': \{ engine: 'anyformer_models\.js', exportName: 'Lfm25_24bPi'/);
+  // anyformer models take tools through anyformer (0.4.20+) and return its parsed calls; Flint keeps LocalMind's parser.
+  const afSrc = await readFile(new URL('../src/anyformer_models.js', import.meta.url), 'utf8');
+  assert.match(afSrc, /tools = null \} = \{\}\) \{\n    const opts = \{[^\n]*\.\.\.\(tools && tools\.length \? \{ tools \} : \{\}\)/);
+  assert.match(afSrc, /\.\.\.\(c\.toolCalls \? \{ toolCalls: c\.toolCalls \} : \{\}\)/);
+  assert.match(indexSource, /\.\.\.\(Array\.isArray\(cfg\.tools\) && cfg\.tools\.length \? \{ tools: cfg\.tools \} : \{\}\),/);
+  assert.match(indexSource, /if \(toolCalls\) post\(\{ type: 'tool_calls', toolCalls \}\);\n\s*post\(\{ type: 'complete' \}\);/);
+  assert.match(indexSource, /const anyformerTools = !!\(activeModel && \/\^anyformer-\/\.test\(activeModel\.backend \|\| ''\) && activeModel\.toolFormat !== 'arg-key'\)/);
+  assert.match(indexSource, /iter\.push\(\{ type: 'tool_call', id: c\.id \|\| [^\n]*native: true \}\);/);
+  assert.equal((indexSource.match(/loopMessages\.push\(assistantTurnMessage\(turn\.fullText, turn\.toolCalls\)\);/g) || []).length, 2);
+  assert.equal((indexSource.match(/\.\.\.\(tc\.native \? \{ tool_call_id: tc\.id \} : \{\}\)/g) || []).length, 2);
   assert.match(await readFile(new URL('../src/anyformer_models.js', import.meta.url), 'utf8'), /export class Lfm25_24bPi extends AnyformerModel \{\s*static entry = 'LFM2_5_24B_PI';/);
   assert.match(indexSource, /'lfm2moe-ssd': \{ engine: 'lfm2_moe_ssd\.js', exportName: 'Lfm2MoeSsd'/);
   // Tools on, decided by scripts/tool-battery.mjs (2026-10-14).

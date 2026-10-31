@@ -8728,8 +8728,11 @@ self.onmessage = async (e) => {
       let ai = 0;
       const msgs = [];
       for (const m of (d.messages || [])) {
-        // Role 'tool' arrives only for toolFormat 'arg-key' (Flint), whose engine renders it as <|observation|>.
+        // Role 'tool' arrives for toolFormat 'arg-key' (Flint), whose engine renders it as <|observation|>, and for anyformer
+        // tool turns, which keep tool_calls / tool_call_id for anyformer to write in the model family's format.
         const role = (m.role === 'system' || m.role === 'assistant' || m.role === 'tool') ? m.role : 'user';
+        const toolFields = { ...(Array.isArray(m.tool_calls) && m.tool_calls.length ? { tool_calls: m.tool_calls } : {}),
+          ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}), ...(role === 'tool' && m.name ? { name: m.name } : {}) };
         if (vision && Array.isArray(m.content) && m.content.some((b) => b && (b.type === 'image' || (media && b.type === 'audio')))) {
           const parts = [];
           for (const b of m.content) {
@@ -8747,7 +8750,7 @@ self.onmessage = async (e) => {
         const content = typeof m.content === 'string' ? m.content
           : Array.isArray(m.content) ? m.content.filter((b) => b && b.type === 'text').map((b) => b.text).join('\n')
           : String(m.content == null ? '' : m.content);
-        msgs.push({ role, content });
+        msgs.push({ role, content, ...toolFields });
       }
       if ((msgs.length <= 1 || msgs.length < lastHistoryLen) && typeof model.reset === 'function') {
         try { model.reset(); } catch (_) {}
@@ -8776,19 +8779,22 @@ self.onmessage = async (e) => {
       // A reasoning-only model (LFM2.5 24B: alwaysThinks) opens <think> in every prompt, so its reply always starts as reasoning.
       let inThink = (wantThink || model.alwaysThinks === true) && model.thinkInPrompt !== false;
       if (inThink) post({ type: 'token', token: '<|think|>' });
-      let prev = '', skip = '', last = '';
+      let prev = '', skip = '', last = '', toolCalls = null;
       try {
         const stream = model.generate(msgs, {
           maxNewTokens: cfg.max_new_tokens || cfg.max_tokens || 1024,
           signal: abortController.signal,
           enableThinking: wantThink,
           ...(speech ? { speech: true } : {}),
+          ...(Array.isArray(cfg.tools) && cfg.tools.length ? { tools: cfg.tools } : {}),
         });
         let toolMarkup = false;
         for await (const out of stream) {
           if (stopFlag) break;
           const full = out && typeof out.text === 'string' ? out.text : '';
           last = full;
+          // anyformer's parsed calls (the latest chunk that holds them); the page uses these instead of parsing the text.
+          if (out && Array.isArray(out.toolCalls) && out.toolCalls.length) toolCalls = out.toolCalls;
           // The model's speech, until a tool call starts (the interleave writes its text before its sound, so the
           // markup is never voiced); the page plays it.
           if (speech && !toolMarkup && (full.includes('<tool_call>') || full.includes('<function='))) toolMarkup = true;
@@ -8815,6 +8821,7 @@ self.onmessage = async (e) => {
       }
       if (last.length > prev.length) post({ type: 'token', token: last.slice(prev.length) });
       if (inThink) post({ type: 'token', token: '<|/think|>' });
+      if (toolCalls) post({ type: 'tool_calls', toolCalls });
       post({ type: 'complete' });
     } else if (d.type === 'stop') {
       stopFlag = true;
@@ -16359,6 +16366,16 @@ self.addEventListener('message', async (e) => {
       return stripToolCallTags(text.replace(/<(?:\|(?:t(?:o(?:o(?:l(?:_(?:c(?:a(?:l(?:l(?:_(?:s(?:t(?:a(?:r(?:t(?:\|)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?|t(?:o(?:o(?:l(?:_(?:c(?:a(?:l(?:l)?)?)?)?)?)?)?)?)?$/, ''));
     }
 
+    // The assistant turn an agent loop keeps in its history. Calls anyformer parsed (tool_call events marked native) go in
+    // tool_calls, and the content is the reply without reasoning or call markup, so anyformer writes the calls back in the
+    // model family's format; other paths keep the raw text, which their parser and prompt read again.
+    function assistantTurnMessage(fullText, toolCalls) {
+      const native = (toolCalls || []).filter((tc) => tc && tc.native);
+      if (!native.length) return { role: 'assistant', content: fullText };
+      const content = streamDisplayText(String(fullText || '').replace(/<\|think\|>[\s\S]*?(?:<\|\/think\|>|$)/g, '')) || '';
+      return { role: 'assistant', content, tool_calls: native.map((tc) => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.arguments || {}) } })) };
+    }
+
     function saveChat() {
       try {
         // Strip blobs from messages for sessionStorage (only persist text)
@@ -16425,6 +16442,7 @@ self.addEventListener('message', async (e) => {
     // The tool prompts and the reply parser live in src/tool-calls.js (DOM-free, vendored by NakliOS).
     const {
       _adapterRepairJSON,
+      _adapterResolveToolName,
       _adapterBuildToolPrompt,
       _adapterPyJson,
       _adapterBuildQwenXmlToolPrompt,
@@ -16974,7 +16992,13 @@ self.addEventListener('message', async (e) => {
         // Native Qwen3-Coder XML tool calls (model entry toolFormat 'qwen3-xml', in-browser only): the tool block
         // goes into the system turn in the template's own words and tool results stay role 'tool', which the
         // template renders as <tool_response>. Endpoints (incl. a router escalation) keep the JSON prompt.
-        const nativeXmlTools = !!(activeModel && activeModel.toolFormat === 'qwen3-xml')
+        // Tools through anyformer (backend 'anyformer-*', anyformer 0.4.20+): generate({ tools }) writes them into the prompt
+        // in the model family's format and returns parsed calls, which the SSD worker posts as 'tool_calls'; tool results and
+        // the assistant's calls stay structured (tool_calls / tool_call_id). Not Flint (toolFormat 'arg-key': anyformer does
+        // not parse <arg_key> calls) and not endpoints. Chirag, 2026-10-31: "switch anyformer models to its parsed tool calls".
+        const anyformerTools = !!(activeModel && /^anyformer-/.test(activeModel.backend || '') && activeModel.toolFormat !== 'arg-key')
+          && !(LocalMind.runtime.isEndpoint && LocalMind.runtime.isEndpoint());
+        const nativeXmlTools = !!(activeModel && activeModel.toolFormat === 'qwen3-xml') && !anyformerTools
           && !(LocalMind.runtime.isEndpoint && LocalMind.runtime.isEndpoint());
         // Tools through the model's own chat template (model entry toolFormat 'template', Transformers.js worker only:
         // LFM3): the worker passes them to apply_chat_template, so the model sees the tool block it was trained on;
@@ -17030,6 +17054,9 @@ self.addEventListener('message', async (e) => {
               // placeholder blocks, extract binary data into attData.
               const processed = await _adapterProcessContentBlocks(messages);
               chatMessages = processed.chatMessages.map(m => {
+                if (m.role === 'tool' && anyformerTools) {
+                  return { role: 'tool', name: m.name || 'tool', content: typeof m.content === 'string' ? m.content : '', ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}) };
+                }
                 if (m.role === 'tool') {
                   // Tool-role messages don't carry media; collapse via
                   // the same translation as the text path.
@@ -17059,6 +17086,7 @@ self.addEventListener('message', async (e) => {
                   content = String(content == null ? '' : content);
                 }
                 if (m.role === 'tool') {
+                  if (anyformerTools) return { role: 'tool', name: m.name || 'tool', content, ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}) };
                   if (nativeXmlTools || templateTools || argKeyTools) return { role: 'tool', name: m.name || 'tool', content };
                   const toolPayload = (() => {
                     try { return JSON.parse(content); } catch { return content; }
@@ -17068,7 +17096,7 @@ self.addEventListener('message', async (e) => {
                     content: _adapterFormatToolResultMessage(m.name || 'tool', toolPayload),
                   };
                 }
-                return { role: m.role, content };
+                return { role: m.role, content, ...(anyformerTools && Array.isArray(m.tool_calls) && m.tool_calls.length ? { tool_calls: m.tool_calls } : {}) };
               });
             }
 
@@ -17084,7 +17112,7 @@ self.addEventListener('message', async (e) => {
               }
               const hint = toolsSwitchedOffHint(tools);
               if (hint) userSysContent = userSysContent ? userSysContent + '\n\n' + hint : hint;
-              if (templateTools) {
+              if (templateTools || anyformerTools) {
                 genConfig.tools = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
                 if (userSysContent) chatMessages = [{ role: 'system', content: userSysContent }].concat(chatMessages);
               } else {
@@ -17101,6 +17129,7 @@ self.addEventListener('message', async (e) => {
             return;
           }
 
+          let nativeCalls = null;   // anyformer's parsed calls for this reply (anyformerTools only)
           const inferencePromise = runInference({
             chatMessages,
             attData: attDataForWorker,
@@ -17129,6 +17158,7 @@ self.addEventListener('message', async (e) => {
                   completionTokens++;
                   iter.push({ type: 'token', text: token });
                 },
+                onToolCalls: (calls) => { nativeCalls = calls; },
               };
             },
           });
@@ -17142,7 +17172,19 @@ self.addEventListener('message', async (e) => {
               // tools — otherwise the same model output is just plain
               // text and we don't want phantom calls from regex hits.
               let reason = aborted ? 'abort' : 'stop';
-              if (toolsEnabled && !aborted && typeof fullText === 'string' && fullText.length) {
+              if (toolsEnabled && !aborted && anyformerTools && Array.isArray(nativeCalls) && nativeCalls.length) {
+                // anyformer's calls; a name that is not one of this turn's tools never runs. native marks them so the agent
+                // loop records them as tool_calls on the assistant turn.
+                for (const c of nativeCalls) {
+                  const fn = (c && c.function) || {};
+                  const name = _adapterResolveToolName(fn.name, knownToolNames);
+                  if (name == null) continue;
+                  let args = {};
+                  try { args = typeof fn.arguments === 'string' ? JSON.parse(fn.arguments || '{}') : (fn.arguments || {}); } catch {}
+                  reason = 'tool_calls';
+                  iter.push({ type: 'tool_call', id: c.id || 'tc-' + Math.random().toString(36).slice(2, 10), name, arguments: args, native: true });
+                }
+              } else if (toolsEnabled && !aborted && typeof fullText === 'string' && fullText.length) {
                 const { toolCalls } = _adapterParseToolCalls(fullText, knownToolNames, tools);
                 if (toolCalls.length > 0) {
                   reason = 'tool_calls';
@@ -19174,6 +19216,13 @@ self.addEventListener('message', async (e) => {
           }
         }
 
+        // anyformer's parsed tool calls for this reply (SSD worker), before its 'complete'.
+        else if (data.type === 'tool_calls') {
+          if (currentInferenceContext && typeof currentInferenceContext.onToolCalls === 'function') {
+            try { currentInferenceContext.onToolCalls(data.toolCalls); } catch (e) { console.error('onToolCalls threw:', e); }
+          }
+        }
+
         else if (data.type === 'complete') {
           // If agentic loop is awaiting, resolve promise (loop manages state)
           if (generateResolve) {
@@ -20429,13 +20478,13 @@ self.addEventListener('message', async (e) => {
           stepResults.push({ tc, toolResult });
         }
 
-        loopMessages.push({ role: 'assistant', content: turn.fullText });
+        loopMessages.push(assistantTurnMessage(turn.fullText, turn.toolCalls));
         for (const { tc, toolResult } of stepResults) {
           // Crush oversized tool output (scraped pages, search hits, logs, RAG)
           // before it enters the context — the choke point for every tool.
           let payload = JSON.stringify(toolResult);
           if (tokenSaverOn()) payload = compressContext(payload, toolResultBudget());
-          loopMessages.push({ role: 'tool', name: tc.name, content: payload });
+          loopMessages.push({ role: 'tool', name: tc.name, content: payload, ...(tc.native ? { tool_call_id: tc.id } : {}) });
         }
 
         if (iter === STEP_MAX_ITER - 1) {
@@ -21032,9 +21081,9 @@ self.addEventListener('message', async (e) => {
 
         // Append the assistant turn once (with raw tags so the model sees
         // its own format), then all tool-role results in order.
-        loopMessages.push({ role: 'assistant', content: turn.fullText });
+        loopMessages.push(assistantTurnMessage(turn.fullText, turn.toolCalls));
         for (const { tc, toolResult } of toolResults) {
-          loopMessages.push({ role: 'tool', name: tc.name, content: JSON.stringify(toolResult) });
+          loopMessages.push({ role: 'tool', name: tc.name, content: JSON.stringify(toolResult), ...(tc.native ? { tool_call_id: tc.id } : {}) });
         }
 
         // Reset streaming state for next generation pass
@@ -24304,8 +24353,10 @@ export class AnyformerModel {
   // </think> first appears, the text up to it goes out, then the same text again with token THINK_CLOSE (an empty
   // delta), so the worker closes the thought with no text lost. With speech (LFM3-Omni) a chunk also carries `audio`,
   // the new 24 kHz PCM since the last chunk, and `sampleRate`.
-  async *generate(messages, { maxNewTokens = 1024, signal, enableThinking = false, speech = false } = {}) {
-    const opts = { maxNewTokens, signal, thinking: enableThinking, ...(speech ? { speech: true } : {}) };
+  // tools (OpenAI-style, anyformer 0.4.20+): anyformer writes them into the prompt in the model family's format, and a
+  // chunk whose text holds complete calls carries them as toolCalls (OpenAI tool_calls), its text without them.
+  async *generate(messages, { maxNewTokens = 1024, signal, enableThinking = false, speech = false, tools = null } = {}) {
+    const opts = { maxNewTokens, signal, thinking: enableThinking, ...(speech ? { speech: true } : {}), ...(tools && tools.length ? { tools } : {}) };
     if (this.think) {
       for await (const c of this.session.generate(messages, opts)) yield c;
       return;
@@ -24317,7 +24368,7 @@ export class AnyformerModel {
       // The worker posts no text on its close event, so the thought's last text goes out first.
       if (at >= 0 && !closed) { closed = true; yield { text: raw.slice(0, at) }; yield { text: raw.slice(0, at), token: THINK_CLOSE }; }
       const text = at >= 0 ? raw.slice(0, at) + raw.slice(at + '</think>'.length).replace(/^\n+/, '') : raw;
-      yield { text, tokens: c.tokens, tokPerSec: c.tokPerSec, ...(c.audio ? { audio: c.audio, sampleRate: c.sampleRate } : {}) };
+      yield { text, tokens: c.tokens, tokPerSec: c.tokPerSec, ...(c.audio ? { audio: c.audio, sampleRate: c.sampleRate } : {}), ...(c.toolCalls ? { toolCalls: c.toolCalls } : {}) };
     }
   }
 

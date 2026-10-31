@@ -78,8 +78,10 @@ export class AnyformerModel {
   // </think> first appears, the text up to it goes out, then the same text again with token THINK_CLOSE (an empty
   // delta), so the worker closes the thought with no text lost. With speech (LFM3-Omni) a chunk also carries `audio`,
   // the new 24 kHz PCM since the last chunk, and `sampleRate`.
-  async *generate(messages, { maxNewTokens = 1024, signal, enableThinking = false, speech = false } = {}) {
-    const opts = { maxNewTokens, signal, thinking: enableThinking, ...(speech ? { speech: true } : {}) };
+  // tools (OpenAI-style, anyformer 0.4.20+): anyformer writes them into the prompt in the model family's format, and a
+  // chunk whose text holds complete calls carries them as toolCalls (OpenAI tool_calls), its text without them.
+  async *generate(messages, { maxNewTokens = 1024, signal, enableThinking = false, speech = false, tools = null } = {}) {
+    const opts = { maxNewTokens, signal, thinking: enableThinking, ...(speech ? { speech: true } : {}), ...(tools && tools.length ? { tools } : {}) };
     if (this.think) {
       for await (const c of this.session.generate(messages, opts)) yield c;
       return;
@@ -91,7 +93,7 @@ export class AnyformerModel {
       // The worker posts no text on its close event, so the thought's last text goes out first.
       if (at >= 0 && !closed) { closed = true; yield { text: raw.slice(0, at) }; yield { text: raw.slice(0, at), token: THINK_CLOSE }; }
       const text = at >= 0 ? raw.slice(0, at) + raw.slice(at + '</think>'.length).replace(/^\n+/, '') : raw;
-      yield { text, tokens: c.tokens, tokPerSec: c.tokPerSec, ...(c.audio ? { audio: c.audio, sampleRate: c.sampleRate } : {}) };
+      yield { text, tokens: c.tokens, tokPerSec: c.tokPerSec, ...(c.audio ? { audio: c.audio, sampleRate: c.sampleRate } : {}), ...(c.toolCalls ? { toolCalls: c.toolCalls } : {}) };
     }
   }
 
